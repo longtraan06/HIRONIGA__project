@@ -47,7 +47,21 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         document.addEventListener('keydown', function(e) {
-            if (e.key === 'F3') {
+            // Chuyển sang chế độ Text-to-Image
+            if (e.key === 'F1') {
+                e.preventDefault(); // Ngăn trình duyệt mở cửa sổ Help mặc định
+                if (textToImageBtn) {
+                    textToImageBtn.click();
+                }
+            }
+            // Chuyển sang chế độ Text-to-Text
+            else if (e.key === 'F2') {
+                e.preventDefault();
+                if (textToTextBtn) {
+                    textToTextBtn.click();
+                }
+            }
+            else if (e.key === 'F3') {
                 e.preventDefault();
                 if (translateBtn) {
                     translateBtn.click();
@@ -701,6 +715,57 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    async function performSearchFromSelectedFrame() {
+        // 1. Kiểm tra lại để chắc chắn chỉ có 1 frame được chọn
+        if (frameSelectionManager.getSelectionCount() !== 1) {
+            return;
+        }
+        
+        const searchStartTime = performance.now();
+        const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+        
+        // 2. Chuyển UI sang chế độ Image-to-Image và hiển thị loading
+        switchSearchMode('image-to-image');
+        showLoadingIndicator();
+
+        try {
+            // 3. Cập nhật UI ở sidebar để hiển thị ảnh đang được dùng để tìm kiếm
+            const uploadArea = document.querySelector('.image-upload-area');
+            if (uploadArea) {
+                const imgElement = uploadArea.querySelector('.uploaded-image img');
+                const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
+                imgElement.src = selectedFrame.path;
+                uploadedImageDiv.style.display = 'block';
+            }
+
+            // 4. Lấy dữ liệu của ảnh từ URL của nó
+            // Đây là bước quan trọng: chúng ta fetch ảnh như một file
+            const response = await fetch(selectedFrame.path);
+            if (!response.ok) {
+                throw new Error(`Failed to fetch image: ${response.statusText}`);
+            }
+            const imageBlob = await response.blob();
+            
+            // Tạo một đối tượng File từ Blob để gửi đi
+            const imageFile = new File([imageBlob], "selected_frame.jpg", { type: imageBlob.type });
+
+            // 5. Gọi API tìm kiếm bằng ảnh
+            const results = await callImageToImageAPI(imageFile);
+
+            // 6. Xử lý kết quả (tương tự như tìm kiếm thông thường)
+            const getTimingInfo = () => {
+                const searchEndTime = performance.now();
+                const totalSearchDuration = ((searchEndTime - searchStartTime) / 1000).toFixed(2);
+                return { total: totalSearchDuration, translate: null }; // Không có thời gian dịch
+            };
+            handleSearchResults(results, false, getTimingInfo());
+
+        } catch (error) {
+            handleSearchError(error);
+        }
+    }
+
+
 
     function callTemporalSearchStart(query) {
         return fetch("/api/search/temporal/start", {
@@ -1323,6 +1388,14 @@ function showLoadingIndicator() {
                 }
             }
             
+            if (e.key === 's' || e.key === 'S') {
+                // Ngăn các hành vi mặc định của trình duyệt (ví dụ: mở hộp thoại Save)
+                e.preventDefault();
+                
+                // Gọi hàm xử lý logic tìm kiếm
+                performSearchFromSelectedFrame();
+            }
+
             // Phím Escape: Bỏ chọn tất cả
             if (e.key === 'Escape') {
                 // Chỉ xử lý nếu không có modal nào đang mở
