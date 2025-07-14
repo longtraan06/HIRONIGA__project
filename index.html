@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="icon" href="./public/icons8-star-48.png" type="image/png">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AIC Lunch Retrieval</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <!-- <h1>Header</h1> -->
+            <div class="header-buttons">
+                <!-- Nút Text to Image -->
+                <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8"/>
+                        <polyline points="21,21 16.65,16.65"/>
+                        <path d="M8 11h6"/>
+                        <path d="M11 8v6"/>
+                    </svg>
+                </button>
+                <!-- Thêm nút Text to Text -->
+                <button id="textToTextBtn" class="header-btn" title="Search in Text" data-mode="text-to-text">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <line x1="7" y1="8" x2="17" y2="8"/>
+                        <line x1="7" y1="12" x2="17" y2="12"/>
+                        <line x1="7" y1="16" x2="17" y2="16"/>
+                    </svg>
+                </button>
+                <!-- Nút Image to Image -->
+                <button id="imageToImageBtn" class="header-btn" title="Search Image" data-mode="image-to-image">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                        <polyline points="21,15 16,10 5,21"/>
+                    </svg>
+                </button>
+
+                <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M5 12h14"></path>
+                        <path d="M12 5l7 7-7 7"></path>
+                        <path d="M19.99 12h-15"></path>
+                        <path d="M3 5v14"></path>
+                        <path d="M21 5v14"></path>
+                        <path d="M12 19l-7-7 7-7"></path>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main container -->
+    <div class="main-container">
+        <!-- Sidebar bên trái -->
+        <aside class="sidebar">
+            <div class="search-container">
+                <h3>SEARCH</h3>
+                
+                <!-- Search mode buttons (hidden by default) -->
+                <div class="search-mode-buttons" id="searchModeButtons" style="display: none;">
+
+                    <button class="mode-btn active" data-mode="text-to-image">
+                        <i class="fas fa-font"></i>
+                    </button>
+                    <button class="mode-btn" data-mode="image-to-image">
+                        <i class="fas fa-image"></i>
+                    </button>
+
+                </div>
+                
+                <!-- Search inputs container -->
+                <div class="search-inputs-container" id="searchInputsContainer">
+                    <div class="search-input-group" data-search-id="1">
+                        <div class="search-box">
+                            <textarea 
+                                class="search-input" 
+                                placeholder="Search" 
+                                rows="1"
+                                data-mode="text-to-image"
+                            ></textarea>
+                            <div class="translated-query-display"></div>
+                            <!-- Image upload area (hidden by default) -->
+                             
+                            <div class="image-upload-area" style="display: none;">
+                                <input type="file" class="image-input" accept="image/*" style="display: none;">
+                                <div class="upload-zone">
+                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                                        <circle cx="8.5" cy="8.5" r="1.5"/>
+                                        <polyline points="21,15 16,10 5,21"/>
+                                    </svg>
+                                    <p>Drag or choose image to search</p>
+                                    <div class="uploaded-image" style="display: none;">
+                                        <img src="" alt="Uploaded image">
+                                        <button class="remove-image">×</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- <div class="search-info">
+                    <p class="search-placeholder">Press Enter or Tab to create new search bar</p>
+                </div> -->
+            </div>
+        </aside>
+
+        <!-- Main content area -->
+        <main class="main-content">
+            <div class="content-area" id="contentArea">
+                <div class="content-placeholder">
+                    <h2>RESULTS</h2>
+                    <!-- <p>Kết quả tìm kiếm sẽ hiển thị ở đây dưới dạng lưới ảnh (6 ảnh/hàng)</p> -->
+                </div>
+            </div>
+        </main>
+    </div>
+    <!-- keyframe lan can popup-->
+    <div id="imageModal" class="image-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
+            <div class="thumbnail-strip" id="thumbnailStrip"></div>
+        </div>
+    </div>
+    <!-- video player -->
+    <div id="videoModal" class="video-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn" id="closeVideoModalBtn">×</button>
+            <video id="videoPlayer" class="video-player" controls autoplay muted>
+                <source src="" type="video/mp4">
+                Trình duyệt của bạn không hỗ trợ thẻ video.
+            </video>
+        </div>
+    </div>
+    <!-- Toolbar hiển thị khi có frame được chọn -->
+    <div id="selectionToolbar" class="selection-toolbar">
+        <div class="selection-info">
+            <span class="selection-count">0</span>
+            <span>frame đã chọn</span>
+        </div>
+        <div class="toolbar-actions">
+            <button id="viewKeyframesBtn" class="toolbar-btn" data-action="view-keyframes">
+                <i class="fas fa-film"></i> Xem keyframes
+            </button>
+            <button id="clearSelectionBtn" class="toolbar-btn" data-action="clear-selection">
+                <i class="fas fa-times"></i> Bỏ chọn tất cả
+            </button>
+        </div>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
