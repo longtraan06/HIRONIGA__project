@@ -521,7 +521,7 @@ body {
     position: relative;
     background: var(--matcha-pale);
     border-radius: 16px;
-    padding: 25px;
+    padding: 5px;
     max-width: 90%;
     max-height: 90%;
     z-index: 1;
@@ -541,7 +541,7 @@ body {
 .main-preview {
     max-width: 100%;
     max-height: 65vh;
-    margin-bottom: 20px;
+    margin-bottom: 5px;
     border-radius: 10px;
     object-fit: contain;
     box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
@@ -950,4 +950,56 @@ button:focus, input:focus, textarea:focus {
 .translated-query-display.visible {
     opacity: 1;
     max-height: 100px; /* Chiều cao đủ lớn để chứa nội dung */
+}
+
+.image-item {
+    /* Đảm bảo image-item có position relative để định vị phần tử con */
+    position: relative; 
+}
+
+.frame-info {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--matcha-pale);
+    color: var(--matcha-dark);
+    text-align: center;
+    padding: 3px 5px;
+    font-size: 11px;
+    font-family: 'Courier New', Courier, monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    
+    /* Ẩn theo mặc định */
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s ease, transform 0.1s ease;
+    
+    /* Ngăn không cho nó bắt các sự kiện chuột */
+    pointer-events: none;
+}
+
+/* Khi hover vào image-item, hiện thông tin frame */
+.image-item:hover .frame-info {
+    opacity: 1;
+    transform: translateY(0);
+}
+
+
+/* --- Định dạng cho thông tin frame trong Modal Keyframe --- */
+.modal-frame-info {
+    color: var(--matcha-dark);
+    font-weight: 500;
+    font-size: 15px;
+    background-color: var(--matcha-accent);
+    padding: 5px 5px;
+    border-radius: 8px;
+    margin-top: 1px; /* Kéo nó lên một chút để che viền dưới của ảnh */
+    margin-bottom: 1px;
+    z-index: 2; /* Đảm bảo nó nằm trên các phần tử khác */
+    font-family: 'Courier New', Courier, monospace;
+    /* border: 1px solid var(--matcha-light); */
+    /* box-shadow: 0 2px 4px rgba(0,0,0,0.05); */
 }
