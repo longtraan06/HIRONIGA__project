@@ -598,10 +598,11 @@ def process_milvus_results_for_frontend(results: list) -> list:
         # Đường dẫn video giữ nguyên
         video_path = f"/videos/{video_name}.mp4"
         
-        # match = re.search(r'_(\d+)', frame_name)
-        # frame_id = int(match.group(1)) if match else 0
+        match = re.search(r'_(\d+)', frame_name)
+        frame_id = int(match.group(1)) if match else 0
         
-        frame_id = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
+        frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
+        frame_identifier = f"{video_name}_{frame_id_ori}"
         
         processed_list.append({
             "id": frame_id,
@@ -610,7 +611,8 @@ def process_milvus_results_for_frontend(results: list) -> list:
             "videoPath": video_path,
             "timestamp": metadata.get("timestamp", "00:00.000"),
             "score": res.get("score", res.get("sim_score", 0)),
-            "temporal_score": res.get("temporal_score", 0)
+            "temporal_score": res.get("temporal_score", 0),
+            "frameIdentifier": frame_identifier
         })
     return processed_list
 
