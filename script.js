@@ -63,6 +63,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             else if (e.key === 'F3') {
                 e.preventDefault();
+                if (imageToImageBtn) {
+                    imageToImageBtn.click();
+                }
+            }
+            else if (e.key === 'F4') {
+                e.preventDefault();
                 if (translateBtn) {
                     translateBtn.click();
                 }
@@ -914,7 +920,8 @@ function loadMoreImages() {
             
             imageItem.innerHTML = `
                 <img src="${image.path}" alt="${scoreInfo}" loading="lazy">
-            `;
+                <div class="frame-info">${image.frameIdentifier}</div>
+            `;  
             
             // Xử lý sự kiện chuột - giữ nguyên code của bạn
             imageItem.addEventListener('mousedown', function(event) {
@@ -1043,7 +1050,9 @@ function showLoadingIndicator() {
         const modal = document.getElementById('imageModal');
         const mainPreview = document.getElementById('mainPreviewImage');
         const thumbnailStrip = document.getElementById('thumbnailStrip');
-        
+        const modalFrameInfo = document.getElementById('modalFrameInfo'); 
+
+
         // Parse video ID từ path mới
         // Path format: /frames/{video_id}/{frame_name}
         const pathParts = clickedPath.split('/');
@@ -1079,6 +1088,8 @@ function showLoadingIndicator() {
             mainPreview.src = `${folderUrlPath}/${frameName}`;
             currentFrameNumber = frameNum;
 
+            modalFrameInfo.textContent = `${videoId}_${frameNum}`;
+            
             const oldCurrent = thumbnailStrip.querySelector('.current-frame');
             if (oldCurrent) oldCurrent.classList.remove('current-frame');
 
@@ -1390,7 +1401,7 @@ function showLoadingIndicator() {
             
             if (e.key === 's' || e.key === 'S') {
                 // Ngăn các hành vi mặc định của trình duyệt (ví dụ: mở hộp thoại Save)
-                e.preventDefault();
+                // e.preventDefault();
                 
                 // Gọi hàm xử lý logic tìm kiếm
                 performSearchFromSelectedFrame();
