@@ -702,24 +702,6 @@ document.addEventListener('DOMContentLoaded', function() {
             throw err;
         });
     }
-    
-    // Giữ nguyên hàm gọi API text-to-image
-    function callTextToImageAPI(query) {
-        return fetch("/api/search/text", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                query: query,
-                // top_k: 1000,
-                search_in: "image"
-            })
-        })
-        .then(res => res.ok ? res.json() : Promise.reject(res))
-        .catch(err => {
-            console.error("Text-to-image API call failed:", err);
-            throw err;
-        });
-    }
 
     async function performSearchFromSelectedFrame() {
         // 1. Kiểm tra lại để chắc chắn chỉ có 1 frame được chọn
@@ -910,9 +892,10 @@ function loadMoreImages() {
             
             const imageItem = document.createElement('div');
             imageItem.className = 'image-item';
+
             const frameId = `frame-${image.id}`;
             imageItem.setAttribute('data-frame-id', frameId);
-            
+            imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
             // Hiển thị cả temporal_score nếu có
             const scoreInfo = image.temporal_score
                 ? `T-Score: ${image.temporal_score.toFixed(4)}`
@@ -959,7 +942,7 @@ function loadMoreImages() {
                 // Chuột giữa: Mở modal keyframe lân cận
                 else if (event.button === 1) {
                     event.preventDefault();
-                    openImageModal(image.id, image.path);
+                    openImageModal(image.id, image.path, image);
                 }
             });
             
@@ -1046,39 +1029,61 @@ function showLoadingIndicator() {
     }
     const videoInfoCache = {};
 
-    async function openImageModal(clickedFrameNumber, clickedPath) {
+    async function openImageModal(clickedFrameNumber, clickedPath, image) {
         const modal = document.getElementById('imageModal');
         const mainPreview = document.getElementById('mainPreviewImage');
         const thumbnailStrip = document.getElementById('thumbnailStrip');
-        const modalFrameInfo = document.getElementById('modalFrameInfo'); 
+        const modalFrameInfo = document.getElementById('modalFrameInfo');
 
-
-        // Parse video ID từ path mới
-        // Path format: /frames/{video_id}/{frame_name}
+        // 1. Lấy videoId từ path (logic này không đổi)
         const pathParts = clickedPath.split('/');
-        const videoId = pathParts[2];  // Lấy video_id từ path
+        const videoId = pathParts[2];
 
-        // Lấy thông tin video
+        // SỬA LỖI: Di chuyển việc lấy videoInfo từ cache xuống đây
         let videoInfo = videoInfoCache[videoId];
-        if (!videoInfo) {
-            try {
-                const response = await fetch(`/api/video_info/${videoId}`);
-                if (!response.ok) throw new Error("Server response not ok");
-                videoInfo = await response.json();
-                videoInfoCache[videoId] = videoInfo;
-            } catch (error) {
-                console.error("Không thể tải thông tin video:", error);
-                alert("Lỗi: Không thể tải các frame lân cận.");
-                return;
+        let videoMetadata = null;
+
+        try {
+            // TỐI ƯU HÓA: Thực hiện cả 2 lệnh gọi API song song
+            const [metadataResponse, videoInfoResponse] = await Promise.all([
+                fetch(`/api/metadata/${videoId}`),
+                videoInfo ? Promise.resolve(null) : fetch(`/api/video_info/${videoId}`) // Chỉ fetch video_info nếu chưa có trong cache
+            ]);
+
+            // Xử lý kết quả metadata
+            if (metadataResponse.ok) {
+                videoMetadata = await metadataResponse.json();
+            } else {
+                console.error(`Could not fetch metadata for video ${videoId}`);
             }
+
+            // Xử lý kết quả video_info (nếu có)
+            if (videoInfoResponse) { // Nếu videoInfoResponse không phải là null
+                if (videoInfoResponse.ok) {
+                    videoInfo = await videoInfoResponse.json();
+                    videoInfoCache[videoId] = videoInfo; // Lưu vào cache
+                } else {
+                    throw new Error("Server response not ok for video_info");
+                }
+            }
+            
+        } catch (error) {
+            console.error("Không thể tải thông tin video hoặc metadata:", error);
+            alert("Lỗi: Không thể tải các frame lân cận.");
+            return;
+        }
+        
+        // Nếu sau tất cả các bước mà videoInfo vẫn không có, thì thoát
+        if (!videoInfo) {
+            alert("Lỗi nghiêm trọng: Không có thông tin video để hiển thị.");
+            return;
         }
 
-        const { total_frames, frame_filenames, folder_url_path } = videoInfo;
-        // Sử dụng folder_url_path từ API thay vì tự build
+        // Phần còn lại của hàm gần như không đổi...
+        const { frame_filenames, folder_url_path } = videoInfo;
         const folderUrlPath = folder_url_path || `/frames/${videoId}`;
         let currentFrameNumber = clickedFrameNumber;
 
-        // --- 2. HÀM CẬP NHẬT GIAO DIỆN (KHÔNG ĐỔI) ---
         thumbnailStrip.innerHTML = '';
         
         function updateMainPreview(frameNum) {
@@ -1087,9 +1092,22 @@ function showLoadingIndicator() {
 
             mainPreview.src = `${folderUrlPath}/${frameName}`;
             currentFrameNumber = frameNum;
-
-            modalFrameInfo.textContent = `${videoId}_${frameNum}`;
             
+            // Logic cập nhật frameIdentifier của bạn đã ĐÚNG và RẤT TỐT
+            let finalFrameIdentifier = image.frameIdentifier;
+            if (videoMetadata) {
+                const frameKey = `frame_${frameNum}`;
+                const videoData = videoMetadata[videoId];
+                
+                if (videoData && videoData[frameKey]) {
+                    const newId = videoData[frameKey].id;
+                    finalFrameIdentifier = `${videoId}_${newId}`;
+                } else {
+                    finalFrameIdentifier = `${videoId}_${frameNum}`;
+                }
+            }
+            modalFrameInfo.textContent = finalFrameIdentifier;
+
             const oldCurrent = thumbnailStrip.querySelector('.current-frame');
             if (oldCurrent) oldCurrent.classList.remove('current-frame');
 
@@ -1100,7 +1118,7 @@ function showLoadingIndicator() {
             }
         }
         
-        // --- 3. TẠO THANH THUMBNAIL (KHÔNG ĐỔI) ---
+        // Tạo thumbnail và các event listener (giữ nguyên)
         const currentIndexInList = frame_filenames.findIndex(name => parseInt(name.split('_')[1].split('.')[0]) === clickedFrameNumber);
         if (currentIndexInList === -1) return;
 
@@ -1110,53 +1128,33 @@ function showLoadingIndicator() {
         for (let i = start; i < end; i++) {
             const frameName = frame_filenames[i];
             const frameNumber = parseInt(frameName.split('_')[1].split('.')[0]);
-            
             const thumb = document.createElement('img');
             thumb.src = `${folderUrlPath}/${frameName}`;
             thumb.dataset.frameNumber = frameNumber;
-            
             if (frameNumber === clickedFrameNumber) {
-                thumb.classList.add('active-frame');
-                thumb.classList.add('current-frame');
+                thumb.classList.add('active-frame', 'current-frame');
             }
-
             thumb.onclick = () => updateMainPreview(frameNumber);
             thumbnailStrip.appendChild(thumb);
         }
         
-        // <<< SỬA LỖI GIỚI HẠN SCROLL >>>
-        // Lấy frame đầu tiên và cuối cùng đang hiển thị trên thanh thumbnail
         const allVisibleThumbs = thumbnailStrip.querySelectorAll('img');
         const minVisibleFrame = parseInt(allVisibleThumbs[0].dataset.frameNumber);
         const maxVisibleFrame = parseInt(allVisibleThumbs[allVisibleThumbs.length - 1].dataset.frameNumber);
 
-
-        // --- 4. XỬ LÝ SỰ KIỆN VÀ DỌN DẸP ---
         const wheelHandler = (e) => {
             e.preventDefault();
             let newFrame = currentFrameNumber;
-
-            // Chỉ cho phép thay đổi nếu frame mới nằm trong giới hạn của thumbnail strip
-            if (e.deltaY > 0 && currentFrameNumber < maxVisibleFrame) { // Lăn lên
-                newFrame++;
-            } else if (e.deltaY < 0 && currentFrameNumber > minVisibleFrame) { // Lăn xuống
-                newFrame--;
-            }
-
+            if (e.deltaY > 0 && currentFrameNumber < maxVisibleFrame) newFrame++;
+            else if (e.deltaY < 0 && currentFrameNumber > minVisibleFrame) newFrame--;
             if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
         };
 
         const keydownHandler = (e) => {
-            let newFrame = currentFrameNumber;
             if (e.key === 'Escape') { closeModal(); return; }
-
-            // Chỉ cho phép thay đổi nếu frame mới nằm trong giới hạn của thumbnail strip
-            if (e.key === 'ArrowRight' && currentFrameNumber < maxVisibleFrame) {
-                newFrame++;
-            } else if (e.key === 'ArrowLeft' && currentFrameNumber > minVisibleFrame) {
-                newFrame--;
-            }
-            
+            let newFrame = currentFrameNumber;
+            if (e.key === 'ArrowRight' && currentFrameNumber < maxVisibleFrame) newFrame++;
+            else if (e.key === 'ArrowLeft' && currentFrameNumber > minVisibleFrame) newFrame--;
             if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
         };
 
@@ -1170,7 +1168,6 @@ function showLoadingIndicator() {
         document.addEventListener('keydown', keydownHandler);
         modal.querySelector('.modal-overlay').onclick = closeModal;
 
-        // --- 5. HIỂN THỊ MODAL (KHÔNG ĐỔI) ---
         updateMainPreview(clickedFrameNumber);
         modal.style.display = 'flex';
         
@@ -1372,7 +1369,7 @@ function showLoadingIndicator() {
                             // Mở modal keyframe cho frame được chọn
                             if (frameSelectionManager.getSelectionCount() === 1) {
                                 const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
-                                openImageModal(selectedFrame.id, selectedFrame.path);
+                                openImageModal(selectedFrame.id, selectedFrame.path, selectedFrame);
                             }
                             break;
                             
@@ -1395,7 +1392,7 @@ function showLoadingIndicator() {
             if (e.key === 'f' || e.key === 'F') {
                 if (frameSelectionManager.getSelectionCount() === 1) {
                     const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
-                    openImageModal(selectedFrame.id, selectedFrame.path);
+                    openImageModal(selectedFrame.id, selectedFrame.path, selectedFrame.data);
                 }
             }
             
@@ -1426,15 +1423,17 @@ function showLoadingIndicator() {
             
             // Phím Ctrl+A: Chọn tất cả các frame
             if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault(); // Ngăn hành vi mặc định (chọn tất cả văn bản)
+                // e.preventDefault(); // Ngăn hành vi mặc định (chọn tất cả văn bản)
                 
                 // Chỉ áp dụng nếu đang focus vào khu vực kết quả
                 if (document.activeElement === document.body || 
                     document.activeElement.closest('.main-content')) {
-                    
+                     e.preventDefault();
                     // Chọn tất cả frame hiện có
+
                     document.querySelectorAll('.image-item').forEach(item => {
                         const frameId = item.getAttribute('data-frame-id');
+                        const frameIdentifier = item.getAttribute('data-frame-identifier');
                         if (frameId && !frameSelectionManager.isSelected(frameId)) {
                             // Tìm dữ liệu frame từ các thuộc tính
                             const imgElement = item.querySelector('img');
@@ -1445,7 +1444,7 @@ function showLoadingIndicator() {
                                 id: id,
                                 path: path,
                                 element: item,
-                                data: {} // Thông tin bổ sung có thể được lưu trữ ở đây
+                                data: {frameIdentifier: frameIdentifier} // Thông tin bổ sung có thể được lưu trữ ở đây
                             });
                         }
                     });
