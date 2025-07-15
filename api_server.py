@@ -26,7 +26,7 @@ app = FastAPI()
 # Kết nối Redis
 milvus = MilvusManager(host="milvus-standalone",
                         port=19530,
-                        model_path="google/siglip2-base-patch16-512",
+                        model_path="jinaai/jina-clip-v2",
                         #"google/siglip2-base-patch16-naflex"
                         #"google/siglip2-base-patch16-512"
                         #"jinaai/jina-clip-v2"
@@ -419,6 +419,32 @@ async def search_image(
     
     return process_milvus_results_for_frontend(results)
 
+
+@app.get("/api/metadata/{video_id}")
+async def get_frame_metadata(video_id: str):
+    """
+    Phục vụ file metadata.json cho một video cụ thể.
+    """
+    # Đường dẫn đến file metadata.json trên server
+    metadata_path = f"/workspace/WorkingSpace/Personal/chinhnm/final/{video_id}/metadata.json"
+    
+    # Kiểm tra xem file có tồn tại không
+    if not os.path.exists(metadata_path):
+        raise HTTPException(
+            status_code=404, 
+            detail=f"Metadata file not found for video {video_id}"
+        )
+    
+    # Trả về file dưới dạng JSON
+    return FileResponse(
+        metadata_path,
+        media_type="application/json",
+        headers={
+            # Bạn có thể cache file này để tăng tốc độ
+            "Cache-Control": "public, max-age=3600",
+        }
+    )
+
 @app.get("/api/video_info/{video_id}")
 @cache_result(expire_time=3600)  # Cache 1 giờ
 async def get_video_info(video_id: str):
@@ -603,7 +629,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         
         frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
         frame_identifier = f"{video_name}_{frame_id_ori}"
-        
+
         processed_list.append({
             "id": frame_id,
             "path": path,  # Đường dẫn mới
