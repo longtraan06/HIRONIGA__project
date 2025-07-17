@@ -38,7 +38,7 @@ model_paths=[
     "jinaai/jina-clip-v2",
     "google/siglip2-large-patch16-512",
     # "google/siglip2-so400m-patch16-384",
-            ]
+]
 
 milvus = MilvusManager(host="milvus-standalone",
                         port=19530,
@@ -227,6 +227,7 @@ def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
 class TemporalStartRequest(BaseModel):
     query: str
     top_k: int = 2000
+    model_name: Optional[str] = None
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -238,12 +239,14 @@ class TextSearchRequest(BaseModel):
     top_k: int = 2000
     search_in: str = "image"
     start_temporal_chain: bool = False
+    model_name: Optional[str] = None
 
 class ImageSearchRequest(BaseModel):
     query: UploadFile
     top_k: int = 2000
     search_in: str = "image"
     start_temporal_chain: bool = False
+    model_name: Optional[str] = None
 
 
 @app.get("/api/debug/redis-test")
@@ -265,6 +268,13 @@ async def test_redis_connection():
             "status": "error",
             "message": f"Redis connection failed: {str(e)}"
         }
+
+@app.get("/api/models")
+async def get_available_models():
+    """
+    Trả về danh sách các model có sẵn để tìm kiếm.
+    """
+    return {"models": model_paths}
 
 @app.get("/api/debug/temporal-chain/{chain_id}")
 async def debug_temporal_chain(chain_id: str):
@@ -400,14 +410,16 @@ async def search_text(req: TextSearchRequest):
         mode="text",
         search_in=req.search_in,
         top_k=min(req.top_k, 2000),  # Giới hạn top_k tối đa
-        start_temporal_chain=False
+        start_temporal_chain=False,
+        model_name=req.model_name
     )
     return process_milvus_results_for_frontend(results)
 
 @app.post("/api/search/image")
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
-    top_k: int = Form(2000, description="Số lượng kết quả trả về")
+    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    req: ImageSearchRequest = Depends(ImageSearchRequest)  # Sử dụng ImageSearchRequest để lấy model_name
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -421,7 +433,8 @@ async def search_image(
         query=image_bytes,
         mode="image",
         search_in="image",
-        top_k=min(top_k, 2000)  # Giới hạn top_k
+        top_k=min(top_k, 2000),  # Giới hạn top_k
+        model_name=req.model_name
     )
     
     return process_milvus_results_for_frontend(results)
@@ -495,7 +508,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             mode="text",
             search_in="image",
             start_temporal_chain=True,
-            top_k=min(req.top_k, 2000)  # Giới hạn top_k
+            top_k=min(req.top_k, 2000),  # Giới hạn top_k
+            model_name=req.model_name
         )
         
         # 3. Lấy trạng thái temporal
