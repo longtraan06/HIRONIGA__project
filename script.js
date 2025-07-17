@@ -285,6 +285,7 @@ document.addEventListener('DOMContentLoaded', function() {
         try {
             const response = await fetch(url);
             const data = await response.json();
+            printf("Translation response:", data);
             return data[0].map(item => item[0]).join('');
         } catch (error) {
             console.error('Translation error:', error);
