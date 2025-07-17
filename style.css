@@ -55,7 +55,7 @@ body {
 
 .header-content {
     display: flex;
-    justify-content: flex-start;
+    justify-content: flex-end;
     align-items: center;
     width: 100%;
     gap: 20px;
@@ -1002,4 +1002,71 @@ button:focus, input:focus, textarea:focus {
     font-family: 'Courier New', Courier, monospace;
     /* border: 1px solid var(--matcha-light); */
     /* box-shadow: 0 2px 4px rgba(0,0,0,0.05); */
+}
+
+
+.settings-menu {
+    position: fixed;
+    top: 50px; /* Vừa dưới header */
+    right: 20px;
+    background: var(--matcha-pale);
+    border: 1px solid var(--matcha-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-medium);
+    z-index: 1001; /* Phải cao hơn header */
+    padding: 10px;
+    min-width: 250px;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none; /* Không thể click khi bị ẩn */
+}
+
+.settings-menu.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto; /* Có thể click khi hiện */
+}
+
+.settings-menu h4 {
+    color: var(--matcha-dark);
+    margin: 0 5px 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--matcha-light);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.settings-menu ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.settings-menu li {
+    padding: 10px 15px;
+    color: var(--matcha-dark);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background-color 0.2s ease;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.settings-menu li:hover {
+    background-color: var(--matcha-accent);
+}
+
+.settings-menu li.selected {
+    background-color: var(--matcha-primary);
+    color: white;
+    font-weight: 600;
+}
+
+/* Biểu tượng check cho model được chọn */
+.settings-menu li.selected::after {
+    content: '✓';
+    font-weight: bold;
 }
