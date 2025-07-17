@@ -24,19 +24,26 @@ import secrets
 
 app = FastAPI()
 # Kết nối Redis
+"""
+Available models:
+"google/siglip2-base-patch16-naflex"
+"google/siglip2-base-patch16-512"
+"jinaai/jina-clip-v2"
+"google/siglip2-large-patch16-512"
+"google/siglip2-so400m-patch16-384"
+"google/siglip2-so400m-patch16-naflex"
+"""
+model_paths=[
+    "google/siglip2-base-patch16-512",
+    "jinaai/jina-clip-v2",
+    "google/siglip2-large-patch16-512",
+    # "google/siglip2-so400m-patch16-384",
+            ]
+
 milvus = MilvusManager(host="milvus-standalone",
                         port=19530,
-                        model_path="jinaai/jina-clip-v2",
-                        #"google/siglip2-base-patch16-naflex"
-                        #"google/siglip2-base-patch16-512"
-                        #"jinaai/jina-clip-v2"
-                        #"google/siglip2-large-patch16-512"
-                        #"google/siglip2-so400m-patch16-384"
-                        #"google/siglip2-so400m-patch16-naflex"
+                        model_paths=model_paths,
                         )
-
-
-
 redis_client = redis.Redis(host='redis-server', port=6379, db=0)
 
 # clear cache method
