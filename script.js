@@ -4,6 +4,9 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentSearchMode = 'text-to-image';
     let currentHeaderFocus = null;
     let isTranslationEnabled = false;
+    let availableModels = [];
+    let currentSelectedModel = 'all';
+    
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
@@ -19,7 +22,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const translateBtn = document.getElementById('translateBtn');
     const searchInputsContainer = document.getElementById('searchInputsContainer');
     const contentArea = document.getElementById('contentArea');
-    
+    const settingsBtn = document.getElementById('settingsBtn');
+    const settingsMenu = document.getElementById('settingsMenu');
     initializeEventListeners();
 
     // Initialize
@@ -33,6 +37,16 @@ document.addEventListener('DOMContentLoaded', function() {
             return false;
         });
         
+        
+
+        // Lấy danh sách model từ API khi trang tải
+        fetchAvailableModels();
+
+        settingsBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Ngăn sự kiện click lan ra document
+            toggleSettingsMenu();
+        });
+
         // Header search mode buttons
         textToImageBtn.addEventListener('click', function() {
             switchSearchMode('text-to-image');
@@ -73,6 +87,25 @@ document.addEventListener('DOMContentLoaded', function() {
                     translateBtn.click();
                 }
             }
+            else if (e.key === 'F6') {
+                e.preventDefault();
+                toggleSettingsMenu();
+            }
+        });
+
+        document.addEventListener('click', () => {
+            if (settingsMenu.classList.contains('visible')) {
+                settingsMenu.classList.remove('visible');
+            }
+        });
+
+        settingsMenu.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (e.target && e.target.tagName === 'LI') {
+                const modelName = e.target.dataset.model;
+                selectModel(modelName);
+                settingsMenu.classList.remove('visible');
+            }
         });
 
         translateBtn.addEventListener('click', function() {
@@ -84,18 +117,7 @@ document.addEventListener('DOMContentLoaded', function() {
         setupSearchInput(document.querySelector('.search-input-group'));
         
         setupToolbarEvents();
-        
-        // Prevent tab default behavior globally
-        // document.addEventListener('keydown', function(e) {
-        //     if (e.key === 'Tab') {
-        //         const activeElement = document.activeElement;
-        //         if (activeElement && activeElement.classList.contains('search-input')) {
-        //             e.preventDefault();
-        //             createNewSearchInput();
-        //         }
-        //     }
-        // });
-        
+
         // Tự động kích hoạt chế độ text-to-image khi trang tải xong
         setTimeout(function() {
             // Đã mặc định là text-to-image rồi, không cần kích hoạt nữa
@@ -278,6 +300,71 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+
+    // HÀM MỚI: Lấy danh sách model từ API
+    async function fetchAvailableModels() {
+        try {
+            const response = await fetch('/api/models');
+            if (!response.ok) throw new Error('Failed to fetch models');
+            const data = await response.json();
+            availableModels = data.models || [];
+            populateSettingsMenu(); // Điền model vào menu sau khi lấy được
+        } catch (error) {
+            console.error('Error fetching models:', error);
+            // Có thể hiển thị thông báo lỗi cho người dùng
+        }
+    }
+
+    // HÀM MỚI: Điền các model vào menu HTML
+    function populateSettingsMenu() {
+        const menuList = document.querySelector('#settingsMenu ul');
+        if (!menuList) return;
+
+        menuList.innerHTML = ''; // Xóa các mục cũ
+
+        // Thêm tùy chọn "All Models"
+        const allItem = document.createElement('li');
+        allItem.textContent = 'All Models (Default)';
+        allItem.dataset.model = 'all';
+        menuList.appendChild(allItem);
+
+        // Thêm các model từ API
+        availableModels.forEach(model => {
+            const modelItem = document.createElement('li');
+            // Lấy tên ngắn gọn của model
+            const displayName = model.split('/').pop(); 
+            modelItem.textContent = displayName;
+            modelItem.dataset.model = model;
+            menuList.appendChild(modelItem);
+        });
+
+        updateSelectedModelUI(); // Cập nhật UI cho lựa chọn hiện tại
+    }
+
+    // HÀM MỚI: Bật/tắt menu
+    function toggleSettingsMenu() {
+        const settingsMenu = document.getElementById('settingsMenu');
+        settingsMenu.classList.toggle('visible');
+    }
+
+    // HÀM MỚI: Xử lý khi người dùng chọn model
+    function selectModel(modelName) {
+        currentSelectedModel = modelName;
+        console.log('Selected model:', currentSelectedModel);
+        updateSelectedModelUI();
+    }
+
+    // HÀM MỚI: Cập nhật UI để hiển thị model nào đang được chọn
+    function updateSelectedModelUI() {
+        const menuItems = document.querySelectorAll('#settingsMenu li');
+        menuItems.forEach(item => {
+            if (item.dataset.model === currentSelectedModel) {
+                item.classList.add('selected');
+            } else {
+                item.classList.remove('selected');
+            }
+        });
+    }
 
     async function translateText(text, sourceLang = "vi", targetLang = "en") {
         if (!text) return ' ';
@@ -629,7 +716,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } else if (type === 'image' && currentSearchMode === 'image-to-image') {
             // Tìm kiếm bằng ảnh không thay đổi
-            callImageToImageAPI(query)
+            callImageToImageAPI(query, currentSelectedModel)
                 .then(results => handleSearchResults(results, false))
                 .catch(handleSearchError);
         }
@@ -641,7 +728,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const isFirstSearch = !searchGroup.previousElementSibling;
         
         if (isFirstSearch) {
-            callTemporalSearchStart(query).then(response => {
+            callTemporalSearchStart(query, currentSelectedModel).then(response => {
                 temporalChainId = response.chain_id;
                 handleSearchResults(response.initial_results, false);
                 
@@ -656,7 +743,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 createAndFocusNewSearchInput();
             }).catch(handleSearchError);
         } else {
-            callTextToImageAPI(query).then(results => {
+            callTextToImageAPI(query, currentSelectedModel).then(results => {
                 handleSearchResults(results, false);
                 
                 // Tạo thanh tìm kiếm mới ở đây
@@ -756,13 +843,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 
-    function callTemporalSearchStart(query) {
+    function callTemporalSearchStart(query, modelName) {
+        const body = { query: query };
+        if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
+            body.model_name = modelName;
+        }
         return fetch("/api/search/temporal/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: query,
-                //  top_k: 1000
-                 })
+            body: JSON.stringify(body)
         })
         .then(res => res.ok ? res.json() : Promise.reject(res));
     }
@@ -779,15 +868,18 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(res => res.ok ? res.json() : Promise.reject(res));
     }
 
-    function callTextToImageAPI(query) {
+    function callTextToImageAPI(query, modelName) {
+        const body = {
+            query: query,
+            search_in: "image"
+        };
+        if (modelName !== 'all') {
+            body.model_name = modelName;
+        }
         return fetch("/api/search/text", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                query: query,
-                // top_k: 1000,
-                search_in: "image"
-            })
+            body: JSON.stringify(body)
         })
         .then(res => res.ok ? res.json() : Promise.reject(res))
         .catch(err => {
@@ -796,10 +888,12 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    function callImageToImageAPI(imageFile) {
+    function callImageToImageAPI(imageFile, modelName) { // Thêm modelName
         const formData = new FormData();
         formData.append("file", imageFile);
-        // formData.append("top_k", 60);
+        if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
+            formData.append("model_name", modelName);
+        }
 
         return fetch("/api/search/image", {
             method: "POST",
