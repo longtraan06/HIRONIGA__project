@@ -24,6 +24,7 @@ import secrets
 
 app = FastAPI()
 # Kết nối Redis
+redis_client = redis.Redis(host='192.168.20.156', port=6300, db=0)
 """
 Available models:
 "google/siglip2-base-patch16-naflex"
@@ -35,16 +36,15 @@ Available models:
 """
 model_paths=[
     "google/siglip2-base-patch16-512",
-    "jinaai/jina-clip-v2",
     "google/siglip2-large-patch16-512",
-    # "google/siglip2-so400m-patch16-384",
+    "google/siglip2-so400m-patch16-384",
+    "google/siglip2-so400m-patch16-naflex"
 ]
 
-milvus = MilvusManager(host="milvus-standalone",
-                        port=19530,
+milvus = MilvusManager(host="192.168.20.156",
+                        port=19000,
                         model_paths=model_paths,
                         )
-redis_client = redis.Redis(host='redis-server', port=6379, db=0)
 
 # clear cache method
 
@@ -246,7 +246,7 @@ class ImageSearchRequest(BaseModel):
     top_k: int = 2000
     search_in: str = "image"
     start_temporal_chain: bool = False
-    model_name: Optional[str] = None
+    # model_name: Optional[str] = None
 
 
 @app.get("/api/debug/redis-test")
@@ -419,7 +419,7 @@ async def search_text(req: TextSearchRequest):
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
     top_k: int = Form(2000, description="Số lượng kết quả trả về"),
-    req: ImageSearchRequest = Depends(ImageSearchRequest)  # Sử dụng ImageSearchRequest để lấy model_name
+    model_name = "google/siglip2-large-patch16-512"  # Mặc định model 
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -434,7 +434,7 @@ async def search_image(
         mode="image",
         search_in="image",
         top_k=min(top_k, 2000),  # Giới hạn top_k
-        model_name=req.model_name
+        model_name=model_name
     )
     
     return process_milvus_results_for_frontend(results)
