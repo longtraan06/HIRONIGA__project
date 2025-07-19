@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
-    const IMAGES_PER_BATCH = 50; // Số lượng ảnh hiển thị mỗi lần
+    const IMAGES_PER_BATCH = 90; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
     
