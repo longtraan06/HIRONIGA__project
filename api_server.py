@@ -232,11 +232,15 @@ class TemporalStartRequest(BaseModel):
     query: str
     top_k: int = 2000
     model_name: Optional[str] = None
+    use_tag: Optional[bool] = False    # <<< THÊM VÀO
+    top_k_tags: Optional[int] = 5 
 
 class TemporalContinueRequest(BaseModel):
     query: str
     chain_id: str
     top_k: int = 2000
+    use_tag: Optional[bool] = False    # <<< THÊM VÀO
+    top_k_tags: Optional[int] = 5
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -244,13 +248,15 @@ class TextSearchRequest(BaseModel):
     search_in: str = "image"
     start_temporal_chain: bool = False
     model_name: Optional[str] = None
+    use_tag: Optional[bool] = False    # <<< THÊM VÀO
+    top_k_tags: Optional[int] = 5
 
-class ImageSearchRequest(BaseModel):
-    query: UploadFile
-    top_k: int = 2000
-    search_in: str = "image"
-    start_temporal_chain: bool = False
-    # model_name: Optional[str] = None
+# class ImageSearchRequest(BaseModel):
+#     query: UploadFile
+#     top_k: int = 2000
+#     search_in: str = "image"
+#     start_temporal_chain: bool = False
+#     # model_name: Optional[str] = None
 
 
 @app.get("/api/debug/redis-test")
@@ -415,7 +421,9 @@ async def search_text(req: TextSearchRequest):
         search_in=req.search_in,
         top_k=min(req.top_k, 2000),  # Giới hạn top_k tối đa
         start_temporal_chain=False,
-        model_name=req.model_name
+        model_name=req.model_name,
+        use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+        top_k_tags=req.top_k_tags
     )
     return process_milvus_results_for_frontend(results)
 
@@ -423,7 +431,9 @@ async def search_text(req: TextSearchRequest):
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
     top_k: int = Form(2000, description="Số lượng kết quả trả về"),
-    model_name = "google/siglip2-large-patch16-512"  # Mặc định model 
+    model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
+    use_tag: bool = Form(False, description="Enable tag filtering"), 
+    top_k_tags: int = Form(5, description="Top K tags to use")    
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -438,7 +448,9 @@ async def search_image(
         mode="image",
         search_in="image",
         top_k=min(top_k, 2000),  # Giới hạn top_k
-        model_name=model_name
+        model_name=model_name,
+        use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
+        top_k_tags=top_k_tags
     )
     
     return process_milvus_results_for_frontend(results)
@@ -513,7 +525,9 @@ async def temporal_search_start(req: TemporalStartRequest):
             search_in="image",
             start_temporal_chain=True,
             top_k=min(req.top_k, 2000),  # Giới hạn top_k
-            model_name=req.model_name
+            model_name=req.model_name,
+            use_tag=req.use_tag,    
+            top_k_tags=req.top_k_tags
         )
         
         # 3. Lấy trạng thái temporal
@@ -585,7 +599,9 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         temporal_answer = milvus.temporal_search_sequence(
             query=req.query,
             mode="text",
-            top_k=min(req.top_k, 2000)  # Giới hạn top_k
+            top_k=min(req.top_k, 2000),
+            use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+            top_k_tags=req.top_k_tags
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
