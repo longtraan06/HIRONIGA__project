@@ -7,6 +7,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let availableModels = [];
     let currentSelectedModel = 'all';
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
+    let isTagFilterEnabled = false;
+
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
@@ -24,6 +26,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const contentArea = document.getElementById('contentArea');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsMenu = document.getElementById('settingsMenu');
+    const tagFilterBtn = document.getElementById('tagFilterBtn'); 
     initializeEventListeners();
 
     // Initialize
@@ -68,6 +71,11 @@ document.addEventListener('DOMContentLoaded', function() {
             switchSearchMode('image-to-image');
         });
         
+        tagFilterBtn.addEventListener('click', function() {
+            isTagFilterEnabled = !isTagFilterEnabled; // Đảo ngược trạng thái
+            this.classList.toggle('active', isTagFilterEnabled); // Cập nhật UI
+        });
+
         document.addEventListener('keydown', function(e) {
             // Chuyển sang chế độ Text-to-Image
             if (e.key === 'F1') {
@@ -95,9 +103,15 @@ document.addEventListener('DOMContentLoaded', function() {
                     translateBtn.click();
                 }
             }
-            else if (e.key === 'F6') {
+            else if (e.key === 'F11') {
                 e.preventDefault();
                 toggleSettingsMenu();
+            }
+            if (e.key === 'F6') {
+                e.preventDefault();
+                if (tagFilterBtn) {
+                    tagFilterBtn.click();
+                }
             }
         });
 
@@ -918,6 +932,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             body.model_name = modelName;
         }
+
+        if (isTagFilterEnabled) {
+            body.use_tag = true;
+            body.top_k_tags = 5;
+        }
+
         return fetch("/api/search/temporal/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -928,12 +948,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Hàm này được gọi khi tìm kiếm query B, C...
     function callTemporalSearchContinue(query, chainId) {
+
+        const body = { 
+            query: query, 
+            chain_id: chainId 
+        };
+
+        if (isTagFilterEnabled) {
+            body.use_tag = true;
+            body.top_k_tags = 5;
+        }
+
         return fetch("/api/search/temporal/continue", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: query, chain_id: chainId,
-                //  top_k: 1000 
-                })
+            body: JSON.stringify(body)
         })
         .then(res => res.ok ? res.json() : Promise.reject(res));
     }
@@ -945,6 +974,10 @@ document.addEventListener('DOMContentLoaded', function() {
         };
         if (modelName !== 'all') {
             body.model_name = modelName;
+        }
+        if (isTagFilterEnabled) {
+            body.use_tag = true;
+            body.top_k_tags = 5;
         }
         return fetch("/api/search/text", {
             method: "POST",
@@ -964,13 +997,15 @@ document.addEventListener('DOMContentLoaded', function() {
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             formData.append("model_name", modelName);
         }
-
+        if (isTagFilterEnabled) {
+            formData.append("use_tag", "true"); // FormData gửi giá trị boolean như string
+            formData.append("top_k_tags", "5");
+        }
         return fetch("/api/search/image", {
             method: "POST",
             body: formData,
         })
         .then(res => res.ok ? res.json() : Promise.reject(res))
-        // .then(processApiResults) // Sử dụng hàm chung
         .catch(err => {
             console.error("Image-to-image API call failed:", err);
             throw err;
