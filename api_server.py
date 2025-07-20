@@ -38,14 +38,18 @@ model_paths=[
     "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
     "google/siglip2-so400m-patch16-384",
-    "google/siglip2-so400m-patch16-naflex"
+    # "google/siglip2-so400m-patch16-naflex"
 ]
 
 milvus = MilvusManager(host="192.168.20.156",
                         port=19000,
                         model_paths=model_paths,
+                        mode = "ACM"
                         )
 
+
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
+video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 # clear cache method
 
 # Thêm xác thực cơ bản
@@ -339,7 +343,7 @@ async def debug_temporal_chain(chain_id: str):
 # API Routes
 @app.get("/frames/{video_name}/{frame_name}")
 async def get_frame(video_name: str, frame_name: str):
-    frame_path = f"/workspace/WorkingSpace/Personal/chinhnm/final/{video_name}/{frame_name}"
+    frame_path = f"{keysframe_path_root}/{video_name}/{frame_name}"
     
     if not os.path.exists(frame_path):
         raise HTTPException(status_code=404, detail="Frame not found")
@@ -362,7 +366,7 @@ def get_video_info_cached(video_path: str):
 
 @app.get("/videos/{video_name}")
 async def get_video(video_name: str):
-    video_path = f"/workspace/Datasets/HCMAI24/updated/videos/all/{video_name}"
+    video_path = f"{video_path_root}/{video_name}"
     
     # Kiểm tra file tồn tại
     if not os.path.exists(video_path):
@@ -381,7 +385,7 @@ async def get_video(video_name: str):
 @app.get("/api/debug/check-video/{video_name}")
 def check_video(video_name: str):
     import os
-    video_path = f"/workspace/Datasets/HCMAI24/updated/videos/all/{video_name}.mp4"
+    video_path = f"{video_path_root}/{video_name}.mp4"
     exists = os.path.exists(video_path)
     
     if exists:
@@ -394,7 +398,7 @@ def check_video(video_name: str):
         }
     else:
         # List các file có trong thư mục để debug
-        video_dir = "/workspace/Datasets/HCMAI24/updated/videos/all"
+        video_dir = video_path_root
         files = os.listdir(video_dir) if os.path.exists(video_dir) else []
         return {
             "exists": False,
@@ -446,7 +450,7 @@ async def get_frame_metadata(video_id: str):
     Phục vụ file metadata.json cho một video cụ thể.
     """
     # Đường dẫn đến file metadata.json trên server
-    metadata_path = f"/workspace/WorkingSpace/Personal/chinhnm/final/{video_id}/metadata.json"
+    metadata_path = f"{keysframe_path_root}/{video_id}/metadata.json"
     
     # Kiểm tra xem file có tồn tại không
     if not os.path.exists(metadata_path):
@@ -472,14 +476,14 @@ async def get_video_info(video_id: str):
     API này sẽ đếm và liệt kê tất cả các file ảnh trong một thư mục video.
     """
     # THAY ĐỔI: Đường dẫn mới
-    video_path = f"/workspace/WorkingSpace/Personal/chinhnm/final/{video_id}"
+    video_path_image = f"{keysframe_path_root}/{video_id}"
     
-    if not os.path.isdir(video_path):
+    if not os.path.isdir(video_path_image):
         raise HTTPException(status_code=404, detail="Video folder not found")
     
     try:
         # Lấy tất cả file .webp trong thư mục
-        all_files = [f for f in os.listdir(video_path) if f.lower().endswith('.webp')]
+        all_files = [f for f in os.listdir(video_path_image) if f.lower().endswith('.webp')]
         
         # Sắp xếp theo thứ tự frame
         all_files.sort(key=lambda name: int(name.split('_')[1].split('.')[0]))
