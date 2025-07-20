@@ -77,41 +77,56 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         document.addEventListener('keydown', function(e) {
-            // Chuyển sang chế độ Text-to-Image
-            if (e.key === 'F1') {
-                e.preventDefault(); // Ngăn trình duyệt mở cửa sổ Help mặc định
-                if (textToImageBtn) {
-                    textToImageBtn.click();
+
+        // Logic chuyển đổi chế độ tìm kiếm bằng phím Tab
+        if (e.key === 'Tab') {
+            const activeElement = document.activeElement;
+            
+            // Nếu đang focus vào một ô input/textarea, thì không làm gì cả
+            // để giữ lại hành vi Tab mặc định (di chuyển tiêu điểm, thụt đầu dòng,...)
+            // if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+            //     // Bạn có thể để trống ở đây để Tab hoạt động bình thường,
+            //     // hoặc giữ lại logic tạo search bar mới nếu muốn.
+            //     // Hiện tại, chúng ta sẽ để nó hoạt động bình thường.
+            //     return; 
+            // }
+
+            // Nếu không, chúng ta sẽ chuyển đổi chế độ
+            e.preventDefault(); // Ngăn hành vi mặc định của Tab (di chuyển tiêu điểm)
+
+            const searchModes = ['text-to-image', 'text-to-text', 'image-to-image'];
+            
+            // Tìm vị trí của chế độ hiện tại
+            const currentIndex = searchModes.indexOf(currentSearchMode);
+            
+            // Xác định vị trí của chế độ tiếp theo, quay vòng lại nếu cần
+            const nextIndex = (currentIndex + 1) % searchModes.length;
+            
+            const nextMode = searchModes[nextIndex];
+            
+            // Gọi hàm switchSearchMode đã có sẵn
+            switchSearchMode(nextMode);
+            
+            // UX Bonus: Sau khi chuyển mode, tự động focus vào ô tìm kiếm chính
+            setTimeout(() => {
+                const firstSearchInput = document.querySelector('.search-input');
+                if (firstSearchInput && firstSearchInput.style.display !== 'none') {
+                    firstSearchInput.focus();
                 }
-            }
-            // Chuyển sang chế độ Text-to-Text
+            }, 50); // Đợi một chút để DOM cập nhật
+        }
+
+            if (e.key === 'F1') {
+                e.preventDefault();
+                if (translateBtn) translateBtn.click();
+            } 
             else if (e.key === 'F2') {
                 e.preventDefault();
-                if (textToTextBtn) {
-                    textToTextBtn.click();
-                }
+                if (tagFilterBtn) tagFilterBtn.click();
             }
             else if (e.key === 'F3') {
                 e.preventDefault();
-                if (imageToImageBtn) {
-                    imageToImageBtn.click();
-                }
-            }
-            else if (e.key === 'F4') {
-                e.preventDefault();
-                if (translateBtn) {
-                    translateBtn.click();
-                }
-            }
-            else if (e.key === 'F11') {
-                e.preventDefault();
-                toggleSettingsMenu();
-            }
-            if (e.key === 'F6') {
-                e.preventDefault();
-                if (tagFilterBtn) {
-                    tagFilterBtn.click();
-                }
+                if (settingsBtn) settingsBtn.click(); // hoặc toggleSettingsMenu();
             }
         });
 
