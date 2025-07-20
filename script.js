@@ -6,11 +6,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let isTranslationEnabled = false;
     let availableModels = [];
     let currentSelectedModel = 'all';
-    
+    let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
-    const IMAGES_PER_BATCH = 90; // Số lượng ảnh hiển thị mỗi lần
+    const IMAGES_PER_BATCH = 50; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
     
@@ -28,7 +28,13 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Initialize
     function initializeEventListeners() {
-
+        const savedModel = localStorage.getItem('user_selected_model');
+        if (savedModel) {
+            currentSelectedModel = savedModel;
+        } else {
+            currentSelectedModel = 'all'; // Giá trị mặc định nếu chưa có gì được lưu
+        }
+        
         setupKeyboardNavigation();
 
         // Prevent right-click context menu
@@ -37,10 +43,12 @@ document.addEventListener('DOMContentLoaded', function() {
             return false;
         });
         
-        
+
 
         // Lấy danh sách model từ API khi trang tải
         fetchAvailableModels();
+
+        
 
         settingsBtn.addEventListener('click', (e) => {
             e.stopPropagation(); // Ngăn sự kiện click lan ra document
@@ -136,7 +144,21 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
     
-     function setupKeyboardNavigation() {
+    function updateModelHighlight() {
+        const menuItems = document.querySelectorAll('#settingsMenu li');
+        menuItems.forEach((item, index) => {
+            if (index === highlightedModelIndex) {
+                item.classList.add('highlighted');
+                // Đảm bảo mục được highlight luôn trong tầm nhìn
+                item.scrollIntoView({ block: 'nearest' });
+            } else {
+                item.classList.remove('highlighted');
+            }
+        });
+    }
+
+
+    function setupKeyboardNavigation() {
         // Danh sách các nút trên header theo thứ tự từ trái sang phải
         const headerButtons = [
             document.getElementById('textToImageBtn'),
@@ -167,6 +189,42 @@ document.addEventListener('DOMContentLoaded', function() {
                     return; // Không xử lý các logic khác
                 }
             }
+
+            if (settingsMenu.classList.contains('visible')) {
+                const menuItems = document.querySelectorAll('#settingsMenu li');
+                if (menuItems.length === 0) return;
+
+                // Xử lý phím mũi tên xuống
+                if (e.key === 'ArrowDown') {
+                    e.preventDefault(); // Ngăn trang cuộn xuống
+                    highlightedModelIndex++;
+                    if (highlightedModelIndex >= menuItems.length) {
+                        highlightedModelIndex = 0; // Quay lại đầu danh sách
+                    }
+                    updateModelHighlight();
+                }
+                // Xử lý phím mũi tên lên
+                else if (e.key === 'ArrowUp') {
+                    e.preventDefault(); // Ngăn trang cuộn lên
+                    highlightedModelIndex--;
+                    if (highlightedModelIndex < 0) {
+                        highlightedModelIndex = menuItems.length - 1; // Đi đến cuối danh sách
+                    }
+                    updateModelHighlight();
+                }
+                // Xử lý phím Enter
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (highlightedModelIndex > -1) {
+                        menuItems[highlightedModelIndex].click(); // Giả lập một cú click chuột
+                    }
+                }
+                // Xử lý phím Escape để đóng menu (UX bonus)
+                else if (e.key === 'Escape') {
+                    toggleSettingsMenu();
+                }
+            }         
+
             // Chỉ xử lý phím tắt khi không focus vào element có thể edit
             // hoặc khi đã đang focus vào một nút trên header
             if (!isEditableElement || headerButtons.includes(activeElement)) {
@@ -345,12 +403,24 @@ document.addEventListener('DOMContentLoaded', function() {
     function toggleSettingsMenu() {
         const settingsMenu = document.getElementById('settingsMenu');
         settingsMenu.classList.toggle('visible');
+        if (settingsMenu.classList.contains('visible')) {
+            // Khi menu được MỞ
+            const menuItems = Array.from(document.querySelectorAll('#settingsMenu li'));
+            // Tìm index của model hiện tại đang được chọn
+            const currentIndex = menuItems.findIndex(item => item.classList.contains('selected'));
+            highlightedModelIndex = (currentIndex > -1) ? currentIndex : 0;
+            updateModelHighlight();
+        } else {
+            // Khi menu được ĐÓNG, reset trạng thái
+            highlightedModelIndex = -1;
+        }
     }
 
     // HÀM MỚI: Xử lý khi người dùng chọn model
     function selectModel(modelName) {
         currentSelectedModel = modelName;
         console.log('Selected model:', currentSelectedModel);
+        localStorage.setItem('user_selected_model', modelName);
         updateSelectedModelUI();
     }
 
@@ -1191,14 +1261,21 @@ function showLoadingIndicator() {
             // Logic cập nhật frameIdentifier của bạn đã ĐÚNG và RẤT TỐT
             let finalFrameIdentifier = image.frameIdentifier;
             if (videoMetadata) {
-                const frameKey = `frame_${frameNum}`;
+                framenum_name = frameNum.toString().padStart(3, '0');
+                const frameKey = `frame_${framenum_name}`;
                 const videoData = videoMetadata[videoId];
                 
+                // console.log("frameKey", frameKey);
+                // console.log("videoData", videoData);
+                // console.log("videoData ID", videoData[frameKey].id);
+
+
                 if (videoData && videoData[frameKey]) {
                     const newId = videoData[frameKey].id;
                     finalFrameIdentifier = `${videoId}_${newId}`;
                 } else {
-                    finalFrameIdentifier = `${videoId}_${frameNum}`;
+                
+                    finalFrameIdentifier = `${videoId}_${frameNum}_loicuroicona`;
                 }
             }
             modalFrameInfo.textContent = finalFrameIdentifier;
