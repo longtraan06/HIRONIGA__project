@@ -55,7 +55,7 @@ body {
 
 .header-content {
     display: flex;
-    justify-content: flex-end;
+    justify-content: flex-start;
     align-items: center;
     width: 100%;
     gap: 20px;
@@ -71,6 +71,7 @@ body {
 .header-buttons {
     display: flex;
     gap: 12px;
+    flex-grow: 1;
 }
 
 .header-btn {
@@ -1069,4 +1070,28 @@ button:focus, input:focus, textarea:focus {
 .settings-menu li.selected::after {
     content: '✓';
     font-weight: bold;
+}
+
+.settings-menu li:hover {
+    background-color: var(--matcha-accent);
+}
+
+/* --- THÊM CLASS MỚI NÀY --- */
+.settings-menu li.highlighted {
+    background-color: var(--matcha-highlight); /* Một màu khác để phân biệt với hover */
+    border: 1px solid var(--matcha-dark);
+}
+/* --- HẾT PHẦN THÊM --- */
+
+.settings-menu li.selected {
+    background-color: var(--matcha-primary);
+    color: white;
+    font-weight: 600;
+}
+
+#settingsBtn {
+    margin-left: auto; 
+    background-color: var(--matcha-accent);
+    color: var(--matcha-dark) 
+
 }
