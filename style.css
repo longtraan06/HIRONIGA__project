@@ -349,7 +349,7 @@ body {
     padding: 15px;
     overflow-y: auto;
     /* background: var(--matcha-cream); */
-    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.03);
+    box-shadow: inset 0 0 20px r    gba(0, 0, 0, 0.03);
     background: rgba(71, 65, 65, 0.25);
     backdrop-filter: blur(5px)
 }
@@ -388,23 +388,24 @@ body {
     max-width: 80%;
 }
 
-/* Lưới hình ảnh cho kết quả */
-.image-grid {
-    margin: 0 auto;
-    min-height: 100px;
+.masonry-container {
+    display: flex;
+    flex-direction: row; /* Xếp các cột theo hàng ngang */
+    justify-content: center;
+    align-items: flex-start; /* Các cột sẽ bắt đầu từ trên cùng */
+    gap: 5px; /* Khoảng cách giữa các cột */
+    width: 100%;
 }
-.image-item.visible {
-    opacity: 1;
-    /* transform: translateY(0); */
+
+.masonry-column {
+    display: flex;
+    flex-direction: column; /* Các ảnh trong cột xếp theo chiều dọc */
+    gap: 5px; /* Khoảng cách giữa các ảnh trong cùng 1 cột */
+    flex: 1; /* Chia đều chiều rộng cho các cột */
+    min-width: 0; /* Cần thiết để flexbox hoạt động đúng */
 }
+
 .image-item {
-
-    opacity: 0;
-    /* transition: opacity 0.1s ease-in-out, transform 0.1s ease-in-out;
-    transform: translateY(20px); */
-    width: calc((100% / 6) - 5px);
-    margin-bottom: 5px; /* Dùng margin để tạo khoảng cách dọc */
-
     border-radius: 12px;
     overflow: hidden;
     box-shadow: var(--shadow-soft);
@@ -413,6 +414,7 @@ body {
     position: relative;
     border: 1px solid transparent;
     background-color: var(--matcha-pale);
+    width: 100%; /* Ảnh sẽ chiếm toàn bộ chiều rộng của cột */
 }
 
 .image-item:hover {
@@ -446,7 +448,7 @@ body {
 /* Hiệu ứng khi frame được chọn */
 .image-item.selected {
     box-shadow: 0 0 0 3px rgb(0, 170, 255), var(--shadow-medium);
-    /* transform: translateY(-3px) !important; */
+    transform: translateY(-3px);
     z-index: 2;
     border-color: var(--matcha-brown);
 }
@@ -767,8 +769,8 @@ body {
 
 /* Thiết kế responsive */
 @media (max-width: 1200px) {
-    .image-item { /* Thay vì thay đổi grid, ta thay đổi width của item */
-        width: calc((100% / 5) - 5px); /* 5 cột */
+    .image-grid {
+        grid-template-columns: repeat(5, 1fr);
     }
     
     .sidebar {
@@ -781,8 +783,8 @@ body {
 }
 
 @media (max-width: 992px) {
-    .image-item {
-        width: calc((100% / 4) - 5px); /* 4 cột */
+    .image-grid {
+        grid-template-columns: repeat(4, 1fr);
     }
     
     .sidebar {
@@ -795,9 +797,6 @@ body {
 }
 
 @media (max-width: 768px) {
-    .image-item {
-        width: calc((100% / 3) - 5px); /* 3 cột */
-    }
     .main-container {
         flex-direction: column;
     }
@@ -878,10 +877,6 @@ body {
         width: 30px;
         height: 30px;
         font-size: 18px;
-    }
-    .image-item {
-        width: calc((100% / 2) - 8px); /* 2 cột, tăng gap một chút */
-        margin-bottom: 8px;
     }
 }
 
