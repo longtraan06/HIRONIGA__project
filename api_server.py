@@ -35,21 +35,19 @@ Available models:
 "google/siglip2-so400m-patch16-naflex"
 """
 model_paths=[
-    "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
-    "google/siglip2-so400m-patch16-384",
-    # "google/siglip2-so400m-patch16-naflex"
+    "google/siglip2-so400m-patch16-384"
 ]
 
 milvus = MilvusManager(host="192.168.20.156",
                         port=19000,
                         model_paths=model_paths,
-                        mode = "ACM"
+                        # mode = "ACM"
                         )
 
 
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
+video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
 # clear cache method
 
 # Thêm xác thực cơ bản
