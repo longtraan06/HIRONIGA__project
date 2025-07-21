@@ -349,7 +349,7 @@ body {
     padding: 15px;
     overflow-y: auto;
     /* background: var(--matcha-cream); */
-    box-shadow: inset 0 0 20px r    gba(0, 0, 0, 0.03);
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.03);
     background: rgba(71, 65, 65, 0.25);
     backdrop-filter: blur(5px)
 }
@@ -390,13 +390,13 @@ body {
 
 /* Lưới hình ảnh cho kết quả */
 .image-grid {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 5px;
-    padding: 1px 1px;
+    margin: 0 auto;
 }
 
 .image-item {
+    width: calc((100% / 6) - 5px);
+    margin-bottom: 5px; /* Dùng margin để tạo khoảng cách dọc */
+
     border-radius: 12px;
     overflow: hidden;
     box-shadow: var(--shadow-soft);
@@ -759,8 +759,8 @@ body {
 
 /* Thiết kế responsive */
 @media (max-width: 1200px) {
-    .image-grid {
-        grid-template-columns: repeat(5, 1fr);
+    .image-item { /* Thay vì thay đổi grid, ta thay đổi width của item */
+        width: calc((100% / 5) - 5px); /* 5 cột */
     }
     
     .sidebar {
@@ -773,8 +773,8 @@ body {
 }
 
 @media (max-width: 992px) {
-    .image-grid {
-        grid-template-columns: repeat(4, 1fr);
+    .image-item {
+        width: calc((100% / 4) - 5px); /* 4 cột */
     }
     
     .sidebar {
@@ -787,6 +787,9 @@ body {
 }
 
 @media (max-width: 768px) {
+    .image-item {
+        width: calc((100% / 3) - 5px); /* 3 cột */
+    }
     .main-container {
         flex-direction: column;
     }
@@ -867,6 +870,10 @@ body {
         width: 30px;
         height: 30px;
         font-size: 18px;
+    }
+    .image-item {
+        width: calc((100% / 2) - 8px); /* 2 cột, tăng gap một chút */
+        margin-bottom: 8px;
     }
 }
 
