@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentSelectedModel = 'all';
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let isTagFilterEnabled = false;
-
+    let masonryInstance = null;
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
@@ -1033,32 +1033,31 @@ function handleSearchResults(images, isReranked = false) {
         return;
     }
     
-    // Lưu lại tất cả ảnh và reset các biến
+    // Hủy instance Masonry cũ nếu có (giữ nguyên)
+    if (masonryInstance) {
+        masonryInstance.destroy();
+        masonryInstance = null; // Quan trọng: reset lại biến
+    }
+
+    // Lưu lại ảnh và reset các biến (giữ nguyên)
     allImages = images;
     displayedImagesCount = 0;
     hasReachedEnd = false;
     
-    // Tạo tiêu đề nếu đây là kết quả reranked
-    let headerHtml = '';
-    if (isReranked) {
-        headerHtml = `<h3 class="reranked-results-header">T Reranked</h3>`;
-    }
+    // Tạo HTML (giữ nguyên)
+    let headerHtml = isReranked ? `<h3 class="reranked-results-header">T Reranked</h3>` : '';
     
-    // Tạo container cho lưới ảnh
     const imageGridContainer = document.createElement('div');
     imageGridContainer.className = 'image-grid-container';
     
-    // Tạo lưới ảnh
     const imageGrid = document.createElement('div');
     imageGrid.className = 'image-grid';
     imageGrid.id = 'imageGrid';
     
-    // Thêm vào DOM
     imageGridContainer.appendChild(imageGrid);
     contentArea.innerHTML = headerHtml;
     contentArea.appendChild(imageGridContainer);
     
-    // Thêm indicator loading ở cuối
     const loadingMore = document.createElement('div');
     loadingMore.className = 'loading-more';
     loadingMore.id = 'loadingMore';
@@ -1066,15 +1065,13 @@ function handleSearchResults(images, isReranked = false) {
     loadingMore.style.display = 'none';
     contentArea.appendChild(loadingMore);
     
-    // Xóa tất cả các frame đã chọn khi hiển thị kết quả mới
     frameSelectionManager.clearAllSelections();
+    loadMoreImages(); 
     
-    // Tải batch ảnh đầu tiên
-    loadMoreImages();
-    
-    // Thiết lập Intersection Observer để detect khi scroll đến cuối
     setupInfiniteScroll();
 }
+
+// HÃY THAY THẾ TOÀN BỘ HÀM loadMoreImages CỦA BẠN BẰNG HÀM NÀY
 
 function loadMoreImages() {
     if (isLoading || hasReachedEnd) return;
@@ -1083,15 +1080,12 @@ function loadMoreImages() {
     const loadingMore = document.getElementById('loadingMore');
     if (loadingMore) loadingMore.style.display = 'flex';
     
-    // Lấy imageGrid từ DOM
     const imageGrid = document.getElementById('imageGrid');
     if (!imageGrid) return;
     
-    // Tính số lượng ảnh cần tải
     const startIndex = displayedImagesCount;
     const endIndex = Math.min(startIndex + IMAGES_PER_BATCH, allImages.length);
     
-    // Nếu đã hiển thị tất cả ảnh, đánh dấu đã đến cuối
     if (startIndex >= allImages.length) {
         hasReachedEnd = true;
         isLoading = false;
@@ -1099,7 +1093,9 @@ function loadMoreImages() {
         return;
     }
     
-    // Thêm timeout nhỏ để giả lập việc tải (có thể bỏ trong production)
+    const fragment = document.createDocumentFragment();
+    const newItems = [];
+
     setTimeout(() => {
         // Tạo và thêm các phần tử ảnh mới
         for (let i = startIndex; i < endIndex; i++) {
@@ -1111,7 +1107,6 @@ function loadMoreImages() {
             const frameId = `frame-${image.id}`;
             imageItem.setAttribute('data-frame-id', frameId);
             imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
-            // Hiển thị cả temporal_score nếu có
             const scoreInfo = image.temporal_score
                 ? `T-Score: ${image.temporal_score.toFixed(4)}`
                 : `${image.score ? image.score.toFixed(4) : 'N/A'}`;
@@ -1121,7 +1116,9 @@ function loadMoreImages() {
                 <div class="frame-info">${image.frameIdentifier}</div>
             `;  
             
-            // Xử lý sự kiện chuột - giữ nguyên code của bạn
+            // =========================================================
+            //  PHẦN CODE QUAN TRỌNG CỦA BẠN ĐÃ ĐƯỢC KHÔI PHỤC LẠI
+            // =========================================================
             imageItem.addEventListener('mousedown', function(event) {
                 // Chuột phải: Mở video
                 if (event.button === 2) {
@@ -1163,10 +1160,31 @@ function loadMoreImages() {
             
             // Ngăn menu ngữ cảnh mặc định
             imageItem.addEventListener('contextmenu', e => e.preventDefault());
-            
-            imageGrid.appendChild(imageItem);
+            // =========================================================
+
+            fragment.appendChild(imageItem);
+            newItems.push(imageItem);
         }
         
+        // Thêm tất cả item mới vào grid một lần
+        imageGrid.appendChild(fragment);
+
+        // Đợi ảnh tải xong rồi mới tính toán layout
+        imagesLoaded(imageGrid, function() {
+            if (!masonryInstance) {
+                // Lần đầu tải: Khởi tạo Masonry
+                masonryInstance = new Masonry(imageGrid, {
+                    itemSelector: '.image-item',
+                    columnWidth: '.image-item',
+                    gutter: 5,
+                    percentPosition: true
+                });
+            } else {
+                // Các lần sau: Chỉ thêm item
+                masonryInstance.appended(newItems);
+            }
+        });
+
         // Cập nhật số lượng ảnh đã hiển thị
         displayedImagesCount = endIndex;
         
@@ -1177,7 +1195,7 @@ function loadMoreImages() {
         }
         
         isLoading = false;
-    }, 100); // Độ trễ nhỏ để người dùng thấy đang tải
+    }, 100);
 }
 
 // Thiết lập Intersection Observer để phát hiện khi cuộn đến cuối trang
@@ -1221,6 +1239,11 @@ function showLoadingIndicator() {
         window.currentInfiniteScrollObserver = null;
     }
     
+    if (masonryInstance) {
+        masonryInstance.destroy();
+        masonryInstance = null;
+    }
+
     contentArea.innerHTML = `
         <div class="loading-indicator">
             <div class="loading-spinner"></div>
