@@ -391,9 +391,17 @@ body {
 /* Lưới hình ảnh cho kết quả */
 .image-grid {
     margin: 0 auto;
+    min-height: 100px;
 }
-
+.image-item.visible {
+    opacity: 1;
+    /* transform: translateY(0); */
+}
 .image-item {
+
+    opacity: 0;
+    /* transition: opacity 0.1s ease-in-out, transform 0.1s ease-in-out;
+    transform: translateY(20px); */
     width: calc((100% / 6) - 5px);
     margin-bottom: 5px; /* Dùng margin để tạo khoảng cách dọc */
 
@@ -438,7 +446,7 @@ body {
 /* Hiệu ứng khi frame được chọn */
 .image-item.selected {
     box-shadow: 0 0 0 3px rgb(0, 170, 255), var(--shadow-medium);
-    transform: translateY(-3px);
+    /* transform: translateY(-3px) !important; */
     z-index: 2;
     border-color: var(--matcha-brown);
 }
