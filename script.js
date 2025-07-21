@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
-    const IMAGES_PER_BATCH = 50; // Số lượng ảnh hiển thị mỗi lần
+    const IMAGES_PER_BATCH = 90; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
     
@@ -1073,129 +1073,114 @@ function handleSearchResults(images, isReranked = false) {
 
 // HÃY THAY THẾ TOÀN BỘ HÀM loadMoreImages CỦA BẠN BẰNG HÀM NÀY
 
+// ---- THAY THẾ TOÀN BỘ HÀM CŨ BẰNG HÀM NÀY ----
+
 function loadMoreImages() {
     if (isLoading || hasReachedEnd) return;
-    
+
     isLoading = true;
     const loadingMore = document.getElementById('loadingMore');
     if (loadingMore) loadingMore.style.display = 'flex';
-    
+
     const imageGrid = document.getElementById('imageGrid');
-    if (!imageGrid) return;
-    
+    if (!imageGrid) {
+        isLoading = false; // Thêm dòng này để tránh bị kẹt trạng thái loading
+        return;
+    }
+
     const startIndex = displayedImagesCount;
     const endIndex = Math.min(startIndex + IMAGES_PER_BATCH, allImages.length);
-    
+
     if (startIndex >= allImages.length) {
         hasReachedEnd = true;
         isLoading = false;
         if (loadingMore) loadingMore.style.display = 'none';
         return;
     }
-    
+
     const fragment = document.createDocumentFragment();
-    const newItems = [];
+    const newItems = []; // Mảng để lưu các element mới được tạo
 
-    setTimeout(() => {
-        // Tạo và thêm các phần tử ảnh mới
-        for (let i = startIndex; i < endIndex; i++) {
-            const image = allImages[i];
-            
-            const imageItem = document.createElement('div');
-            imageItem.className = 'image-item';
-
-            const frameId = `frame-${image.id}`;
-            imageItem.setAttribute('data-frame-id', frameId);
-            imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
-            const scoreInfo = image.temporal_score
-                ? `T-Score: ${image.temporal_score.toFixed(4)}`
-                : `${image.score ? image.score.toFixed(4) : 'N/A'}`;
-            
-            imageItem.innerHTML = `
-                <img src="${image.path}" alt="${scoreInfo}" loading="lazy">
-                <div class="frame-info">${image.frameIdentifier}</div>
-            `;  
-            
-            // =========================================================
-            //  PHẦN CODE QUAN TRỌNG CỦA BẠN ĐÃ ĐƯỢC KHÔI PHỤC LẠI
-            // =========================================================
-            imageItem.addEventListener('mousedown', function(event) {
-                // Chuột phải: Mở video
-                if (event.button === 2) {
-                    event.preventDefault();
-                    openVideoModal(image.videoName, image.timestamp);
-                }
-                // Chuột trái: Chọn frame
-                else if (event.button === 0) {
-                    event.preventDefault();
-                    
-                    // Nếu nhấn Ctrl, cho phép chọn nhiều frame
-                    if (event.ctrlKey) {
-                        frameSelectionManager.toggleSelection(frameId, {
-                            id: image.id,
-                            path: image.path,
-                            element: imageItem,
-                            data: image
-                        });
-                    }
-                    // Không nhấn Ctrl, chỉ chọn một frame
-                    else {
-                        // Xóa tất cả chọn hiện tại
-                        frameSelectionManager.clearAllSelections();
-                        // Chọn frame mới
-                        frameSelectionManager.selectFrame(frameId, {
-                            id: image.id,
-                            path: image.path,
-                            element: imageItem,
-                            data: image
-                        });
-                    }
-                }
-                // Chuột giữa: Mở modal keyframe lân cận
-                else if (event.button === 1) {
-                    event.preventDefault();
-                    openImageModal(image.id, image.path, image);
-                }
-            });
-            
-            // Ngăn menu ngữ cảnh mặc định
-            imageItem.addEventListener('contextmenu', e => e.preventDefault());
-            // =========================================================
-
-            fragment.appendChild(imageItem);
-            newItems.push(imageItem);
-        }
+    // 1. Tạo các element nhưng chúng sẽ ẩn nhờ CSS (opacity: 0)
+    for (let i = startIndex; i < endIndex; i++) {
+        const image = allImages[i];
         
-        // Thêm tất cả item mới vào grid một lần
-        imageGrid.appendChild(fragment);
+        const imageItem = document.createElement('div');
+        imageItem.className = 'image-item';
 
-        // Đợi ảnh tải xong rồi mới tính toán layout
-        imagesLoaded(imageGrid, function() {
-            if (!masonryInstance) {
-                // Lần đầu tải: Khởi tạo Masonry
-                masonryInstance = new Masonry(imageGrid, {
-                    itemSelector: '.image-item',
-                    columnWidth: '.image-item',
-                    gutter: 5,
-                    percentPosition: true
-                });
-            } else {
-                // Các lần sau: Chỉ thêm item
-                masonryInstance.appended(newItems);
+        const frameId = `frame-${image.id}`;
+        imageItem.setAttribute('data-frame-id', frameId);
+        imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
+        const scoreInfo = image.temporal_score
+            ? `T-Score: ${image.temporal_score.toFixed(4)}`
+            : `${image.score ? image.score.toFixed(4) : 'N/A'}`;
+        
+        imageItem.innerHTML = `
+            <img src="${image.path}" alt="${scoreInfo}" loading="lazy">
+            <div class="frame-info">${image.frameIdentifier}</div>
+        `;  
+        
+        // --- Toàn bộ logic sự kiện mousedown và contextmenu của bạn được giữ nguyên ---
+        imageItem.addEventListener('mousedown', function(event) {
+            if (event.button === 2) {
+                event.preventDefault();
+                openVideoModal(image.videoName, image.timestamp);
+            } else if (event.button === 0) {
+                event.preventDefault();
+                if (event.ctrlKey) {
+                    frameSelectionManager.toggleSelection(frameId, { id: image.id, path: image.path, element: imageItem, data: image });
+                } else {
+                    frameSelectionManager.clearAllSelections();
+                    frameSelectionManager.selectFrame(frameId, { id: image.id, path: image.path, element: imageItem, data: image });
+                }
+            } else if (event.button === 1) {
+                event.preventDefault();
+                openImageModal(image.id, image.path, image);
             }
+        });
+        
+        imageItem.addEventListener('contextmenu', e => e.preventDefault());
+        
+        fragment.appendChild(imageItem);
+        newItems.push(imageItem); // Thêm vào mảng để xử lý sau
+    }
+
+    // 2. Thêm tất cả item mới vào grid (chúng vẫn đang ẩn)
+    imageGrid.appendChild(fragment);
+
+    // 3. Đợi TẤT CẢ ảnh của đợt này tải xong.
+    // Tối ưu hóa: chỉ kiểm tra các item mới thay vì toàn bộ grid.
+    imagesLoaded(newItems, function() {
+        // 4. Khởi tạo hoặc thêm item vào Masonry
+        if (!masonryInstance) {
+            masonryInstance = new Masonry(imageGrid, {
+                itemSelector: '.image-item',
+                columnWidth: '.image-item',
+                gutter: 5,
+                percentPosition: true,
+                transitionDuration: '0.2s' // Có thể thêm hiệu ứng nhỏ khi re-layout
+            });
+        } else {
+            masonryInstance.appended(newItems);
+        }
+
+        // 5. BƯỚC QUAN TRỌNG NHẤT: Hiển thị các item một cách mượt mà
+        // Sau khi Masonry đã sắp xếp, thêm class 'visible' để kích hoạt hiệu ứng trong CSS.
+        newItems.forEach(item => {
+            item.classList.add('visible');
         });
 
         // Cập nhật số lượng ảnh đã hiển thị
         displayedImagesCount = endIndex;
         
-        // Kiểm tra xem đã hiển thị hết ảnh chưa
         if (displayedImagesCount >= allImages.length) {
             hasReachedEnd = true;
             if (loadingMore) loadingMore.style.display = 'none';
         }
         
         isLoading = false;
-    }, 100);
+    });
+    // Đã xóa bỏ setTimeout không cần thiết
 }
 
 // Thiết lập Intersection Observer để phát hiện khi cuộn đến cuối trang
