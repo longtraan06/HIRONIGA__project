@@ -21,6 +21,9 @@ import hashlib
 from fastapi import Depends, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
+from fastapi import FastAPI, UploadFile, File, Form, Request, BackgroundTasks
+
+
 
 app = FastAPI()
 # Kết nối Redis
@@ -36,7 +39,8 @@ Available models:
 """
 model_paths=[
     "google/siglip2-large-patch16-512",
-    "google/siglip2-so400m-patch16-384"
+    "google/siglip2-so400m-patch16-384",
+    "google/siglip2-so400m-patch16-naflex"
 ]
 
 milvus = MilvusManager(host="192.168.20.156",
@@ -256,6 +260,119 @@ class TextSearchRequest(BaseModel):
 #     start_temporal_chain: bool = False
 #     # model_name: Optional[str] = None
 
+
+THUMBNAIL_SIZE = (400, 400) # Kích thước chiều rộng tối đa 400px, giữ nguyên tỷ lệ
+THUMBNAIL_QUALITY = 75     # Chất lượng nén ảnh WebP
+
+def create_thumbnails_for_video(video_name: str):
+    """
+    Hàm logic chạy ngầm để tạo thumbnail cho một thư mục video.
+    """
+    video_frames_path = os.path.join(keysframe_path_root, video_name)
+    thumbnail_dir = os.path.join(video_frames_path, THUMBNAIL_SUBDIR)
+
+    if not os.path.isdir(video_frames_path):
+        print(f"[Thumbnail Gen] SKIPPING: Directory not found for video {video_name}")
+        return
+
+    # Tạo thư mục thumbnail nếu chưa có
+    os.makedirs(thumbnail_dir, exist_ok=True)
+    
+    frames_processed = 0
+    frames_skipped = 0
+    
+    print(f"[Thumbnail Gen] Starting for video: {video_name}")
+    
+    for frame_filename in os.listdir(video_frames_path):
+        if not frame_filename.lower().endswith('.webp'):
+            continue
+
+        source_path = os.path.join(video_frames_path, frame_filename)
+        dest_path = os.path.join(thumbnail_dir, frame_filename)
+
+        # Chỉ tạo nếu thumbnail chưa tồn tại
+        if os.path.exists(dest_path):
+            frames_skipped += 1
+            continue
+
+        try:
+            with Image.open(source_path) as img:
+                img.thumbnail(THUMBNAIL_SIZE)
+                img.save(dest_path, 'webp', quality=THUMBNAIL_QUALITY)
+                frames_processed += 1
+        except Exception as e:
+            print(f"  - Error processing {frame_filename}: {e}")
+            
+    print(f"[Thumbnail Gen] Finished for {video_name}. Processed: {frames_processed}, Skipped: {frames_skipped}")
+
+
+@app.post("/api/admin/generate-thumbnails")
+async def generate_all_thumbnails(
+    background_tasks: BackgroundTasks,
+    video_name: Optional[str] = None, # Cho phép chỉ định 1 video cụ thể
+    admin: str = Depends(verify_admin)
+):
+    """
+    Kích hoạt quá trình tạo thumbnail cho tất cả các video trong background.
+    - Nếu `video_name` được cung cấp, chỉ tạo cho video đó.
+    - Nếu không, sẽ tạo cho tất cả video.
+    """
+    
+    if video_name:
+        # Chỉ chạy cho một video cụ thể
+        background_tasks.add_task(create_thumbnails_for_video, video_name)
+        return {"status": f"Thumbnail generation started in the background for video: {video_name}"}
+
+    # Chạy cho tất cả các video
+    all_video_dirs = [d for d in os.listdir(keysframe_path_root) if os.path.isdir(os.path.join(keysframe_path_root, d))]
+    for video_dir in all_video_dirs:
+        background_tasks.add_task(create_thumbnails_for_video, video_dir)
+        
+    return {"status": f"Thumbnail generation started in the background for {len(all_video_dirs)} videos."}
+
+# Cách sử dụng qua curl:
+# Tạo thumbnail cho TẤT CẢ video:
+# curl -X POST -u "admin:hlgay" http://your_server_ip:port/api/admin/generate-thumbnails
+#
+# Tạo thumbnail chỉ cho MỘT video (ví dụ: video_001):
+# curl -X POST -u "admin:hlgay" "http://your_server_ip:port/api/admin/generate-thumbnails?video_name=video_001"
+
+
+THUMBNAIL_SUBDIR = "thumbnails"
+
+@app.get("/thumbnails/{video_name}/{frame_name}")
+async def get_thumbnail(video_name: str, frame_name: str):
+    """
+    Phục vụ file thumbnail đã được tạo trước.
+    """
+    # Đường dẫn đến file thumbnail (nằm trong thư mục con 'thumbnails')
+    thumbnail_path = f"{keysframe_path_root}/{video_name}/{THUMBNAIL_SUBDIR}/{frame_name}"
+    
+    if not os.path.exists(thumbnail_path):
+        # QUAN TRỌNG: Nếu thumbnail không tồn tại, chúng ta sẽ trả về ảnh gốc
+        # Điều này giúp frontend không bị lỗi ảnh hỏng nếu thumbnail chưa được tạo.
+        original_frame_path = f"{keysframe_path_root}/{video_name}/{frame_name}"
+        if os.path.exists(original_frame_path):
+            return FileResponse(
+                original_frame_path,
+                media_type="image/webp",
+                headers={
+                    "Cache-Control": "public, max-age=86400",
+                }
+            )
+        else:
+            raise HTTPException(status_code=404, detail="Thumbnail and Frame not found")
+    
+    # Trả về thumbnail nếu nó tồn tại
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/webp",
+        headers={
+            # Cache thumbnail rất lâu vì chúng ít khi thay đổi
+            "Cache-Control": "public, max-age=604800, immutable",
+            "ETag": f"\"{os.path.getmtime(thumbnail_path)}\"",
+        }
+    )
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -659,7 +776,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         # THAY ĐỔI: Đường dẫn mới cho frames
         full_frame_name = frame_name if frame_name.endswith('.webp') else f"{frame_name}.webp"
         path = f"/frames/{video_name}/{full_frame_name}"  # Đường dẫn URL mới
-        
+        thumbnail_path = f"/thumbnails/{video_name}/{full_frame_name}"
         # Đường dẫn video giữ nguyên
         video_path = f"/videos/{video_name}.mp4"
         
@@ -672,6 +789,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         processed_list.append({
             "id": frame_id,
             "path": path,  # Đường dẫn mới
+            "thumbnail_path": thumbnail_path,
             "videoName": video_name,
             "videoPath": video_path,
             "timestamp": metadata.get("timestamp", "00:00.000"),
