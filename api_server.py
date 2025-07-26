@@ -239,6 +239,7 @@ class TemporalStartRequest(BaseModel):
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
+    tags_filter: Optional[List[str]] = None
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -246,6 +247,7 @@ class TemporalContinueRequest(BaseModel):
     top_k: int = 2000
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
+    tags_filter: Optional[List[str]] = None
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -255,6 +257,7 @@ class TextSearchRequest(BaseModel):
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
+    tags_filter: Optional[List[str]] = None
 
 # class ImageSearchRequest(BaseModel):
 #     query: UploadFile
@@ -428,7 +431,8 @@ async def search_text(req: TextSearchRequest):
         start_temporal_chain=False,
         model_name=req.model_name,
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
-        top_k_tags=req.top_k_tags
+        top_k_tags=req.top_k_tags,
+        tags_filter=req.tags_filter
     )
     return process_milvus_results_for_frontend(results)
 
@@ -438,7 +442,8 @@ async def search_image(
     top_k: int = Form(2000, description="Số lượng kết quả trả về"),
     model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
     use_tag: bool = Form(False, description="Enable tag filtering"), 
-    top_k_tags: int = Form(5, description="Top K tags to use")    
+    top_k_tags: int = Form(5, description="Top K tags to use"),
+    # tags_filter: Optional[List[str]] = None
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -456,6 +461,7 @@ async def search_image(
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags
+        # tags_filter=tags_filter
     )
     
     return process_milvus_results_for_frontend(results)
@@ -532,7 +538,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             top_k=min(req.top_k, 2000),  # Giới hạn top_k
             model_name=req.model_name,
             use_tag=req.use_tag,    
-            top_k_tags=req.top_k_tags
+            top_k_tags=req.top_k_tags,
+            tags_filter=req.tags_filter
         )
         
         # 3. Lấy trạng thái temporal
@@ -606,7 +613,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             mode="text",
             top_k=min(req.top_k, 2000),
             use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
-            top_k_tags=req.top_k_tags
+            top_k_tags=req.top_k_tags,
+            tags_filter=req.tags_filter
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
