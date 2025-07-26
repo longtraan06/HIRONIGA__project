@@ -212,6 +212,10 @@
                     <span class="shortcut-description">Semantic Search</span>
                     <span class="shortcut-key">S</span>
                 </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Submit Queue</span>
+                    <span class="shortcut-key">D</span>
+                </div>
             </div>
         </div>
     </div>
@@ -224,5 +228,20 @@
     </div>
 
     <script src="script.js"></script>
+
+    <div id="submitQueue" class="submit-queue">
+        <div class="submit-queue-header">
+            <h3>Submit Queue</h3>
+            <div class="queue-actions">
+                <span id="queueCount" class="queue-count">0 frames</span>
+                <button id="clearQueueBtn" class="queue-action-btn" title="Clear All Frames">
+                    <i class="fas fa-trash"></i> Clear All
+                </button>
+            </div>
+        </div>
+        <div id="submitQueueFrames" class="submit-queue-frames">
+            <!-- Các frame được chọn sẽ được thêm vào đây bằng JavaScript -->
+        </div>
+    </div>
 </body>
 </html>
