@@ -39,6 +39,10 @@
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags"><path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z"/><path d="M6 9.01V9"/><path d="m15 5 6.3 6.3a2.69 2.69 0 0 1 0 3.79L18.02 18"/><path d="m13.5 15.5 5-5"/></svg>
                 </button>
                 
+                <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
+                </button>
+
                 <button id="settingsBtn" class="header-btn" title="Settings (F9)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings-icon lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
@@ -153,6 +157,62 @@
             <button id="clearSelectionBtn" class="toolbar-btn" data-action="clear-selection">
                 <i class="fas fa-times"></i> Bỏ chọn tất cả
             </button>
+        </div>
+    </div>
+
+    <div id="shortcutsModal" class="shortcuts-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn">×</button>
+            <h3>Normal Shortcut</h3>
+            <div class="shortcuts-list">
+                <!-- 
+                    BẠN CÓ THỂ TỰ THÊM CÁC PHÍM TẮT CỦA MÌNH VÀO ĐÂY
+                    Dưới đây là một vài ví dụ mẫu theo cấu trúc.
+                -->
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Switch Search Mode</span>
+                    <span class="shortcut-key">Tab</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Switch Search Bar</span>
+                    <div>
+                        <span class="shortcut-key">↑</span>
+                        <span class="shortcut-key">↓</span>
+                    </div>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">On/Off Translate</span>
+                    <span class="shortcut-key">F1</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">On/Off Tag Filter</span>
+                    <span class="shortcut-key">F2</span>
+                </div>
+                 <div class="shortcut-item">
+                    <span class="shortcut-description">Model Setting</span>
+                    <span class="shortcut-key">F3</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Select Multi Frames</span>
+                    <span class="shortcut-key">Hold Ctrl</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Focus Search Bar</span>
+                    <span class="shortcut-key">Alt + S</span>
+                </div>
+            </div>
+            <h3>Selected Frame</h3>
+            <div class="shortcuts-list">
+                 <div class="shortcut-item">
+                    <span class="shortcut-description">Neighboring keyframe</span>
+                    <span class="shortcut-key">F</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Semantic Search</span>
+                    <span class="shortcut-key">S</span>
+                </div>
+            </div>
         </div>
     </div>
 
