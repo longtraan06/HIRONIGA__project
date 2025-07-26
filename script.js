@@ -12,6 +12,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
+
+
     const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
@@ -27,6 +29,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsMenu = document.getElementById('settingsMenu');
     const tagFilterBtn = document.getElementById('tagFilterBtn'); 
+    const shortcutsBtn = document.getElementById('shortcutsBtn');
+    const shortcutsModal = document.getElementById('shortcutsModal');
+    const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
+    const shortcutsOverlay = shortcutsModal.querySelector('.modal-overlay');
+
     initializeEventListeners();
 
     // Initialize
@@ -92,45 +99,69 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+    if (shortcutsBtn && shortcutsModal) {
+                // Hàm để mở modal
+                const openShortcutsModal = () => {
+                    shortcutsModal.style.display = 'flex';
+                    setTimeout(() => shortcutsModal.classList.add('visible'), 10); // Thêm class để kích hoạt animation
+                };
+
+                // Hàm để đóng modal
+                const closeShortcutsModal = () => {
+                    shortcutsModal.classList.remove('visible');
+                    // Đợi animation kết thúc rồi mới ẩn đi
+                    setTimeout(() => (shortcutsModal.style.display = 'none'), 300); 
+                };
+
+                // Gán sự kiện khi click vào nút trên header
+                shortcutsBtn.addEventListener('click', openShortcutsModal);
+
+                // Gán sự kiện cho nút X
+                closeShortcutsModalBtn.addEventListener('click', closeShortcutsModal);
+
+                // Gán sự kiện khi click vào vùng nền mờ
+                shortcutsOverlay.addEventListener('click', closeShortcutsModal);
+            }
+
         document.addEventListener('keydown', function(e) {
 
-        // Logic chuyển đổi chế độ tìm kiếm bằng phím Tab
-        if (e.key === 'Tab') {
-            const activeElement = document.activeElement;
-            
-            // Nếu đang focus vào một ô input/textarea, thì không làm gì cả
-            // để giữ lại hành vi Tab mặc định (di chuyển tiêu điểm, thụt đầu dòng,...)
-            // if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
-            //     // Bạn có thể để trống ở đây để Tab hoạt động bình thường,
-            //     // hoặc giữ lại logic tạo search bar mới nếu muốn.
-            //     // Hiện tại, chúng ta sẽ để nó hoạt động bình thường.
-            //     return; 
-            // }
+            // Logic chuyển đổi chế độ tìm kiếm bằng phím Tab
+            if (e.key === 'Tab') {
+                const activeElement = document.activeElement;
+                
+                // Nếu đang focus vào một ô input/textarea, thì không làm gì cả
+                // để giữ lại hành vi Tab mặc định (di chuyển tiêu điểm, thụt đầu dòng,...)
+                // if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+                //     // Bạn có thể để trống ở đây để Tab hoạt động bình thường,
+                //     // hoặc giữ lại logic tạo search bar mới nếu muốn.
+                //     // Hiện tại, chúng ta sẽ để nó hoạt động bình thường.
+                //     return; 
+                // }
 
-            // Nếu không, chúng ta sẽ chuyển đổi chế độ
-            e.preventDefault(); // Ngăn hành vi mặc định của Tab (di chuyển tiêu điểm)
+                // Nếu không, chúng ta sẽ chuyển đổi chế độ
+                e.preventDefault(); // Ngăn hành vi mặc định của Tab (di chuyển tiêu điểm)
 
-            const searchModes = ['text-to-image', 'text-to-text', 'image-to-image'];
-            
-            // Tìm vị trí của chế độ hiện tại
-            const currentIndex = searchModes.indexOf(currentSearchMode);
-            
-            // Xác định vị trí của chế độ tiếp theo, quay vòng lại nếu cần
-            const nextIndex = (currentIndex + 1) % searchModes.length;
-            
-            const nextMode = searchModes[nextIndex];
-            
-            // Gọi hàm switchSearchMode đã có sẵn
-            switchSearchMode(nextMode);
-            
-            // UX Bonus: Sau khi chuyển mode, tự động focus vào ô tìm kiếm chính
-            setTimeout(() => {
-                const firstSearchInput = document.querySelector('.search-input');
-                if (firstSearchInput && firstSearchInput.style.display !== 'none') {
-                    firstSearchInput.focus();
-                }
-            }, 50); // Đợi một chút để DOM cập nhật
-        }
+                const searchModes = ['text-to-image', 'text-to-text', 'image-to-image'];
+                
+                // Tìm vị trí của chế độ hiện tại
+                const currentIndex = searchModes.indexOf(currentSearchMode);
+                
+                // Xác định vị trí của chế độ tiếp theo, quay vòng lại nếu cần
+                const nextIndex = (currentIndex + 1) % searchModes.length;
+                
+                const nextMode = searchModes[nextIndex];
+                
+                // Gọi hàm switchSearchMode đã có sẵn
+                switchSearchMode(nextMode);
+                
+                // UX Bonus: Sau khi chuyển mode, tự động focus vào ô tìm kiếm chính
+                setTimeout(() => {
+                    const firstSearchInput = document.querySelector('.search-input');
+                    if (firstSearchInput && firstSearchInput.style.display !== 'none') {
+                        firstSearchInput.focus();
+                    }
+                }, 50); // Đợi một chút để DOM cập nhật
+            }
 
             if (e.key === 'F1') {
                 e.preventDefault();
@@ -765,6 +796,46 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
+        textInput.addEventListener('keydown', function(e) {
+            // Chỉ xử lý khi người dùng nhấn mũi tên lên hoặc xuống
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                
+                // 1. Lấy tất cả các ô tìm kiếm đang có trên trang theo đúng thứ tự
+                const allInputs = Array.from(document.querySelectorAll('.search-inputs-container .search-input'));
+                
+                // 2. Tìm vị trí (index) của ô tìm kiếm hiện tại mà bạn đang focus
+                const currentIndex = allInputs.indexOf(this);
+
+                let nextInput = null;
+
+                // 3. Xác định ô tìm kiếm tiếp theo dựa trên phím được nhấn
+                if (e.key === 'ArrowUp') {
+                    // Nếu không phải là ô đầu tiên, lấy ô ở trên nó
+                    if (currentIndex > 0) {
+                        nextInput = allInputs[currentIndex - 1];
+                    }
+                } else { // (e.key === 'ArrowDown')
+                    // Nếu không phải là ô cuối cùng, lấy ô ở dưới nó
+                    if (currentIndex < allInputs.length - 1) {
+                        nextInput = allInputs[currentIndex + 1];
+                    }
+                }
+
+                // 4. Nếu đã tìm thấy ô tiếp theo, di chuyển focus đến đó
+                if (nextInput) {
+                    // Ngăn hành vi mặc định của phím mũi tên (di chuyển con trỏ trong textarea)
+                    e.preventDefault(); 
+                    
+                    // Di chuyển focus
+                    nextInput.focus();
+                    
+                    // (Tùy chọn UX) Đặt con trỏ ở cuối văn bản trong ô mới
+                    const len = nextInput.value.length;
+                    nextInput.setSelectionRange(len, len);
+                }
+            }
+        });
+
         // Image upload click
         uploadZone.addEventListener('click', function() {
             imageInput.click();
