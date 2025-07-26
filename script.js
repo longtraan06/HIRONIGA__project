@@ -8,7 +8,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentSelectedModel = 'all';
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let isTagFilterEnabled = false;
-
+    let submitQueueFrames = new Map();
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
@@ -33,6 +33,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const shortcutsModal = document.getElementById('shortcutsModal');
     const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
     const shortcutsOverlay = shortcutsModal.querySelector('.modal-overlay');
+
+    const submitQueueContainer = document.getElementById('submitQueue');
+    const submitQueueFramesContainer = document.getElementById('submitQueueFrames');
+    const clearQueueBtn = document.getElementById('clearQueueBtn');
+    const queueCountSpan = document.getElementById('queueCount');
 
     initializeEventListeners();
 
@@ -212,6 +217,28 @@ document.addEventListener('DOMContentLoaded', function() {
         setupSearchInput(document.querySelector('.search-input-group'));
         
         setupToolbarEvents();
+
+        // Sử dụng event delegation để xử lý click vào nút xóa trên từng frame
+        submitQueueFramesContainer.addEventListener('click', (e) => {
+            const removeBtn = e.target.closest('.remove-queue-item-btn');
+            if (removeBtn) {
+                const frameId = removeBtn.dataset.frameId;
+                if (frameId) {
+                    removeFromSubmitQueue(frameId);
+                }
+            }
+        });
+
+        // Xử lý sự kiện click nút "Clear All"
+        clearQueueBtn.addEventListener('click', () => {
+            if (submitQueueFrames.size > 0) {
+                // Thêm một bước xác nhận để tránh xóa nhầm
+                if (confirm('Are you sure you want to clear all frames from the queue?')) {
+                    submitQueueFrames.clear();
+                    renderSubmitQueue();
+                }
+            }
+        });
 
         // Tự động kích hoạt chế độ text-to-image khi trang tải xong
         setTimeout(function() {
@@ -1313,6 +1340,8 @@ function loadMoreImages() {
             // Xử lý sự kiện chuột - giữ nguyên code của bạn
             imageItem.addEventListener('mousedown', function(event) {
                 // Chuột phải: Mở video
+                blurActiveInput(); 
+
                 if (event.button === 2) {
                     event.preventDefault();
                     openVideoModal(image.videoName, image.timestamp);
@@ -1818,6 +1847,23 @@ function showLoadingIndicator() {
                 // Gọi hàm xử lý logic tìm kiếm
                 performSearchFromSelectedFrame();
             }
+            if (e.key === 'd' || e.key ==='D') {
+                const selectedCount = frameSelectionManager.getSelectionCount();
+                
+                // Chỉ thực hiện khi đang có frame được chọn và không focus vào ô input
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+
+                if (selectedCount > 0 && !isTyping) {
+                    e.preventDefault(); // Ngăn hành vi mặc định của Enter
+
+                    const selectedFrames = frameSelectionManager.getAllSelectedFrames();
+                    addToSubmitQueue(selectedFrames);
+                    
+                    // Sau khi thêm, xóa các frame đã chọn khỏi vùng kết quả
+                    frameSelectionManager.clearAllSelections();
+                }
+            }
 
             // Phím Escape: Bỏ chọn tất cả
             if (e.key === 'Escape') {
@@ -1892,6 +1938,13 @@ function showLoadingIndicator() {
         });
     }
 
+    function blurActiveInput() {
+        const activeElement = document.activeElement;
+        if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
+            activeElement.blur();
+        }
+    }
+
     // Hàm điều chỉnh vị trí toolbar
     function adjustToolbarPosition() {
         const toolbar = document.getElementById('selectionToolbar');
@@ -1912,5 +1965,64 @@ function showLoadingIndicator() {
             }
         }
     }
+
+    /**
+     * Thêm một danh sách các frame vào submit queue
+     * @param {Array} frames - Mảng các frame được lấy từ frameSelectionManager
+     */
+    function addToSubmitQueue(frames) {
+        if (!frames || frames.length === 0) return;
+
+        frames.forEach(frame => {
+            // Sử dụng frameIdentifier để đảm bảo mỗi frame chỉ được thêm một lần
+            if (frame.data && frame.data.frameIdentifier) {
+                submitQueueFrames.set(frame.data.frameIdentifier, frame.data);
+            }
+        });
+        
+        renderSubmitQueue();
+    }
+
+    /**
+     * Xóa một frame khỏi queue dựa trên frameIdentifier
+     * @param {string} frameIdentifier - ID định danh của frame
+     */
+    function removeFromSubmitQueue(frameIdentifier) {
+        submitQueueFrames.delete(frameIdentifier);
+        renderSubmitQueue();
+    }
+
+    /**
+     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu trong 'submitQueueFrames'
+     */
+    function renderSubmitQueue() {
+        // Bước 1: Ẩn/hiện container chính
+        if (submitQueueFrames.size > 0) {
+            submitQueueContainer.classList.add('visible');
+        } else {
+            submitQueueContainer.classList.remove('visible');
+        }
+
+        // Bước 2: Cập nhật số lượng
+        queueCountSpan.textContent = `${submitQueueFrames.size} frame${submitQueueFrames.size !== 1 ? 's' : ''}`;
+
+        // Bước 3: Vẽ lại các frame
+        submitQueueFramesContainer.innerHTML = ''; // Xóa các frame cũ
+        submitQueueFrames.forEach((frameData, frameIdentifier) => {
+            const frameHtml = `
+                <div class="queue-frame-item">
+                    <img src="${frameData.path}" alt="Queued frame">
+                    <button 
+                        class="remove-queue-item-btn" 
+                        title="Remove from queue"
+                        data-frame-id="${frameIdentifier}"
+                    >×</button>
+                </div>
+            `;
+            submitQueueFramesContainer.insertAdjacentHTML('beforeend', frameHtml);
+        });
+    }
+
+
 
 });
