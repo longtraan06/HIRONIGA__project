@@ -12,7 +12,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
-    const IMAGES_PER_BATCH = 50; // Số lượng ảnh hiển thị mỗi lần
+    const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
     
@@ -127,6 +127,17 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (e.key === 'F3') {
                 e.preventDefault();
                 if (settingsBtn) settingsBtn.click(); // hoặc toggleSettingsMenu();
+            }
+            else if (e.altKey && e.key.toLowerCase() === 's') {
+                e.preventDefault(); 
+                const searchInput = document.querySelector('.search-input');
+                
+                // 3. Kiểm tra xem ô tìm kiếm có tồn tại và không bị ẩn không
+                // (Điều này quan trọng khi đang ở chế độ image-to-image)
+                if (searchInput && searchInput.style.display !== 'none') {
+                    // 4. Focus vào ô tìm kiếm
+                    searchInput.focus();
+                }
             }
         });
 
