@@ -1275,3 +1275,141 @@ button:focus, input:focus, textarea:focus {
     margin-left: 8px;
     font-size: 14px;
 }
+
+.submit-queue {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%) translateY(100%); /* Ẩn ban đầu ở dưới */
+    width: 95%;
+    background: var(--matcha-pale);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    border: 2px solid var(--matcha-border);
+    border-bottom: none;
+    box-shadow: 0 -5px 30px rgba(0, 0, 0, 0.2);
+    z-index: 2000; /* Phải cao hơn selection toolbar */
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    transition: transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.1s ease;
+    pointer-events: none; /* Không thể tương tác khi bị ẩn */
+    max-height: 40vh; /* Giới hạn chiều cao tối đa */
+}
+
+.submit-queue.visible {
+    transform: translateX(-50%) translateY(0); /* Hiện ra */
+    opacity: 1;
+    pointer-events: auto; /* Có thể tương tác khi hiện */
+}
+
+.submit-queue-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1px 20px;
+    border-bottom: 1px solid var(--matcha-light);
+    flex-shrink: 0; /* Không co lại khi nội dung nhiều */
+}
+
+.submit-queue-header h3 {
+    margin: 0;
+    color: var(--matcha-dark);
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.queue-actions {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.queue-count {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.queue-action-btn {
+    background-color: transparent;
+    border: 1px solid var(--matcha-primary);
+    color: var(--matcha-dark);
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.queue-action-btn:hover {
+    background-color: var(--matcha-accent);
+    border-color: var(--matcha-dark);
+}
+
+.submit-queue-frames {
+    display: flex;
+    gap: 10px;
+    padding: 5px;
+    overflow-x: auto; /* Cho phép cuộn ngang nếu có nhiều frame */
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--matcha-primary) transparent;
+}
+
+.submit-queue-frames::-webkit-scrollbar {
+    height: 8px;
+}
+.submit-queue-frames::-webkit-scrollbar-track {
+    background: transparent;
+}
+.submit-queue-frames::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 4px;
+}
+
+.queue-frame-item {
+    position: relative;
+    height: 100px; /* Chiều cao cố định cho các frame trong queue */
+    flex-shrink: 0; /* Ngăn các item bị co lại */
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: var(--shadow-soft);
+    border: 2px solid var(--matcha-border);
+}
+
+.queue-frame-item img {
+    height: 100%;
+    width: auto;
+    display: block;
+}
+
+.remove-queue-item-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(2px);
+    border: none;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: #dc3545;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    line-height: 1;
+}
+
+.remove-queue-item-btn:hover {
+    background: white;
+    transform: scale(1.1);
+    color: #a71d2a;
+}
