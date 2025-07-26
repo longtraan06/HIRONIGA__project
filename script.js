@@ -72,8 +72,24 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         tagFilterBtn.addEventListener('click', function() {
-            isTagFilterEnabled = !isTagFilterEnabled; // Đảo ngược trạng thái
-            this.classList.toggle('active', isTagFilterEnabled); // Cập nhật UI
+            // Tìm thanh tìm kiếm cuối cùng (thanh mới nhất)
+            const lastSearchGroup = document.querySelector('.search-input-group:last-child');
+            if (!lastSearchGroup) return; // Dừng lại nếu không có thanh tìm kiếm nào
+
+            const tagContainer = lastSearchGroup.querySelector('.tag-filter-container');
+            const tagInput = lastSearchGroup.querySelector('.tag-input');
+
+            if (tagContainer && tagInput) {
+                // Luôn bật nút tagFilterBtn khi nhấn
+                isTagFilterEnabled = true;
+                this.classList.add('active');
+
+                // Hiển thị ô nhập tag của thanh tìm kiếm cuối cùng
+                tagContainer.classList.add('visible');
+
+                // Focus vào ô đó
+                setTimeout(() => tagInput.focus(), 10);
+            }
         });
 
         document.addEventListener('keydown', function(e) {
@@ -184,6 +200,23 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
     
+    function resetTagFiltering() {
+        // 1. Tắt biến cờ toàn cục
+        isTagFilterEnabled = false;
+
+        // 2. Tắt trạng thái 'active' của nút
+        const tagFilterBtn = document.getElementById('tagFilterBtn');
+        if (tagFilterBtn) {
+            tagFilterBtn.classList.remove('active');
+        }
+
+        // 3. Ẩn tất cả các ô nhập tag đang hiển thị
+        // const allTagContainers = document.querySelectorAll('.tag-filter-container.visible');
+        // allTagContainers.forEach(container => {
+        //     container.classList.remove('visible');
+        // });
+    }
+
     function updateModelHighlight() {
         const menuItems = document.querySelectorAll('#settingsMenu li');
         menuItems.forEach((item, index) => {
@@ -646,6 +679,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     data-mode="${currentSearchMode}"
                 ></textarea>
                 <div class="translated-query-display"></div>
+                 <div class="tag-filter-container">
+                    <input type="text" class="tag-input" placeholder="Enter tags">
+                </div>  
                 <div class="image-upload-area" style="display: none;">
                     <input type="file" class="image-input" accept="image/*" style="display: none;">
                     <div class="upload-zone">
@@ -686,7 +722,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const uploadZone = searchGroup.querySelector('.upload-zone');
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
         const removeImageBtn = searchGroup.querySelector('.remove-image');
-        
+        const tagInput = searchGroup.querySelector('.tag-input');
+
+
         // Auto-resize textarea
         textInput.addEventListener('input', function() {
             this.style.height = 'auto';
@@ -697,6 +735,17 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
+        if (tagInput) {
+            tagInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Ngăn hành vi mặc định của Enter
+                    
+                    // Chuyển focus trở lại ô tìm kiếm chính
+                    textInput.focus();
+                }
+            });
+        }
+
         // THÊM VÀO: Xử lý phím Escape trong ô tìm kiếm
         textInput.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
@@ -774,6 +823,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     async function performSearch(query, type, searchGroup) {
+        // resetTagFiltering();
         if ((type === 'text' && !query.trim()) || (type === 'image' && !query)) {
             return;
         }
@@ -830,6 +880,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .then(results => handleSearchResults(results, false))
                 .catch(handleSearchError);
         }
+        resetTagFiltering();
     }
 
     // Tách logic text-to-image để dễ quản lý
@@ -838,7 +889,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const isFirstSearch = !searchGroup.previousElementSibling;
         
         if (isFirstSearch) {
-            callTemporalSearchStart(query, currentSelectedModel).then(response => {
+            callTemporalSearchStart(query, currentSelectedModel, searchGroup).then(response => {
                 temporalChainId = response.chain_id;
                 handleSearchResults(response.initial_results, false);
                 
@@ -846,14 +897,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 createAndFocusNewSearchInput();
             }).catch(handleSearchError);
         } else if (temporalChainId) {
-            callTemporalSearchContinue(query, temporalChainId).then(response => {
+            callTemporalSearchContinue(query, temporalChainId, searchGroup).then(response => {
                 handleSearchResults(response.query_A_reranked, true);
                 
                 // Tạo thanh tìm kiếm mới ở đây
                 createAndFocusNewSearchInput();
             }).catch(handleSearchError);
         } else {
-            callTextToImageAPI(query, currentSelectedModel).then(results => {
+            callTextToImageAPI(query, currentSelectedModel, searchGroup).then(results => {
                 handleSearchResults(results, false);
                 
                 // Tạo thanh tìm kiếm mới ở đây
@@ -953,15 +1004,28 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 
-    function callTemporalSearchStart(query, modelName) {
+    function callTemporalSearchStart(query, modelName, searchGroup) {
         const body = { query: query };
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             body.model_name = modelName;
         }
 
-        if (isTagFilterEnabled) {
+        if (isTagFilterEnabled){
             body.use_tag = true;
-            body.top_k_tags = 5;
+        }
+        const tagInputElement = searchGroup.querySelector('.tag-input');
+
+        if (tagInputElement && tagInputElement.value.trim() !== '') {
+            body.use_tag = true; // Bật cờ này nếu có tag được nhập
+
+            const tags = tagInputElement.value
+                .split(',')
+                .map(tag => tag.trim())
+                .filter(tag => tag);
+
+            if (tags.length > 0) {
+                body.tags_filter = tags;
+            }
         }
 
         return fetch("/api/search/temporal/start", {
@@ -973,7 +1037,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // Hàm này được gọi khi tìm kiếm query B, C...
-    function callTemporalSearchContinue(query, chainId) {
+    function callTemporalSearchContinue(query, chainId, searchGroup) {
 
         const body = { 
             query: query, 
@@ -981,9 +1045,23 @@ document.addEventListener('DOMContentLoaded', function() {
         };
 
         if (isTagFilterEnabled) {
-            body.use_tag = true;
-            body.top_k_tags = 5;
+            body.use_tag = true; 
         }
+
+        const tagInputElement = searchGroup.querySelector('.tag-input');
+
+            if (tagInputElement && tagInputElement.value.trim() !== '') {
+                body.use_tag = true; // Bật cờ này nếu có tag được nhập
+
+                const tags = tagInputElement.value
+                    .split(',')
+                    .map(tag => tag.trim())
+                    .filter(tag => tag);
+
+                if (tags.length > 0) {
+                    body.tags_filter = tags;
+                }
+            }
 
         return fetch("/api/search/temporal/continue", {
             method: "POST",
@@ -993,7 +1071,7 @@ document.addEventListener('DOMContentLoaded', function() {
         .then(res => res.ok ? res.json() : Promise.reject(res));
     }
 
-    function callTextToImageAPI(query, modelName) {
+    function callTextToImageAPI(query, modelName, searchGroup) {
         const body = {
             query: query,
             search_in: "image"
@@ -1001,10 +1079,26 @@ document.addEventListener('DOMContentLoaded', function() {
         if (modelName !== 'all') {
             body.model_name = modelName;
         }
+
         if (isTagFilterEnabled) {
-            body.use_tag = true;
-            body.top_k_tags = 5;
+            body.use_tag = true; 
         }
+
+        const tagInputElement = searchGroup.querySelector('.tag-input');
+
+        if (tagInputElement && tagInputElement.value.trim() !== '') {
+            body.use_tag = true; // Bật cờ này nếu có tag được nhập
+
+            const tags = tagInputElement.value
+                .split(',')
+                .map(tag => tag.trim())
+                .filter(tag => tag);
+
+            if (tags.length > 0) {
+                body.tags_filter = tags;
+            }
+        }
+
         return fetch("/api/search/text", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1023,10 +1117,13 @@ document.addEventListener('DOMContentLoaded', function() {
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             formData.append("model_name", modelName);
         }
+
         if (isTagFilterEnabled) {
-            formData.append("use_tag", "true"); // FormData gửi giá trị boolean như string
+            // Bật cờ use_tag để backend biết là ta có thể lọc tag
+            formData.append("use_tag", "true");
             formData.append("top_k_tags", "5");
         }
+
         return fetch("/api/search/image", {
             method: "POST",
             body: formData,
