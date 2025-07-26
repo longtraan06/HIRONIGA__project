@@ -490,7 +490,7 @@ body {
     border-radius: 50%;
     width: 50px;
     height: 50px;
-    animation: spin 1s linear infinite;
+    animation: spin 0.5s linear infinite;
     margin: 0 auto 20px;
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
 }
@@ -1104,4 +1104,47 @@ button:focus, input:focus, textarea:focus {
     background-color: var(--matcha-accent);
     color: var(--matcha-dark) 
 
+}
+
+
+/* tag filtering */
+
+.tag-filter-container {
+    margin-top: 8px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
+    pointer-events: none; /* Không thể tương tác khi ẩn */
+}
+
+/* Class 'visible' sẽ được JS thêm vào để hiện ô nhập */
+.tag-filter-container.visible {
+    max-height: 100px; /* Chiều cao đủ lớn */
+    opacity: 1;
+    pointer-events: auto; /* Có thể tương tác khi hiện */
+}
+
+/* Style cho ô nhập tag */
+.tag-input {
+    width: 100%;
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    background-color: white;
+    color: var(--matcha-dark);
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-soft);
+}
+
+.tag-input::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.tag-input:focus {
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
