@@ -13,6 +13,10 @@ document.addEventListener('DOMContentLoaded', function() {
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
 
+    let currentUser = null;
+    let ws = null;
+    let userColors = {}; // Lưu màu của tất cả user
+
 
     const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
@@ -51,19 +55,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         setupKeyboardNavigation();
+        connectWebSocket();
 
         // Prevent right-click context menu
         document.addEventListener('contextmenu', function(e) {
             e.preventDefault();
             return false;
         });
-        
-
-
         // Lấy danh sách model từ API khi trang tải
         fetchAvailableModels();
-
-        
 
         settingsBtn.addEventListener('click', (e) => {
             e.stopPropagation(); // Ngăn sự kiện click lan ra document
@@ -218,27 +218,28 @@ document.addEventListener('DOMContentLoaded', function() {
         
         setupToolbarEvents();
 
-        // Sử dụng event delegation để xử lý click vào nút xóa trên từng frame
         submitQueueFramesContainer.addEventListener('click', (e) => {
             const removeBtn = e.target.closest('.remove-queue-item-btn');
             if (removeBtn) {
                 const frameId = removeBtn.dataset.frameId;
-                if (frameId) {
-                    removeFromSubmitQueue(frameId);
+                // Lấy lại đầy đủ thông tin frame để gửi đi
+                const frameData = submitQueueFrames.get(frameId);
+                if (frameData) {
+                    // GỬI YÊU CẦU XÓA ĐẾN SERVER
+                    sendWebSocketMessage('remove_frame', frameData);
+                }
+            }
+        })
+
+        clearQueueBtn.addEventListener('click', () => {
+            if (submitQueueFrames.size > 0) {
+                if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
+                    // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
+                    sendWebSocketMessage('clear_all', {});
                 }
             }
         });
 
-        // Xử lý sự kiện click nút "Clear All"
-        clearQueueBtn.addEventListener('click', () => {
-            if (submitQueueFrames.size > 0) {
-                // Thêm một bước xác nhận để tránh xóa nhầm
-                if (confirm('Are you sure you want to clear all frames from the queue?')) {
-                    submitQueueFrames.clear();
-                    renderSubmitQueue();
-                }
-            }
-        });
 
         // Tự động kích hoạt chế độ text-to-image khi trang tải xong
         setTimeout(function() {
@@ -258,6 +259,93 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
     
+
+// quan ly nguoi dung
+    function getUsername() {
+        let username = localStorage.getItem('aic_lunch_username');
+        while (!username || username.trim() === '') {
+            username = prompt("Please enter your name to join the session:", "");
+        }
+        localStorage.setItem('aic_lunch_username', username.trim());
+        return username.trim();
+    }
+
+    function connectWebSocket() {
+        currentUser = getUsername();
+        
+        // Xác định giao thức ws:// hoặc wss:// (cho https)
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsUrl = `${wsProtocol}//${window.location.host}/ws/queue/${currentUser}`;
+
+        ws = new WebSocket(wsUrl);
+
+        ws.onopen = () => {
+            console.log("WebSocket connection established for user:", currentUser);
+        };
+
+        ws.onmessage = (event) => {
+            const message = JSON.parse(event.data);
+            handleWebSocketMessage(message);
+        };
+
+        ws.onclose = () => {
+            console.log("WebSocket connection closed. Attempting to reconnect...");
+            // Thử kết nối lại sau 3 giây
+            setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = (error) => {
+            console.error("WebSocket error:", error);
+            ws.close();
+        };
+    }
+
+    function handleWebSocketMessage(message) {
+        const { action, payload } = message;
+
+        switch (action) {
+            case 'init_state':
+                userColors = payload.users;
+                renderFullQueue(payload.queue);
+                renderUserLegend();
+                break;
+            case 'user_update':
+                userColors = payload.users;
+                renderUserLegend();
+                break;
+            case 'frames_added':
+                // Chỉ cần thêm các frame mới vào queue
+                payload.forEach(frame => {
+                    if (!submitQueueFrames.has(frame.frameIdentifier)) {
+                        submitQueueFrames.set(frame.frameIdentifier, frame);
+                    }
+                });
+                renderFullQueue(Array.from(submitQueueFrames.values()));
+                break;
+            case 'frame_removed':
+                submitQueueFrames.delete(payload.frameIdentifier);
+                renderFullQueue(Array.from(submitQueueFrames.values()));
+                break;
+            case 'queue_cleared':
+                submitQueueFrames.clear();
+                renderFullQueue([]);
+                break;
+        }
+    }
+
+    function sendWebSocketMessage(action, payload) {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ action, payload }));
+        } else {
+            console.error("WebSocket is not connected.");
+        }
+    }
+
+
+
+
+
+
     function resetTagFiltering() {
         // 1. Tắt biến cờ toàn cục
         isTagFilterEnabled = false;
@@ -1849,18 +1937,17 @@ function showLoadingIndicator() {
             }
             if (e.key === 'd' || e.key ==='D') {
                 const selectedCount = frameSelectionManager.getSelectionCount();
-                
-                // Chỉ thực hiện khi đang có frame được chọn và không focus vào ô input
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
                 if (selectedCount > 0 && !isTyping) {
-                    e.preventDefault(); // Ngăn hành vi mặc định của Enter
-
-                    const selectedFrames = frameSelectionManager.getAllSelectedFrames();
-                    addToSubmitQueue(selectedFrames);
+                    e.preventDefault(); 
+                    const selectedFramesData = frameSelectionManager.getAllSelectedFrames().map(f => f.data);
                     
-                    // Sau khi thêm, xóa các frame đã chọn khỏi vùng kết quả
+                    // GỬI TIN NHẮN ĐẾN SERVER
+                    sendWebSocketMessage('add_frames', { frames: selectedFramesData });
+                    
+                    // Xóa lựa chọn ở client
                     frameSelectionManager.clearAllSelections();
                 }
             }
@@ -1966,36 +2053,15 @@ function showLoadingIndicator() {
         }
     }
 
-    /**
-     * Thêm một danh sách các frame vào submit queue
-     * @param {Array} frames - Mảng các frame được lấy từ frameSelectionManager
+/**
+     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu từ server.
+     * @param {Array} queueItems - Mảng các frame trong queue.
      */
-    function addToSubmitQueue(frames) {
-        if (!frames || frames.length === 0) return;
+    function renderFullQueue(queueItems) {
+        // Cập nhật Map cục bộ để dễ truy xuất
+        submitQueueFrames.clear();
+        queueItems.forEach(item => submitQueueFrames.set(item.frameIdentifier, item));
 
-        frames.forEach(frame => {
-            // Sử dụng frameIdentifier để đảm bảo mỗi frame chỉ được thêm một lần
-            if (frame.data && frame.data.frameIdentifier) {
-                submitQueueFrames.set(frame.data.frameIdentifier, frame.data);
-            }
-        });
-        
-        renderSubmitQueue();
-    }
-
-    /**
-     * Xóa một frame khỏi queue dựa trên frameIdentifier
-     * @param {string} frameIdentifier - ID định danh của frame
-     */
-    function removeFromSubmitQueue(frameIdentifier) {
-        submitQueueFrames.delete(frameIdentifier);
-        renderSubmitQueue();
-    }
-
-    /**
-     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu trong 'submitQueueFrames'
-     */
-    function renderSubmitQueue() {
         // Bước 1: Ẩn/hiện container chính
         if (submitQueueFrames.size > 0) {
             submitQueueContainer.classList.add('visible');
@@ -2008,14 +2074,15 @@ function showLoadingIndicator() {
 
         // Bước 3: Vẽ lại các frame
         submitQueueFramesContainer.innerHTML = ''; // Xóa các frame cũ
-        submitQueueFrames.forEach((frameData, frameIdentifier) => {
+        submitQueueFrames.forEach((frameData) => {
+            const userColor = frameData.user_color || 'grey';
             const frameHtml = `
-                <div class="queue-frame-item">
+                <div class="queue-frame-item" style="border-color: ${userColor};" title="Added by: ${frameData.added_by}">
                     <img src="${frameData.path}" alt="Queued frame">
                     <button 
                         class="remove-queue-item-btn" 
                         title="Remove from queue"
-                        data-frame-id="${frameIdentifier}"
+                        data-frame-id="${frameData.frameIdentifier}"
                     >×</button>
                 </div>
             `;
@@ -2023,6 +2090,43 @@ function showLoadingIndicator() {
         });
     }
 
+    /**
+     * Vẽ lại chú thích người dùng và màu sắc trên header của queue.
+     */
+    function renderUserLegend() {
+        // Tìm vị trí để thêm chú thích, ví dụ: trong .queue-actions
+        const actionsContainer = document.querySelector('.submit-queue-header .queue-actions');
+        
+        // Xóa chú thích cũ
+        const oldLegend = document.getElementById('userLegend');
+        if (oldLegend) oldLegend.remove();
+        
+        // Tạo chú thích mới
+        const legendContainer = document.createElement('div');
+        legendContainer.id = 'userLegend';
+        legendContainer.style.display = 'flex';
+        legendContainer.style.alignItems = 'center';
+        legendContainer.style.gap = '10px';
 
+        for (const [name, color] of Object.entries(userColors)) {
+            const userSpan = document.createElement('span');
+            userSpan.style.display = 'flex';
+            userSpan.style.alignItems = 'center';
+            userSpan.style.fontSize = '12px';
+            
+            const colorBox = document.createElement('div');
+            colorBox.style.width = '12px';
+            colorBox.style.height = '12px';
+            colorBox.style.backgroundColor = color;
+            colorBox.style.borderRadius = '3px';
+            colorBox.style.marginRight = '5px';
+
+            userSpan.appendChild(colorBox);
+            userSpan.append(name);
+            legendContainer.appendChild(userSpan);
+        }
+        // Thêm vào đầu của .queue-actions
+        actionsContainer.prepend(legendContainer);
+    }
 
 });
