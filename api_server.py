@@ -21,10 +21,16 @@ import hashlib
 from fastapi import Depends, status
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
-
+from fastapi import WebSocket, WebSocketDisconnect 
+from typing import Dict, List
 app = FastAPI()
 # Kết nối Redis
-redis_client = redis.Redis(host='192.168.20.156', port=6300, db=0)
+#aic
+redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+
+# #acm
+# redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
+
 """
 Available models:
 "google/siglip2-large-patch16-512"
@@ -231,6 +237,49 @@ def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
             return result
         return wrapper
     return decorator
+
+# websocker system
+
+class ConnectionManager:
+    """Quản lý các kết nối WebSocket đang hoạt động."""
+    def __init__(self):
+        self.active_connections: Dict[str, WebSocket] = {}
+
+    async def connect(self, websocket: WebSocket, username: str):
+        """Chấp nhận kết nối mới."""
+        await websocket.accept()
+        self.active_connections[username] = websocket
+
+    def disconnect(self, username: str):
+        """Ngắt kết nối."""
+        if username in self.active_connections:
+            del self.active_connections[username]
+
+    async def broadcast(self, message: str):
+        """Gửi tin nhắn đến tất cả các kết nối đang hoạt động."""
+        for connection in self.active_connections.values():
+            await connection.send_text(message)
+
+# Khởi tạo manager
+manager = ConnectionManager()
+
+# Khóa các key trong Redis
+QUEUE_STATE_KEY = "submit_queue:frames"
+QUEUE_USERS_KEY = "submit_queue:users"
+
+def get_color_for_user(username: str) -> str:
+    """Tạo một màu sắc cố định dựa trên tên người dùng."""
+    # Dùng hash để đảm bảo tên giống nhau luôn ra màu giống nhau
+    hash_object = hashlib.sha256(username.encode())
+    hex_dig = hash_object.hexdigest()
+    # Lấy 6 ký tự đầu để tạo màu, đảm bảo độ sáng để dễ nhìn
+    r = int(hex_dig[0:2], 16) % 128 + 128  # Sáng hơn
+    g = int(hex_dig[2:4], 16) % 128 + 128
+    b = int(hex_dig[4:6], 16) % 128 + 128
+    return f"rgb({r},{g},{b})"
+
+
+
 
 # Models
 class TemporalStartRequest(BaseModel):
@@ -701,47 +750,6 @@ def process_milvus_results_for_frontend(results: list) -> list:
         })
     return processed_list
 
-# def process_milvus_results_for_frontend(results: list) -> list:
-#     processed_list = []
-#     if not results:
-#         return []
-        
-#     for res in results:
-#         # Giờ đây, các trường cần thiết nằm trực tiếp trong 'res' hoặc 'res["metadata"]'
-#         # tùy thuộc vào cách MilvusManager trả về. Giả định format bạn cung cấp.
-#         metadata = res.get("entity", res.get("metadata", {})) # Tương thích với cả hai kiểu trả về
-
-#         video_name = metadata.get("video_name")
-#         if not video_name:
-#              # Nếu không có video_name, ta không thể tạo đường dẫn hợp lệ.
-#              # Có thể bỏ qua hoặc ghi log lỗi.
-#              continue
-        
-#         frame_name = metadata.get("frame_name", "unknown_frame")
-        
-#         # Đảm bảo frame_name có đuôi .webp
-#         full_frame_name = frame_name if frame_name.lower().endswith('.webp') else f"{frame_name}.webp"
-        
-#         # Đường dẫn URL để frontend có thể tải ảnh
-#         frame_path_url = f"/frames/{video_name}/{full_frame_name}"
-        
-#         # Lấy frame_id, ưu tiên trường 'frame_id' bạn đã định nghĩa
-#         frame_id = metadata.get("frame_id", 0)
-
-#         processed_list.append({
-#             "id": frame_id,  # Gửi frame_id cho frontend
-#             "path": frame_path_url,
-#             "videoName": video_name, # Gửi video_name cho frontend
-#             "videoPath": f"/videos/{video_name}.mp4",
-#             "timestamp": metadata.get("timestamp", "00:00.000"),
-#             "score": res.get("distance", res.get("score", 0)), # 'distance' hoặc 'score' tùy thuộc vào Milvus
-#             "temporal_score": res.get("temporal_score", None) # Gửi nếu có
-#             # Thêm các trường khác nếu frontend cần
-#         })
-        
-#     return processed_list
-
-
 # Thêm rate limiting đơn giản
 def rate_limit(limit=10, period=60):  # 10 requests/minute
     def decorator(func):
@@ -766,6 +774,101 @@ def rate_limit(limit=10, period=60):  # 10 requests/minute
             return await func(request, *args, **kwargs)
         return wrapper
     return decorator
+
+
+@app.websocket("/ws/queue/{username}")
+async def websocket_endpoint(websocket: WebSocket, username: str):
+    await manager.connect(websocket, username)
+
+    # 1. Khi user mới kết nối, xử lý thông tin user và màu sắc
+    user_color = get_color_for_user(username)
+    redis_client.hset(QUEUE_USERS_KEY, username, user_color)
+    
+    # 2. Lấy trạng thái hiện tại của queue và users từ Redis
+    current_queue_items_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
+    current_queue_items = [json.loads(item) for item in current_queue_items_json]
+    
+    current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
+    current_users = {name.decode(): color.decode() for name, color in current_users_raw.items()}
+
+    # 3. Gửi trạng thái đầy đủ cho user vừa kết nối
+    initial_state = {
+        "action": "init_state",
+        "payload": {
+            "queue": current_queue_items,
+            "users": current_users
+        }
+    }
+    await websocket.send_text(json.dumps(initial_state))
+
+    # 4. Thông báo cho tất cả user khác rằng có người mới tham gia
+    join_notification = {
+        "action": "user_update",
+        "payload": {"users": current_users}
+    }
+    await manager.broadcast(json.dumps(join_notification))
+
+    try:
+        # 5. Lắng nghe tin nhắn từ client
+        while True:
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            action = message.get("action")
+            payload = message.get("payload")
+
+            if action == "add_frames":
+                frames_to_add = payload.get("frames", [])
+                
+                # Thêm thông tin người thêm và màu vào từng frame
+                processed_frames = []
+                for frame in frames_to_add:
+                    frame['added_by'] = username
+                    frame['user_color'] = user_color
+                    processed_frames.append(frame)
+                
+                # Lưu vào Redis
+                if processed_frames:
+                    redis_client.rpush(QUEUE_STATE_KEY, *[json.dumps(f) for f in processed_frames])
+
+                # Phát thông báo
+                update_message = {
+                    "action": "frames_added",
+                    "payload": processed_frames
+                }
+                await manager.broadcast(json.dumps(update_message))
+
+            elif action == "remove_frame":
+                frame_identifier = payload.get("frameIdentifier")
+                frame_to_remove_json = json.dumps(payload)
+                
+                # Xóa frame khỏi list trong Redis (xóa 1 lần xuất hiện)
+                redis_client.lrem(QUEUE_STATE_KEY, 1, frame_to_remove_json)
+
+                # Phát thông báo
+                update_message = {
+                    "action": "frame_removed",
+                    "payload": payload # Gửi lại chính frame đã xóa
+                }
+                await manager.broadcast(json.dumps(update_message))
+
+            elif action == "clear_all":
+                # Xóa key queue và key users
+                redis_client.delete(QUEUE_STATE_KEY)
+                redis_client.hdel(QUEUE_USERS_KEY, *redis_client.hkeys(QUEUE_USERS_KEY))
+
+
+                # Phát thông báo
+                update_message = {"action": "queue_cleared"}
+                await manager.broadcast(json.dumps(update_message))
+
+    except WebSocketDisconnect:
+        # 6. Xử lý khi user ngắt kết nối
+        manager.disconnect(username)
+        # Không xóa user khỏi Redis để giữ lại màu sắc của họ
+        # Thông báo cho các user khác (tùy chọn, có thể bỏ qua để đỡ rối)
+        # await manager.broadcast(f"Info: {username} has left.")
+        
+
 
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
