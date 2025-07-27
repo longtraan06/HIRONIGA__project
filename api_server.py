@@ -27,15 +27,15 @@ from typing import Dict, List
 app = FastAPI()
 # Kết nối Redis
 
-#aic
-redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
-video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
+# #aic
+# redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
+# video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
 
-# #acm
-# redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
-# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
+#acm
+redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
+video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 
 """
 Available models:
@@ -56,8 +56,7 @@ model_paths=[
 
 milvus = MilvusManager(host="192.168.20.156",
                         port='6090',
-                        model_paths=model_paths,
-                        # mode = "ACM"
+                        model_paths=model_paths
                         )
 
 # clear cache method
@@ -837,8 +836,9 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     user_color = get_color_for_user(username)
     redis_client.hset(QUEUE_USERS_KEY, username, user_color)
     
-    # 2. Lấy trạng thái hiện tại của queue và users từ Redis
-    current_queue_items_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
+    # 2. Lấy trạng thái hiện tại của queue (từ SORTED SET) và users
+    # Lấy theo thứ tự điểm số giảm dần (vote cao nhất lên trước)
+    current_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
     current_queue_items = [json.loads(item) for item in current_queue_items_json]
     
     current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
@@ -854,7 +854,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     }
     await websocket.send_text(json.dumps(initial_state))
 
-    # 4. Thông báo cho tất cả user khác rằng có người mới tham gia
+    # 4. Thông báo cho tất cả user khác rằng có người mới tham gia (hoặc quay lại)
     join_notification = {
         "action": "user_update",
         "payload": {"users": current_users}
@@ -862,57 +862,104 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     await manager.broadcast(json.dumps(join_notification))
 
     try:
-        # 5. Lắng nghe tin nhắn từ client
+        # 5. Vòng lặp chính: Lắng nghe tin nhắn từ client
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
             action = message.get("action")
             payload = message.get("payload")
 
+            # --- Xử lý các hành động ---
+            
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
+                items_to_add = {}
                 
-                # Thêm thông tin người thêm và màu vào từng frame
-                processed_frames = []
+                # Hằng số lớn để ưu tiên vote
+                VOTE_PRIORITY_MULTIPLIER = 10**10 
+
                 for frame in frames_to_add:
+                    # Thêm các trường dữ liệu cần thiết
                     frame['added_by'] = username
                     frame['user_color'] = user_color
-                    processed_frames.append(frame)
+                    frame['voters'] = [] 
+                    frame['vote_count'] = 0
+                    # <<< THÊM MỚI: Lưu thời gian tạo vào trong frame data >>>
+                    frame['creation_time'] = time.time()
+                    
+                    # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
+                    # Điểm ban đầu (0 vote) sẽ chính là thời gian tạo
+                    score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
+                    
+                    items_to_add[json.dumps(frame)] = score
                 
-                # Lưu vào Redis
-                if processed_frames:
-                    redis_client.rpush(QUEUE_STATE_KEY, *[json.dumps(f) for f in processed_frames])
-
-                # Phát thông báo
-                update_message = {
-                    "action": "frames_added",
-                    "payload": processed_frames
-                }
-                await manager.broadcast(json.dumps(update_message))
+                if items_to_add:
+                    redis_client.zadd(QUEUE_STATE_KEY, items_to_add)
 
             elif action == "remove_frame":
-                frame_identifier = payload.get("frameIdentifier")
                 frame_to_remove_json = json.dumps(payload)
-                
-                # Xóa frame khỏi list trong Redis (xóa 1 lần xuất hiện)
-                redis_client.lrem(QUEUE_STATE_KEY, 1, frame_to_remove_json)
-
-                # Phát thông báo
-                update_message = {
-                    "action": "frame_removed",
-                    "payload": payload # Gửi lại chính frame đã xóa
-                }
-                await manager.broadcast(json.dumps(update_message))
+                # <<< THAY ĐỔI: Xóa khỏi Sorted Set
+                redis_client.zrem(QUEUE_STATE_KEY, frame_to_remove_json)
 
             elif action == "clear_all":
-                # Xóa key queue và key users
-                redis_client.delete(QUEUE_STATE_KEY)
-                redis_client.hdel(QUEUE_USERS_KEY, *redis_client.hkeys(QUEUE_USERS_KEY))
+                # Xóa cả hai key
+                redis_client.delete(QUEUE_STATE_KEY, QUEUE_USERS_KEY)
+                
+            elif action == "vote_frame":
+                identifier_to_vote = payload.get("frameIdentifier")
+                all_items_json_with_scores = redis_client.zrange(QUEUE_STATE_KEY, 0, -1, withscores=True)
 
+                # Hằng số lớn phải giống hệt như ở trên
+                VOTE_PRIORITY_MULTIPLIER = 10**10
 
-                # Phát thông báo
-                update_message = {"action": "queue_cleared"}
-                await manager.broadcast(json.dumps(update_message))
+                for item_json_bytes, old_score in all_items_json_with_scores:
+                    item_json_str = item_json_bytes.decode('utf-8')
+                    item = json.loads(item_json_str)
+                    
+                    if item.get("frameIdentifier") == identifier_to_vote:
+                        # Logic toggle vote giữ nguyên
+                        voters = set(item.get("voters", []))
+                        if username in voters:
+                            voters.remove(username)
+                        else:
+                            voters.add(username)
+                        
+                        item["voters"] = list(voters)
+                        item["vote_count"] = len(voters)
+
+                        # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
+                        # Lấy thời gian tạo đã được lưu
+                        creation_time = item.get('creation_time', time.time()) # Dùng time.time() làm dự phòng
+                        new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
+                        
+                        # Cập nhật trong Redis
+                        pipe = redis_client.pipeline()
+                        # Xóa item cũ bằng chuỗi JSON cũ (không phải bytes)
+                        pipe.zrem(QUEUE_STATE_KEY, item_json_str) 
+                        # Thêm item mới với score mới
+                        pipe.zadd(QUEUE_STATE_KEY, {json.dumps(item): new_score})
+                        pipe.execute()
+                        
+                        break # Đã tìm thấy và xử lý, thoát vòng lặp
+
+            # --- Phát sóng trạng thái mới cho TẤT CẢ client sau mỗi hành động ---
+            
+            # Lấy lại toàn bộ queue đã được sắp xếp
+            updated_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
+            updated_queue_items = [json.loads(item) for item in updated_queue_items_json]
+            
+            updated_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
+            updated_users = {name.decode(): color.decode() for name, color in updated_users_raw.items()}
+
+            # Gửi message `init_state` để frontend chỉ cần 1 logic render duy nhất
+            full_update_message = {
+                "action": "init_state",
+                "payload": {
+                    "queue": updated_queue_items,
+                    "users": updated_users
+                }
+            }
+            await manager.broadcast(json.dumps(full_update_message))
 
     except WebSocketDisconnect:
         manager.disconnect(username)
