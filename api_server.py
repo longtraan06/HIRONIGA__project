@@ -23,13 +23,19 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 from fastapi import WebSocket, WebSocketDisconnect 
 from typing import Dict, List
+
 app = FastAPI()
 # Kết nối Redis
+
 #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
+video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
 
 # #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
+# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
+# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 
 """
 Available models:
@@ -54,13 +60,6 @@ milvus = MilvusManager(host="192.168.20.156",
                         # mode = "ACM"
                         )
 
-
-# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
-
-
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
-video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
 # clear cache method
 
 # Thêm xác thực cơ bản
@@ -240,6 +239,97 @@ def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
 
 # websocker system
 
+# remove user
+
+# usage
+# curl -X POST -u "admin:hlgay" \
+#      -H "Content-Type: application/json" \
+#      -d '{"username": "StuckUser"}' \
+#      http://YOUR_SERVER_IP:PORT/api/admin/remove-user
+
+
+
+class RemoveUserRequest(BaseModel):
+    username: str
+
+@app.post("/api/admin/remove-user")
+async def remove_user_from_queue(
+    req: RemoveUserRequest,
+    admin: str = Depends(verify_admin)
+):
+    """
+    Xóa một người dùng khỏi danh sách user của queue và ẩn danh
+    các frame mà họ đã thêm vào. Yêu cầu quyền admin.
+    """
+    username_to_remove = req.username
+
+    # Sử dụng pipeline để đảm bảo các thao tác trên Redis là nguyên tử
+    pipe = redis_client.pipeline()
+
+    try:
+        # 1. Kiểm tra xem user có tồn tại trong hash không
+        if not redis_client.hexists(QUEUE_USERS_KEY, username_to_remove):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"User '{username_to_remove}' not found in the active user list."
+            )
+
+        # 2. Xóa user khỏi hash user
+        pipe.hdel(QUEUE_USERS_KEY, username_to_remove)
+
+        # 3. Lấy toàn bộ queue hiện tại để cập nhật
+        current_queue_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
+        new_queue = []
+        updated = False
+        for item_json in current_queue_json:
+            item = json.loads(item_json)
+            if item.get("added_by") == username_to_remove:
+                # Ẩn danh frame
+                item["added_by"] = "Unknown"
+                item["user_color"] = "#888888" # Màu xám
+                new_queue.append(json.dumps(item))
+                updated = True
+            else:
+                new_queue.append(item_json)
+
+        # 4. Nếu có sự thay đổi, xóa list cũ và push list mới vào
+        if updated:
+            pipe.delete(QUEUE_STATE_KEY)
+            if new_queue:
+                pipe.rpush(QUEUE_STATE_KEY, *new_queue)
+        
+        # 5. Thực thi tất cả các lệnh trong pipeline
+        pipe.execute()
+
+        # 6. Lấy trạng thái mới nhất để phát sóng cho tất cả client
+        final_queue_items_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
+        final_queue_items = [json.loads(item) for item in final_queue_items_json]
+        
+        final_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
+        final_users = {name.decode(): color.decode() for name, color in final_users_raw.items()}
+
+        # 7. Phát sóng trạng thái mới (init_state) cho tất cả client
+        update_message = {
+            "action": "init_state",
+            "payload": {
+                "queue": final_queue_items,
+                "users": final_users
+            }
+        }
+        await manager.broadcast(json.dumps(update_message))
+
+        return {
+            "success": True,
+            "message": f"User '{username_to_remove}' has been removed and their frames anonymized."
+        }
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 class ConnectionManager:
     """Quản lý các kết nối WebSocket đang hoạt động."""
     def __init__(self):
@@ -308,14 +398,6 @@ class TextSearchRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
 
-# class ImageSearchRequest(BaseModel):
-#     query: UploadFile
-#     top_k: int = 2000
-#     search_in: str = "image"
-#     start_temporal_chain: bool = False
-#     # model_name: Optional[str] = None
-
-
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
     try:
@@ -377,31 +459,6 @@ async def debug_temporal_chain(chain_id: str):
         return {
             "error": str(e)
         }
-
-# Background task
-# @app.on_event("startup")
-# async def startup_event():
-#     asyncio.create_task(cleanup_old_temporal_chains())
-
-# async def cleanup_old_temporal_chains():
-#     while True:
-#         await asyncio.sleep(300)  # Run every 5 minutes
-#         current_time = time.time()
-        
-#         # Lấy tất cả key temporal chain từ Redis
-#         pattern = "temporal_chain:*"
-#         all_keys = redis_client.keys(pattern)
-        
-#         for key in all_keys:
-#             chain_id = key.decode('utf-8').replace("temporal_chain:", "")
-#             chain_data_str = redis_client.get(key)
-            
-#             if chain_data_str:
-#                 chain_data = json.loads(chain_data_str)
-#                 if current_time - chain_data["last_update"] > 1800:  # 30 minutes
-#                     # Xóa key khỏi Redis
-#                     redis_client.delete(key)
-#                     print(f"Cleaned up expired temporal chain: {chain_id}")
 
 # API Routes
 @app.get("/frames/{video_name}/{frame_name}")
@@ -723,10 +780,6 @@ def process_milvus_results_for_frontend(results: list) -> list:
         # THAY ĐỔI: Đường dẫn mới cho frames
         full_frame_name = frame_name if frame_name.endswith('.webp') else f"{frame_name}.webp"
 
-        #170
-        # path = f"{ASSET_SERVER_BASE_URL}/frames/{video_name}/{full_frame_name}"
-        # video_path = f"{ASSET_SERVER_BASE_URL}/videos/{video_name}.mp4"
-        
         #normal
         path = f"/frames/{video_name}/{full_frame_name}"  # Đường dẫn URL mới
         # Đường dẫn video giữ nguyên
@@ -862,18 +915,10 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 await manager.broadcast(json.dumps(update_message))
 
     except WebSocketDisconnect:
-        # 6. Xử lý khi user ngắt kết nối
         manager.disconnect(username)
-        # Không xóa user khỏi Redis để giữ lại màu sắc của họ
-        # Thông báo cho các user khác (tùy chọn, có thể bỏ qua để đỡ rối)
-        # await manager.broadcast(f"Info: {username} has left.")
-        
 
 
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
 # usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 4 --timeout-keep-alive 65
-
-#nginx
-#uvicorn api:app --host 0.0.0.0 --port 8000 --workers 1
