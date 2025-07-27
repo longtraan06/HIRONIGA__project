@@ -243,6 +243,163 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+        let selectedQueueFrame = null; // Biến để theo dõi frame nào đang được chọn trong queue
+    
+        // Sử dụng event delegation cho toàn bộ container của queue
+        submitQueueContainer.addEventListener('click', (e) => {
+            const frameItem = e.target.closest('.queue-frame-item');
+            const removeBtn = e.target.closest('.remove-queue-item-btn');
+
+            if (removeBtn) {
+                // Logic xóa frame (đã có ở lần trước)
+                const frameId = frameItem.dataset.frameId;
+                const frameData = submitQueueFrames.get(frameId);
+                if (frameData) {
+                    sendWebSocketMessage('remove_frame', frameData);
+                }
+                return; // Dừng lại để không xử lý việc chọn
+            }
+
+            if (frameItem) {
+                // Logic chọn frame
+                // Bỏ chọn frame đang được chọn cũ
+                if (selectedQueueFrame) {
+                    selectedQueueFrame.classList.remove('selected');
+                }
+
+                // Nếu click vào frame đang được chọn -> bỏ chọn nó
+                if (selectedQueueFrame === frameItem) {
+                    selectedQueueFrame = null;
+                } else {
+                    // Chọn frame mới
+                    frameItem.classList.add('selected');
+                    selectedQueueFrame = frameItem;
+                }
+            }
+        });
+
+        // Thêm listener cho phím tắt khi tương tác với queue
+        document.addEventListener('keydown', (e) => {
+            const activeElement = document.activeElement;
+            const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+
+            // Chỉ xử lý nếu có frame được chọn trong queue và không đang gõ chữ
+            if (selectedQueueFrame && !isTyping) {
+                if (e.key.toLowerCase() === 'v') {
+                    e.preventDefault();
+                    const frameId = selectedQueueFrame.dataset.frameId;
+                    sendWebSocketMessage('vote_frame', { frameIdentifier: frameId });
+                    selectedQueueFrame.classList.remove('selected');
+                    selectedQueueFrame = null;
+                } 
+                else if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const frameId = selectedQueueFrame.dataset.frameId;
+                    
+                    // Hàm submit placeholder đã được cải tiến
+                    const submit = (identifier) => {
+                        console.log("=== SUBMITTING FRAME ===");
+                        console.log("Frame Identifier:", identifier);
+                        showToastNotification(`Frame submitted: ${identifier}`, 'success');
+                    };
+
+
+
+
+
+
+
+
+
+                    // placeholder cho ham submit
+
+
+
+
+
+
+
+
+                    submit(frameId);
+                    selectedQueueFrame.classList.remove('selected');
+                    selectedQueueFrame = null;
+                }
+                // <<< THÊM MỚI: Xử lý phím mũi tên >>>
+                else if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    const allFrames = Array.from(submitQueueFramesContainer.querySelectorAll('.queue-frame-item'));
+                    const currentIndex = allFrames.findIndex(f => f === selectedQueueFrame);
+
+                    let nextIndex = e.key === 'ArrowRight' ? currentIndex + 1 : currentIndex - 1;
+
+                    // Xử lý khi đi đến cuối hoặc đầu danh sách
+                    if (nextIndex >= allFrames.length) {
+                        nextIndex = 0; // Quay về đầu
+                    } else if (nextIndex < 0) {
+                        nextIndex = allFrames.length - 1; // Đi đến cuối
+                    }
+                    
+                    // Giả lập một cú click để chọn frame tiếp theo và cuộn đến nó
+                    if(allFrames[nextIndex]) {
+                    allFrames[nextIndex].click();
+                    allFrames[nextIndex].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                    }
+                }
+            }
+});
+
+        submitQueueFramesContainer.addEventListener('wheel', (e) => {
+            // Ngăn trang cuộn dọc khi đang scroll trong queue
+            if (e.deltaY !== 0) {
+                e.preventDefault();
+                submitQueueFramesContainer.scrollLeft += e.deltaY;
+            }
+        });
+
+        // <<< THÊM MỚI: Listener cho nút Submit All >>>
+        const submitAllBtn = document.getElementById('submitAllBtn');
+        submitAllBtn.addEventListener('click', () => {
+            if (submitQueueFrames.size === 0) {
+                showToastNotification("Queue is empty.", "error");
+                return;
+            }
+            
+            const allIdentifiers = Array.from(submitQueueFrames.keys());
+            console.log("=== SUBMITTING ALL FRAMES ===");
+            console.log(allIdentifiers);
+
+            // Gọi hàm submit cho từng frame
+            // allIdentifiers.forEach(id => submit(id)); // Bỏ comment khi có hàm submit thật
+            
+            showToastNotification(`Submitting ${allIdentifiers.length} frames...`, 'success');
+        });
+
+    const toggleQueueBtn = document.getElementById('toggleQueueBtn');
+        const queueHeader = document.querySelector('.submit-queue-header');
+
+        const toggleQueueDisplay = (e) => {
+            // Ngăn sự kiện lan tỏa nếu click vào các nút khác trên header
+            if (e.target.closest('.queue-actions')) {
+                return;
+            }
+            
+            submitQueueContainer.classList.toggle('minimized');
+            
+            // Cập nhật icon trên nút
+            const icon = toggleQueueBtn.querySelector('i');
+            if (submitQueueContainer.classList.contains('minimized')) {
+                icon.classList.remove('fa-chevron-down');
+                icon.classList.add('fa-chevron-up');
+            } else {
+                icon.classList.remove('fa-chevron-up');
+                icon.classList.add('fa-chevron-down');
+            }
+        };
+        
+        // Gán sự kiện cho cả header.
+        // Người dùng có thể click vào bất kỳ đâu trên header (trừ vùng actions) để thu nhỏ.
+        queueHeader.addEventListener('click', toggleQueueDisplay);
+
 
         // Tự động kích hoạt chế độ text-to-image khi trang tải xong
         setTimeout(function() {
@@ -445,106 +602,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 else if (e.key === 'Escape') {
                     toggleSettingsMenu();
                 }
-            }         
+            } 
+            
 
-            // Chỉ xử lý phím tắt khi không focus vào element có thể edit
-            // hoặc khi đã đang focus vào một nút trên header
-            if (!isEditableElement || headerButtons.includes(activeElement)) {
-                // Phím mũi tên trái
-                if (e.key === 'ArrowLeft') {
-                    e.preventDefault();
-                    
-                    // Tìm nút hiện tại đang được focus
-                    let currentIndex = -1;
-                    if (currentHeaderFocus) {
-                        currentIndex = headerButtons.indexOf(currentHeaderFocus);
-                    } else if (activeElement && headerButtons.includes(activeElement)) {
-                        currentIndex = headerButtons.indexOf(activeElement);
-                    }
-                    
-                    // Di chuyển sang nút bên trái (hoặc nút cuối cùng nếu đang ở nút đầu tiên)
-                    let newIndex = currentIndex - 1;
-                    if (newIndex < 0) newIndex = headerButtons.length - 1;
-                    
-                    // Focus vào nút mới
-                    if (headerButtons[newIndex]) {
-                        headerButtons[newIndex].focus();
-                        currentHeaderFocus = headerButtons[newIndex];
-                        
-                        // Thêm visual indicator
-                        headerButtons.forEach(btn => {
-                            btn.classList.remove('keyboard-focus');
-                        });
-                        headerButtons[newIndex].classList.add('keyboard-focus');
-                    }
-                }
-                
-                // Phím mũi tên phải
-                else if (e.key === 'ArrowRight') {
-                    e.preventDefault();
-                    
-                    // Tìm nút hiện tại đang được focus
-                    let currentIndex = -1;
-                    if (currentHeaderFocus) {
-                        currentIndex = headerButtons.indexOf(currentHeaderFocus);
-                    } else if (activeElement && headerButtons.includes(activeElement)) {
-                        currentIndex = headerButtons.indexOf(activeElement);
-                    }
-                    
-                    // Di chuyển sang nút bên phải (hoặc nút đầu tiên nếu đang ở nút cuối cùng)
-                    let newIndex = currentIndex + 1;
-                    if (newIndex >= headerButtons.length) newIndex = 0;
-                    
-                    // Focus vào nút mới
-                    if (headerButtons[newIndex]) {
-                        headerButtons[newIndex].focus();
-                        currentHeaderFocus = headerButtons[newIndex];
-                        
-                        // Thêm visual indicator
-                        headerButtons.forEach(btn => {
-                            btn.classList.remove('keyboard-focus');
-                        });
-                        headerButtons[newIndex].classList.add('keyboard-focus');
-                    }
-                }
-                
-                // Phím Enter khi đang focus vào nút header
-                else if (e.key === 'Enter' && currentHeaderFocus) {
-                    e.preventDefault();
-                    // Kích hoạt click event trên nút đang được focus
-                    currentHeaderFocus.click();
-                    
-                    // Xóa focus và visual indicator sau khi click
-                    setTimeout(() => {
-                        // Focus vào ô tìm kiếm sau khi chọn mode
-                        const searchInput = document.querySelector('.search-input');
-                        if (searchInput && searchInput.style.display !== 'none') {
-                            searchInput.focus();
-                        }
-                        
-                        // Xóa visual indicator
-                        headerButtons.forEach(btn => {
-                            btn.classList.remove('keyboard-focus');
-                        });
-                        currentHeaderFocus = null;
-                    }, 100);
-                }
-                
-                // Phím Escape để xóa focus khỏi header buttons
-                else if (e.key === 'Escape' && currentHeaderFocus) {
-                    currentHeaderFocus.blur();
-                    headerButtons.forEach(btn => {
-                        btn.classList.remove('keyboard-focus');
-                    });
-                    currentHeaderFocus = null;
-                    
-                    // Focus vào ô tìm kiếm
-                    const searchInput = document.querySelector('.search-input');
-                    if (searchInput && searchInput.style.display !== 'none') {
-                        searchInput.focus();
-                    }
-                }
-            }
         });
         
         // Xử lý khi focus vào/ra các nút header
@@ -1590,160 +1650,185 @@ function showLoadingIndicator() {
     }
     const videoInfoCache = {};
 
-    async function openImageModal(clickedFrameNumber, clickedPath, image) {
-        const modal = document.getElementById('imageModal');
-        const mainPreview = document.getElementById('mainPreviewImage');
-        const thumbnailStrip = document.getElementById('thumbnailStrip');
-        const modalFrameInfo = document.getElementById('modalFrameInfo');
+// Thay thế toàn bộ hàm openImageModal bằng hàm mới này
 
-        // 1. Lấy videoId từ path (logic này không đổi)
-        const pathParts = clickedPath.split('/');
-        const videoId = pathParts[2];
+/**
+ * Hiển thị một thông báo toast ở góc trên bên phải.
+ * @param {string} message - Nội dung thông báo.
+ * @param {string} type - 'success' hoặc 'error'.
+ * @param {number} duration - Thời gian hiển thị (ms).
+ */
+function showToastNotification(message, type = 'success', duration = 1000) {
+    const toast = document.createElement('div');
+    toast.className = `toast-notification ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
 
-        // SỬA LỖI: Di chuyển việc lấy videoInfo từ cache xuống đây
-        let videoInfo = videoInfoCache[videoId];
-        let videoMetadata = null;
+    // Kích hoạt animation
+    setTimeout(() => {
+        toast.classList.add('show');
+    }, 10);
 
-        try {
-            // TỐI ƯU HÓA: Thực hiện cả 2 lệnh gọi API song song
-            const [metadataResponse, videoInfoResponse] = await Promise.all([
-                fetch(`/api/metadata/${videoId}`),
-                videoInfo ? Promise.resolve(null) : fetch(`/api/video_info/${videoId}`) // Chỉ fetch video_info nếu chưa có trong cache
-            ]);
+    // Tự động xóa sau một khoảng thời gian
+    setTimeout(() => {
+        toast.classList.remove('show');
+        // Đợi animation kết thúc rồi mới xóa khỏi DOM
+        toast.addEventListener('transitionend', () => toast.remove());
+    }, duration);
+}
 
-            // Xử lý kết quả metadata
-            if (metadataResponse.ok) {
-                videoMetadata = await metadataResponse.json();
-            } else {
-                console.error(`Could not fetch metadata for video ${videoId}`);
-            }
+async function openImageModal(clickedFrameNumber, clickedPath, image) {
+    const modal = document.getElementById('imageModal');
+    const mainPreview = document.getElementById('mainPreviewImage');
+    const thumbnailStrip = document.getElementById('thumbnailStrip');
+    const modalFrameInfo = document.getElementById('modalFrameInfo');
 
-            // Xử lý kết quả video_info (nếu có)
-            if (videoInfoResponse) { // Nếu videoInfoResponse không phải là null
-                if (videoInfoResponse.ok) {
-                    videoInfo = await videoInfoResponse.json();
-                    videoInfoCache[videoId] = videoInfo; // Lưu vào cache
-                } else {
-                    throw new Error("Server response not ok for video_info");
-                }
-            }
-            
-        } catch (error) {
-            console.error("Không thể tải thông tin video hoặc metadata:", error);
-            alert("Lỗi: Không thể tải các frame lân cận.");
-            return;
+    // <<< THÊM MỚI: Biến để lưu dữ liệu frame đang hiển thị trên modal
+    let currentModalFrameData = null;
+
+    const pathParts = clickedPath.split('/');
+    const videoId = pathParts[2];
+    
+    let videoInfo = videoInfoCache[videoId];
+    let videoMetadata = null;
+
+    try {
+        const [metadataResponse, videoInfoResponse] = await Promise.all([
+            fetch(`/api/metadata/${videoId}`),
+            videoInfo ? Promise.resolve(null) : fetch(`/api/video_info/${videoId}`)
+        ]);
+
+        if (metadataResponse.ok) {
+            videoMetadata = await metadataResponse.json();
+        } else { console.error(`Could not fetch metadata for video ${videoId}`); }
+
+        if (videoInfoResponse) {
+            if (videoInfoResponse.ok) {
+                videoInfo = await videoInfoResponse.json();
+                videoInfoCache[videoId] = videoInfo;
+            } else { throw new Error("Server response not ok for video_info"); }
         }
-        
-        // Nếu sau tất cả các bước mà videoInfo vẫn không có, thì thoát
-        if (!videoInfo) {
-            alert("Lỗi nghiêm trọng: Không có thông tin video để hiển thị.");
-            return;
-        }
-
-        // Phần còn lại của hàm gần như không đổi...
-        const { frame_filenames, folder_url_path } = videoInfo;
-        const folderUrlPath = folder_url_path || `/frames/${videoId}`;
-        let currentFrameNumber = clickedFrameNumber;
-
-        thumbnailStrip.innerHTML = '';
-        
-        function updateMainPreview(frameNum) {
-            const frameName = frame_filenames.find(name => parseInt(name.split('_')[1].split('.')[0]) === frameNum);
-            if (!frameName) return;
-
-            mainPreview.src = `${folderUrlPath}/${frameName}`;
-            currentFrameNumber = frameNum;
-            
-            // Logic cập nhật frameIdentifier của bạn đã ĐÚNG và RẤT TỐT
-            let finalFrameIdentifier = image.frameIdentifier;
-            if (videoMetadata) {
-                framenum_name = frameNum.toString().padStart(3, '0');
-                const frameKey = `frame_${framenum_name}`;
-                const videoData = videoMetadata[videoId];
-                
-                // console.log("frameKey", frameKey);
-                // console.log("videoData", videoData);
-                // console.log("videoData ID", videoData[frameKey].id);
-
-
-                if (videoData && videoData[frameKey]) {
-                    const newId = videoData[frameKey].id;
-                    finalFrameIdentifier = `${videoId}_${newId}`;
-                } else {
-                
-                    finalFrameIdentifier = `${videoId}_${frameNum}_loicuroicona`;
-                }
-            }
-            modalFrameInfo.textContent = finalFrameIdentifier;
-
-            const oldCurrent = thumbnailStrip.querySelector('.current-frame');
-            if (oldCurrent) oldCurrent.classList.remove('current-frame');
-
-            const newCurrent = thumbnailStrip.querySelector(`[data-frame-number='${frameNum}']`);
-            if (newCurrent) {
-                newCurrent.classList.add('current-frame');
-                newCurrent.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-            }
-        }
-        
-        // Tạo thumbnail và các event listener (giữ nguyên)
-        const currentIndexInList = frame_filenames.findIndex(name => parseInt(name.split('_')[1].split('.')[0]) === clickedFrameNumber);
-        if (currentIndexInList === -1) return;
-
-        const start = Math.max(0, currentIndexInList - 30);
-        const end = Math.min(frame_filenames.length, currentIndexInList + 31);
-        
-        for (let i = start; i < end; i++) {
-            const frameName = frame_filenames[i];
-            const frameNumber = parseInt(frameName.split('_')[1].split('.')[0]);
-            const thumb = document.createElement('img');
-            thumb.src = `${folderUrlPath}/${frameName}`;
-            thumb.dataset.frameNumber = frameNumber;
-            if (frameNumber === clickedFrameNumber) {
-                thumb.classList.add('active-frame', 'current-frame');
-            }
-            thumb.onclick = () => updateMainPreview(frameNumber);
-            thumbnailStrip.appendChild(thumb);
-        }
-        
-        const allVisibleThumbs = thumbnailStrip.querySelectorAll('img');
-        const minVisibleFrame = parseInt(allVisibleThumbs[0].dataset.frameNumber);
-        const maxVisibleFrame = parseInt(allVisibleThumbs[allVisibleThumbs.length - 1].dataset.frameNumber);
-
-        const wheelHandler = (e) => {
-            e.preventDefault();
-            let newFrame = currentFrameNumber;
-            if (e.deltaY > 0 && currentFrameNumber < maxVisibleFrame) newFrame++;
-            else if (e.deltaY < 0 && currentFrameNumber > minVisibleFrame) newFrame--;
-            if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
-        };
-
-        const keydownHandler = (e) => {
-            if (e.key === 'Escape') { closeModal(); return; }
-            let newFrame = currentFrameNumber;
-            if (e.key === 'ArrowRight' && currentFrameNumber < maxVisibleFrame) newFrame++;
-            else if (e.key === 'ArrowLeft' && currentFrameNumber > minVisibleFrame) newFrame--;
-            if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
-        };
-
-        function closeModal() {
-            modal.style.display = 'none';
-            modal.removeEventListener('wheel', wheelHandler);
-            document.removeEventListener('keydown', keydownHandler);
-        }
-        
-        modal.addEventListener('wheel', wheelHandler, { passive: false });
-        document.addEventListener('keydown', keydownHandler);
-        modal.querySelector('.modal-overlay').onclick = closeModal;
-
-        updateMainPreview(clickedFrameNumber);
-        modal.style.display = 'flex';
-        
-        setTimeout(() => {
-            const activeThumb = thumbnailStrip.querySelector('.active-frame');
-            if (activeThumb) activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
-        }, 50);
+    } catch (error) {
+        console.error("Không thể tải thông tin video hoặc metadata:", error);
+        alert("Lỗi: Không thể tải các frame lân cận.");
+        return;
     }
+
+    if (!videoInfo) {
+        alert("Lỗi nghiêm trọng: Không có thông tin video để hiển thị.");
+        return;
+    }
+
+    const { frame_filenames, folder_url_path } = videoInfo;
+    const folderUrlPath = folder_url_path || `/frames/${videoId}`;
+    let currentFrameNumber = clickedFrameNumber;
+
+    thumbnailStrip.innerHTML = '';
+    
+    function updateMainPreview(frameNum) {
+        const frameName = frame_filenames.find(name => parseInt(name.split('_')[1].split('.')[0]) === frameNum);
+        if (!frameName) return;
+
+        mainPreview.src = `${folderUrlPath}/${frameName}`;
+        currentFrameNumber = frameNum;
+        
+        // <<< THAY ĐỔI: Cập nhật biến currentModalFrameData mỗi khi đổi ảnh
+        const frameIdFromFilename = frameName.split('.')[0]; // ví dụ: "L03_V015_7070"
+        if (videoMetadata && videoMetadata[videoId] && videoMetadata[videoId][frameIdFromFilename]) {
+            const metadataForFrame = videoMetadata[videoId][frameIdFromFilename];
+            currentModalFrameData = {
+                 path: mainPreview.src,
+                 videoName: videoId,
+                 timestamp: metadataForFrame.timestamp,
+                 frameIdentifier: `${videoId}_${metadataForFrame.id}`
+            };
+            modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
+        } else {
+             currentModalFrameData = null; // Reset nếu không tìm thấy metadata
+             modalFrameInfo.textContent = "Metadata not found";
+        }
+        // === Kết thúc thay đổi ===
+
+        const oldCurrent = thumbnailStrip.querySelector('.current-frame');
+        if (oldCurrent) oldCurrent.classList.remove('current-frame');
+
+        const newCurrent = thumbnailStrip.querySelector(`[data-frame-number='${frameNum}']`);
+        if (newCurrent) {
+            newCurrent.classList.add('current-frame');
+            newCurrent.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        }
+    }
+    
+    const currentIndexInList = frame_filenames.findIndex(name => parseInt(name.split('_')[1].split('.')[0]) === clickedFrameNumber);
+    if (currentIndexInList === -1) return;
+
+    const start = Math.max(0, currentIndexInList - 50);
+    const end = Math.min(frame_filenames.length, currentIndexInList + 51);
+    
+    for (let i = start; i < end; i++) {
+        const frameName = frame_filenames[i];
+        const frameNumber = parseInt(frameName.split('_')[1].split('.')[0]);
+        const thumb = document.createElement('img');
+        thumb.src = `${folderUrlPath}/${frameName}`;
+        thumb.dataset.frameNumber = frameNumber;
+        if (frameNumber === clickedFrameNumber) {
+            thumb.classList.add('active-frame', 'current-frame');
+        }
+        thumb.onclick = () => updateMainPreview(frameNumber);
+        thumbnailStrip.appendChild(thumb);
+    }
+    
+    const allVisibleThumbs = thumbnailStrip.querySelectorAll('img');
+    const minVisibleFrame = parseInt(allVisibleThumbs[0].dataset.frameNumber);
+    const maxVisibleFrame = parseInt(allVisibleThumbs[allVisibleThumbs.length - 1].dataset.frameNumber);
+
+    const wheelHandler = (e) => {
+        e.preventDefault();
+        let newFrame = currentFrameNumber;
+        if (e.deltaY > 0 && currentFrameNumber < maxVisibleFrame) newFrame++;
+        else if (e.deltaY < 0 && currentFrameNumber > minVisibleFrame) newFrame--;
+        if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
+    };
+
+    const keydownHandler = (e) => {
+        
+        if (e.key === 'Escape') { closeModal(); return; }
+        let newFrame = currentFrameNumber;
+        if (e.key === 'ArrowRight' && currentFrameNumber < maxVisibleFrame) newFrame++;
+        else if (e.key === 'ArrowLeft' && currentFrameNumber > minVisibleFrame) newFrame--;
+        else if (e.key.toLowerCase() === 'a') {
+            e.preventDefault();
+            // <<< THAY ĐỔI: Sử dụng biến đã được cập nhật
+            if (currentModalFrameData) {
+                sendWebSocketMessage('add_frames', { frames: [currentModalFrameData] });
+                // Thay thế alert bằng toast notification
+                showToastNotification('Frame added to queue!', 'success');
+            } else {
+                showToastNotification('Cannot add frame: metadata not found.', 'error');
+            }
+        }
+        
+        if (newFrame !== currentFrameNumber) updateMainPreview(newFrame);
+    };
+
+    function closeModal() {
+        modal.style.display = 'none';
+        modal.removeEventListener('wheel', wheelHandler);
+        document.removeEventListener('keydown', keydownHandler);
+    }
+    
+    modal.addEventListener('wheel', wheelHandler, { passive: false });
+    document.addEventListener('keydown', keydownHandler);
+    modal.querySelector('.modal-overlay').onclick = closeModal;
+
+    updateMainPreview(clickedFrameNumber);
+    modal.style.display = 'flex';
+    
+    setTimeout(() => {
+        const activeThumb = thumbnailStrip.querySelector('.active-frame');
+        if (activeThumb) activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+    }, 50);
+}
 
     function parseTimestamp(ts) {
         if (!ts || typeof ts !== 'string') return 0; // Xử lý nếu timestamp không hợp lệ
@@ -2089,11 +2174,12 @@ function showLoadingIndicator() {
         }
     }
 
-/**
-     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu từ server.
-     * @param {Array} queueItems - Mảng các frame trong queue.
+    /**
+     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu từ server. (V2)
+     * @param {Array} queueItems - Mảng các frame trong queue, đã được sắp xếp.
      */
     function renderFullQueue(queueItems) {
+        // queueItems.reverse();
         // Cập nhật Map cục bộ để dễ truy xuất
         submitQueueFrames.clear();
         queueItems.forEach(item => submitQueueFrames.set(item.frameIdentifier, item));
@@ -2109,20 +2195,40 @@ function showLoadingIndicator() {
         queueCountSpan.textContent = `${submitQueueFrames.size} frame${submitQueueFrames.size !== 1 ? 's' : ''}`;
 
         // Bước 3: Vẽ lại các frame
+        const currentSelectedId = document.querySelector('.queue-frame-item.selected')?.dataset.frameId;
         submitQueueFramesContainer.innerHTML = ''; // Xóa các frame cũ
+        
         submitQueueFrames.forEach((frameData) => {
-            const userColor = frameData.user_color || 'grey';
-            const frameHtml = `
-                <div class="queue-frame-item" style="border-color: ${userColor};" title="Added by: ${frameData.added_by}">
+            const userColor = frameData.user_color || '#888888';
+            const hasVotesClass = frameData.vote_count > 0 ? 'has-votes' : '';
+            const isSelectedClass = frameData.frameIdentifier === currentSelectedId ? 'selected' : '';
+
+            // Tạo thẻ cha
+            const frameElement = document.createElement('div');
+            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass}`;
+            frameElement.dataset.frameId = frameData.frameIdentifier;
+            frameElement.style.borderColor = userColor;
+
+            // Tạo cấu trúc HTML bên trong
+            frameElement.innerHTML = `
+                <div class="queue-frame-image-container">
                     <img src="${frameData.path}" alt="Queued frame">
+                    <div class="queue-frame-user">${frameData.added_by}</div>
+                    ${frameData.vote_count > 0 ? `
+                        <div class="queue-frame-vote">
+                            <i class="fas fa-heart"></i> ${frameData.vote_count}
+                        </div>
+                    ` : ''}
                     <button 
                         class="remove-queue-item-btn" 
                         title="Remove from queue"
-                        data-frame-id="${frameData.frameIdentifier}"
                     >×</button>
                 </div>
+                <div class="queue-frame-info-bar">
+                    ${frameData.frameIdentifier}
+                </div>
             `;
-            submitQueueFramesContainer.insertAdjacentHTML('beforeend', frameHtml);
+            submitQueueFramesContainer.appendChild(frameElement);
         });
     }
 
