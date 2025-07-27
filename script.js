@@ -84,23 +84,26 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         
         tagFilterBtn.addEventListener('click', function() {
-            // Tìm thanh tìm kiếm cuối cùng (thanh mới nhất)
-            const lastSearchGroup = document.querySelector('.search-input-group:last-child');
-            if (!lastSearchGroup) return; // Dừng lại nếu không có thanh tìm kiếm nào
+            const activeElement = document.activeElement;
+            if (activeElement && activeElement.classList.contains('search-input')) {
+                
+                const targetSearchGroup = activeElement.closest('.search-input-group');
 
-            const tagContainer = lastSearchGroup.querySelector('.tag-filter-container');
-            const tagInput = lastSearchGroup.querySelector('.tag-input');
+                if (targetSearchGroup) {
+                    const tagContainer = targetSearchGroup.querySelector('.tag-filter-container');
+                    const tagInput = targetSearchGroup.querySelector('.tag-input');
 
-            if (tagContainer && tagInput) {
-                // Luôn bật nút tagFilterBtn khi nhấn
-                isTagFilterEnabled = true;
-                this.classList.add('active');
+                    if (tagContainer && tagInput) {
+                        isTagFilterEnabled = true;
+                        this.classList.add('active');
 
-                // Hiển thị ô nhập tag của thanh tìm kiếm cuối cùng
-                tagContainer.classList.add('visible');
-
-                // Focus vào ô đó
-                setTimeout(() => tagInput.focus(), 10);
+                        tagContainer.classList.add('visible');
+                        setTimeout(() => tagInput.focus(), 10);
+                    }
+                }
+            } else {
+                alert("Vui lòng click vào một thanh tìm kiếm trước khi bật chế độ lọc tag!");
+                console.warn("Nút Tag Filter được nhấn nhưng không có thanh tìm kiếm nào đang được focus.");
             }
         });
 
@@ -849,16 +852,11 @@ document.addEventListener('DOMContentLoaded', function() {
         searchInputsContainer.appendChild(newSearchGroup);
         setupSearchInput(newSearchGroup);
         
-        // Focus on new input
-        const newInput = newSearchGroup.querySelector('.search-input');
-        if (currentSearchMode === 'text-to-image' || currentSearchMode === 'text-to-text') {
-            newInput.focus();
-        }
-        
         // Update mode display
         updateSearchMode();
         
-        // Trả về input mới
+        // Trả về element input mới được tạo
+        const newInput = newSearchGroup.querySelector('.search-input');
         return newInput;
     }
     
@@ -1056,7 +1054,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 callTextToTextAPI(finalQuery)
                     .then(results => {
                         handleSearchResults(results, false);
-                        createAndFocusNewSearchInput();
+                        manageNextSearchInput();
                     })
                     .catch(handleSearchError);
             }
@@ -1080,21 +1078,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 handleSearchResults(response.initial_results, false);
                 
                 // Tạo thanh tìm kiếm mới ở đây
-                createAndFocusNewSearchInput();
+               manageNextSearchInput();
             }).catch(handleSearchError);
         } else if (temporalChainId) {
             callTemporalSearchContinue(query, temporalChainId, searchGroup).then(response => {
                 handleSearchResults(response.query_A_reranked, true);
                 
                 // Tạo thanh tìm kiếm mới ở đây
-                createAndFocusNewSearchInput();
+                manageNextSearchInput();
             }).catch(handleSearchError);
         } else {
             callTextToImageAPI(query, currentSelectedModel, searchGroup).then(results => {
                 handleSearchResults(results, false);
                 
                 // Tạo thanh tìm kiếm mới ở đây
-                createAndFocusNewSearchInput();
+                manageNextSearchInput();
             }).catch(handleSearchError);
         }
     }
@@ -1120,6 +1118,44 @@ document.addEventListener('DOMContentLoaded', function() {
             }, 50);
         }, 200);
     }
+
+    /**
+     * Quản lý thanh tìm kiếm tiếp theo.
+     * Kiểm tra xem có thanh tìm kiếm nào trống không.
+     * Nếu có, focus vào nó. Nếu không, tạo một thanh mới.
+     */
+    function manageNextSearchInput() {
+        // Tìm tất cả các textarea trong khu vực search
+        const allSearchInputs = document.querySelectorAll('.search-inputs-container .search-input');
+        let emptyInput = null;
+
+        // Lặp qua để tìm cái đầu tiên bị trống
+        for (const input of allSearchInputs) {
+            if (input.value.trim() === '') {
+                emptyInput = input;
+                break; // Đã tìm thấy, dừng vòng lặp
+            }
+        }
+
+        if (emptyInput) {
+            // Nếu đã tồn tại một ô trống, chỉ cần focus vào nó
+            console.log('Phát hiện thanh tìm kiếm trống, sẽ focus vào nó.');
+            setTimeout(() => {
+                emptyInput.focus();
+                // Cuộn tới ô đó để người dùng nhìn thấy
+                emptyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 50); 
+        } else {
+            // Nếu không có ô nào trống, tạo một ô mới
+            console.log('Không có thanh tìm kiếm trống, tạo thanh mới.');
+            const newInput = createNewSearchInput(); // Hàm này giờ sẽ trả về input mới
+            setTimeout(() => {
+                newInput.focus();
+            }, 50);
+        }
+    }
+
+
     // Thêm hàm gọi API text-to-text mới
     function callTextToTextAPI(query) {
         return fetch("/api/search/text", {
