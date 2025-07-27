@@ -216,6 +216,21 @@
                     <span class="shortcut-description">Submit Queue</span>
                     <span class="shortcut-key">D</span>
                 </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Submit Queue When In Neighboring keyframe</span>
+                    <span class="shortcut-key">A</span>
+                </div>
+            </div>
+            <h3>Submit Queue</h3>
+            <div class="shortcuts-list">
+                 <div class="shortcut-item">
+                    <span class="shortcut-description">Vote</span>
+                    <span class="shortcut-key">V</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Submit</span>
+                    <span class="shortcut-key">Enter</span>
+                </div>
             </div>
         </div>
     </div>
@@ -232,8 +247,15 @@
     <div id="submitQueue" class="submit-queue">
         <div class="submit-queue-header">
             <h3>Submit Queue</h3>
+            <button id="toggleQueueBtn" class="queue-toggle-btn" title="Minimize/Expand Queue">
+                <!-- Icon sẽ được thay đổi bằng JS, mặc định là thu nhỏ -->
+                <i class="fas fa-chevron-down"></i>
+            </button>
             <div class="queue-actions">
                 <span id="queueCount" class="queue-count">0 frames</span>
+                <button id="submitAllBtn" class="queue-action-btn submit-btn" title="Submit All Frames in Queue">
+                    <i class="fas fa-paper-plane"></i> Submit All
+                </button>
                 <button id="clearQueueBtn" class="queue-action-btn" title="Clear All Frames">
                     <i class="fas fa-trash"></i> Clear All
                 </button>
