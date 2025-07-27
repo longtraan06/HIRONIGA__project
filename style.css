@@ -225,6 +225,10 @@ body {
 
 .search-box {
     position: relative;
+    padding: 5px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    background-color: var(--matcha-accent);
 }
 
 .search-input {
@@ -961,8 +965,8 @@ button:focus, input:focus, textarea:focus {
     color: var(--matcha-brown);
     font-size: 13px;
     font-style: italic;
-    padding: 8px 12px;
-    margin-top: 5px;
+    padding: 2px 12px;
+    /* margin-top: 5px; */
     background-color: var(--matcha-accent);
     border-radius: 8px;
     opacity: 0;
@@ -1147,7 +1151,7 @@ button:focus, input:focus, textarea:focus {
 
 /* Style cho ô nhập tag */
 .tag-input {
-    width: 100%;
+    width: 70%;
     padding: 8px 12px;
     font-size: 13px;
     border: 2px solid var(--matcha-light);
@@ -1156,6 +1160,7 @@ button:focus, input:focus, textarea:focus {
     color: var(--matcha-dark);
     transition: var(--transition-smooth);
     box-shadow: var(--shadow-soft);
+    margin-left: 15%;
 }
 
 .tag-input::placeholder {
@@ -1204,6 +1209,28 @@ button:focus, input:focus, textarea:focus {
     position: relative;
     transform: scale(0.95);
     transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    max-height: 85vh; /* Giới hạn chiều cao của modal là 85% chiều cao màn hình */
+    overflow-y: auto;
+}
+
+.modal-content::-webkit-scrollbar {
+    height: 90%;
+    width: 8px; /* Độ rộng của thanh cuộn */
+}
+
+.modal-content::-webkit-scrollbar-track {
+    background: transparent; /* Nền của track trong suốt */
+    border-radius: 10px;
+}
+
+.modal-content::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary); /* Màu của thanh cuộn */
+    border-radius: 10px; /* Bo tròn các góc của thanh cuộn */
+    border: 2px solid var(--matcha-cream); /* Tạo một đường viền nhỏ, giúp thanh cuộn nổi bật */
+}
+
+.modal-content::-webkit-scrollbar-thumb:hover {
+    background-color: var(--matcha-dark); /* Đổi màu khi di chuột qua */
 }
 
 .shortcuts-modal.visible .modal-content {
@@ -1241,9 +1268,6 @@ button:focus, input:focus, textarea:focus {
     display: flex;
     flex-direction: column;
     gap: 15px;
-    max-height: 60vh;
-    overflow-y: auto;
-    padding-right: 10px; /* Tạo không gian cho thanh cuộn */
 }
 
 .shortcut-item {
@@ -1373,18 +1397,80 @@ button:focus, input:focus, textarea:focus {
 
 .queue-frame-item {
     position: relative;
-    height: 100px; /* Chiều cao cố định cho các frame trong queue */
-    flex-shrink: 0; /* Ngăn các item bị co lại */
+    display: flex;
+    flex-direction: column; /* Xếp ảnh trên, thanh info dưới */
+    height: 115px; /* Tăng chiều cao để chứa thanh info */
+    flex-shrink: 0;
     border-radius: 8px;
+    background-color: var(--matcha-cream);
+    /* box-shadow: 0 2px 5px rgba(0,0,0,0.1); */
+    /* border: 2px solid var(--matcha-border); */
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer; /* Cho phép click để chọn */
+}
+
+.queue-frame-image-container {
+    position: relative;
+    height: 95px; /* Chiều cao cố định cho ảnh */
     overflow: hidden;
-    box-shadow: var(--shadow-soft);
-    border: 2px solid var(--matcha-border);
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
 }
 
 .queue-frame-item img {
     height: 100%;
     width: auto;
     display: block;
+}
+
+/* Lớp phủ cho tên người submit */
+.queue-frame-user {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background-color: var(--matcha-pale);
+    color: var(--matcha-dark);
+    padding: 2px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 4px;
+    backdrop-filter: blur(2px);
+}
+
+/* Lớp phủ cho vote */
+.queue-frame-vote {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    background-color: rgba(255, 255, 255, 0.8);
+    color: var(--matcha-dark);
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: bold;
+    border-radius: 10px;
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.queue-frame-vote i {
+    color: #ff4757; /* Màu đỏ cho trái tim */
+}
+
+/* Thanh thông tin dưới cùng */
+.queue-frame-info-bar {
+    height: 20px;
+    background-color: var(--matcha-header);
+    color: var(--matcha-pale);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
 }
 
 .remove-queue-item-btn {
@@ -1412,4 +1498,109 @@ button:focus, input:focus, textarea:focus {
     background: white;
     transform: scale(1.1);
     color: #a71d2a;
+}
+
+/* --- Style cho trạng thái được chọn và vote --- */
+
+.queue-frame-item.selected {
+    /* transform: translateY(-4px); */
+    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 5px 5px rgba(0,0,0,0.2);
+    z-index: 10;
+}
+
+.queue-frame-item.has-votes {
+    /* Thêm hiệu ứng phát sáng nhẹ khi có vote */
+    box-shadow: 0 0 8px 2px var(--matcha-brown);
+}
+
+.queue-frame-item.has-votes.selected {
+    /* Kết hợp cả hai hiệu ứng */
+    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 0 12px 4px rgba(255, 193, 7, 0.8);
+}
+.queue-action-btn.submit-btn {
+    background-color: var(--matcha-primary);
+    color: black;
+    border-color: var(--matcha-dark);
+}
+
+.queue-action-btn.submit-btn:hover {
+    background-color: var(--matcha-dark);
+}
+
+/* Style cho Toast Notification */
+.toast-notification {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    background-color: #333;
+    color: var(--matcha-dark);
+    padding: 15px 25px;
+    border-radius: 8px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    z-index: 10001;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: all 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+    font-size: 15px;
+}
+.toast-notification.show {
+    opacity: 1;
+    transform: translateX(0);
+}
+.toast-notification.success {
+    background-color: var(--matcha-accent)
+}
+.toast-notification.error {
+    background-color: #f44336; /* Đỏ */
+}
+.submit-queue-header {
+    /* Thêm position relative để định vị nút toggle */
+    position: relative;
+    cursor: pointer; /* Cho phép click vào cả header để toggle */
+}
+
+/* Định dạng nút Toggle */
+.queue-toggle-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--matcha-accent);
+    border: 1px solid var(--matcha-border);
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--matcha-dark);
+    transition: all 0.2s ease;
+}
+
+.queue-toggle-btn:hover {
+    background: var(--matcha-primary);
+    color: white;
+}
+
+/* Lớp CSS mới để quản lý trạng thái thu nhỏ */
+.submit-queue.minimized {
+    /* Khi thu nhỏ, chỉ cho header hiển thị */
+    /* Chúng ta di chuyển toàn bộ queue lên trên, trừ chiều cao của header */
+    transform: translateX(-50%) translateY(calc(100% - 46px)); /* 45px là chiều cao header + 1px border */
+    transition: transform 0.1s cubic-bezier(0.6, 0, 0.1, 1); /* Hiệu ứng khác một chút cho mượt */
+}
+
+/* Khi thu nhỏ, ẩn phần nội dung đi */
+.submit-queue.minimized .submit-queue-frames {
+    display: none;
+}
+
+/* Đảm bảo khi thu nhỏ và hiện, hiệu ứng không bị gián đoạn */
+.submit-queue.visible.minimized {
+    transform: translateX(-50%) translateY(calc(100% - 46px));
+}
+
+.submit-queue.visible:not(.minimized) {
+    transform: translateX(-50%) translateY(0);
 }
