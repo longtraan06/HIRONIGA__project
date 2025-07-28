@@ -18,10 +18,7 @@
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
-                <!-- Thêm nút Text to Text -->
-                <button id="textToTextBtn" class="header-btn" title="Search in Text" data-mode="text-to-text">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-book-type-icon lucide-book-type"><path d="M10 13h4"/><path d="M12 6v7"/><path d="M16 8V6H8v2"/><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H19a1 1 0 0 1 1 1v18a1 1 0 0 1-1 1H6.5a1 1 0 0 1 0-5H20"/></svg>
-                </button>
+                
                 <!-- Nút Image to Image -->
                 <button id="imageToImageBtn" class="header-btn" title="Search Image" data-mode="image-to-image">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -30,7 +27,18 @@
                         <polyline points="21,15 16,10 5,21"/>
                     </svg>
                 </button>
-
+                <button id="ocrFilterBtn" class="header-btn" title="Enable/Disable OCR Filter (F1)">
+                <!-- Bạn có thể dùng một icon khác phù hợp hơn cho OCR, ví dụ icon scan text -->
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-scan-text">
+                    <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                    <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                    <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                    <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                    <path d="M7 12h10"/>
+                    <path d="M7 9h10"/>
+                    <path d="M7 15h4"/>
+                </svg>
+            </button>
                 <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-languages-icon lucide-languages"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
                 </button>
@@ -88,6 +96,9 @@
                              <div class="tag-filter-container">
                                 <input type="text" class="tag-input" placeholder="Enter tags">
                             </div> 
+                            <div class="ocr-filter-container">
+                                <input type="text" class="ocr-input" placeholder="Filter by OCR text...">
+                            </div>
                             <!-- Image upload area (hidden by default) -->
                             <div class="image-upload-area" style="display: none;">
                                 <input type="file" class="image-input" accept="image/*" style="display: none;">
@@ -182,16 +193,20 @@
                     </div>
                 </div>
                 <div class="shortcut-item">
-                    <span class="shortcut-description">On/Off Translate</span>
+                    <span class="shortcut-description">On/Off OCR Filter</span>
                     <span class="shortcut-key">F1</span>
                 </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">On/Off Tag Filter</span>
                     <span class="shortcut-key">F2</span>
                 </div>
-                 <div class="shortcut-item">
-                    <span class="shortcut-description">Model Setting</span>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">On/Off Translate</span>
                     <span class="shortcut-key">F3</span>
+                </div> 
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Model Setting</span>
+                    <span class="shortcut-key">F9</span>
                 </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">Select Multi Frames</span>
