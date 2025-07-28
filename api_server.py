@@ -378,6 +378,7 @@ class TemporalStartRequest(BaseModel):
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
     tags_filter: Optional[List[str]] = None
+    ocr: str = None
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -386,6 +387,7 @@ class TemporalContinueRequest(BaseModel):
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
+    ocr: str = None
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -396,6 +398,7 @@ class TextSearchRequest(BaseModel):
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
+    ocr: str = None
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -537,7 +540,8 @@ async def search_text(req: TextSearchRequest):
         model_name=req.model_name,
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
         top_k_tags=req.top_k_tags,
-        tags_filter=req.tags_filter
+        tags_filter=req.tags_filter,
+        ocr = req.ocr
     )
     return process_milvus_results_for_frontend(results)
 
@@ -644,7 +648,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
-            tags_filter=req.tags_filter
+            tags_filter=req.tags_filter,
+            ocr = req.ocr
         )
         
         # 3. Lấy trạng thái temporal
@@ -719,7 +724,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             top_k=min(req.top_k, 2000),
             use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
             top_k_tags=req.top_k_tags,
-            tags_filter=req.tags_filter
+            tags_filter=req.tags_filter,
+            ocr = req.ocr
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
