@@ -9,7 +9,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let isTagFilterEnabled = false;
     let submitQueueFrames = new Map();
-
+    let isOcrFilterEnabled = false;
+    
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
 
@@ -42,7 +43,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const submitQueueFramesContainer = document.getElementById('submitQueueFrames');
     const clearQueueBtn = document.getElementById('clearQueueBtn');
     const queueCountSpan = document.getElementById('queueCount');
-
+    const ocrFilterBtn = document.getElementById('ocrFilterBtn');
     initializeEventListeners();
 
     // Initialize
@@ -74,15 +75,31 @@ document.addEventListener('DOMContentLoaded', function() {
         textToImageBtn.addEventListener('click', function() {
             switchSearchMode('text-to-image');
         });
-        
-        textToTextBtn.addEventListener('click', function() {
-            switchSearchMode('text-to-text');
-        });
-        
+
         imageToImageBtn.addEventListener('click', function() {
             switchSearchMode('image-to-image');
         });
         
+        ocrFilterBtn.addEventListener('click', function() {
+            const activeElement = document.activeElement;
+            if (activeElement && activeElement.classList.contains('search-input')) {
+                const targetSearchGroup = activeElement.closest('.search-input-group');
+                if (targetSearchGroup) {
+                    const ocrContainer = targetSearchGroup.querySelector('.ocr-filter-container');
+                    const ocrInput = targetSearchGroup.querySelector('.ocr-input');
+
+                    if (ocrContainer && ocrInput) {
+                        isOcrFilterEnabled = true; // Bật cờ
+                        this.classList.add('active');
+                        ocrContainer.classList.add('visible');
+                        setTimeout(() => ocrInput.focus(), 10);
+                    }
+                }
+            } else {
+                alert("Vui lòng click vào một thanh tìm kiếm trước khi bật OCR filter!");
+            }
+        });
+
         tagFilterBtn.addEventListener('click', function() {
             const activeElement = document.activeElement;
             if (activeElement && activeElement.classList.contains('search-input')) {
@@ -136,20 +153,11 @@ document.addEventListener('DOMContentLoaded', function() {
             // Logic chuyển đổi chế độ tìm kiếm bằng phím Tab
             if (e.key === 'Tab') {
                 const activeElement = document.activeElement;
-                
-                // Nếu đang focus vào một ô input/textarea, thì không làm gì cả
-                // để giữ lại hành vi Tab mặc định (di chuyển tiêu điểm, thụt đầu dòng,...)
-                // if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
-                //     // Bạn có thể để trống ở đây để Tab hoạt động bình thường,
-                //     // hoặc giữ lại logic tạo search bar mới nếu muốn.
-                //     // Hiện tại, chúng ta sẽ để nó hoạt động bình thường.
-                //     return; 
-                // }
 
                 // Nếu không, chúng ta sẽ chuyển đổi chế độ
                 e.preventDefault(); // Ngăn hành vi mặc định của Tab (di chuyển tiêu điểm)
 
-                const searchModes = ['text-to-image', 'text-to-text', 'image-to-image'];
+                const searchModes = ['text-to-image', 'image-to-image'];
                 
                 // Tìm vị trí của chế độ hiện tại
                 const currentIndex = searchModes.indexOf(currentSearchMode);
@@ -171,7 +179,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }, 50); // Đợi một chút để DOM cập nhật
             }
 
-            if (e.key === 'F1') {
+            if (e.key === 'F3') {
                 e.preventDefault();
                 if (translateBtn) translateBtn.click();
             } 
@@ -179,7 +187,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 e.preventDefault();
                 if (tagFilterBtn) tagFilterBtn.click();
             }
-            else if (e.key === 'F3') {
+            else if (e.key === 'F1') {
+                e.preventDefault();
+                if (ocrFilterBtn) ocrFilterBtn.click();
+            }
+            else if (e.key === 'F9') {
                 e.preventDefault();
                 if (settingsBtn) settingsBtn.click(); // hoặc toggleSettingsMenu();
             }
@@ -509,7 +521,6 @@ document.addEventListener('DOMContentLoaded', function() {
     function resetTagFiltering() {
         // 1. Tắt biến cờ toàn cục
         isTagFilterEnabled = false;
-
         // 2. Tắt trạng thái 'active' của nút
         const tagFilterBtn = document.getElementById('tagFilterBtn');
         if (tagFilterBtn) {
@@ -718,26 +729,57 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    async function translateText(text, sourceLang = "vi", targetLang = "en") {
-        if (!text) return ' ';
-        const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+    // async function translateText(text, sourceLang = "vi", targetLang = "en") {
+    //     if (!text) return ' ';
+    //     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
+    //     try {
+    //         const response = await fetch(url);
+    //         const data = await response.json();
+    //         console.log("Translation response:", data);
+    //         return data[0].map(item => item[0]).join('');
+    //     } catch (error) {
+    //         console.error('Translation error:', error);
+    //         return text; // Trả về văn bản gốc nếu có lỗi
+    //     }
+    // }
+
+    async function translateText(text, sourceLang = 'vi', targetLang = 'en', apiKey = 'AIzaSyCYrbDzXcdf0ENylmW9JZ2ulMGhLSn0XOw') {
+        if (!text || typeof text !== "string") return '';
+
+        const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+
+        const body = {
+            q: text,
+            source: sourceLang,
+            target: targetLang,
+            format: 'text'
+        };
+
         try {
-            const response = await fetch(url);
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(body)
+            });
+
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(`API error: ${response.status} - ${errorText}`);
+            }
+
             const data = await response.json();
-            printf("Translation response:", data);
-            return data[0].map(item => item[0]).join('');
+            return data.data.translations[0].translatedText;
         } catch (error) {
-            console.error('Translation error:', error);
-            return text; // Trả về văn bản gốc nếu có lỗi
+            console.error('Official translation API error:', error);
+            return text;
         }
     }
-
-
 
     function switchSearchMode(mode) {
         // Cập nhật UI của các nút
         textToImageBtn.classList.toggle('active', mode === 'text-to-image');
-        textToTextBtn.classList.toggle('active', mode === 'text-to-text');
         imageToImageBtn.classList.toggle('active', mode === 'image-to-image');
         
         // Cập nhật mode hiện tại
@@ -891,6 +933,9 @@ document.addEventListener('DOMContentLoaded', function() {
                  <div class="tag-filter-container">
                     <input type="text" class="tag-input" placeholder="Enter tags">
                 </div>  
+                <div class="ocr-filter-container">
+                    <input type="text" class="ocr-input" placeholder="Filter by OCR text...">
+                </div>
                 <div class="image-upload-area" style="display: none;">
                     <input type="file" class="image-input" accept="image/*" style="display: none;">
                     <div class="upload-zone">
@@ -922,6 +967,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     function setupSearchInput(searchGroup) {
         const textInput = searchGroup.querySelector('.search-input');
+        const ocrInput = searchGroup.querySelector('.ocr-input');
         const imageInput = searchGroup.querySelector('.image-input');
         const uploadZone = searchGroup.querySelector('.upload-zone');
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
@@ -939,6 +985,15 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
         
+        if (ocrInput) {
+            ocrInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Ngăn submit form
+                    textInput.focus(); // Quay về thanh tìm kiếm chính
+                }
+            });
+        }
+
         if (tagInput) {
             tagInput.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') {
@@ -1125,6 +1180,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 .catch(handleSearchError);
         }
         resetTagFiltering();
+        resetOcrFiltering();
     }
 
     // Tách logic text-to-image để dễ quản lý
@@ -1310,6 +1366,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        const ocrInputElement = searchGroup.querySelector('.ocr-input');
+        if (isOcrFilterEnabled && ocrInputElement && ocrInputElement.value.trim() !== '') {
+            body.ocr = ocrInputElement.value.trim();
+        }
+
         return fetch("/api/search/temporal/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1345,6 +1406,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
+        const ocrInputElement = searchGroup.querySelector('.ocr-input');
+        if (isOcrFilterEnabled && ocrInputElement && ocrInputElement.value.trim() !== '') {
+            body.ocr = ocrInputElement.value.trim();
+        }
+
         return fetch("/api/search/temporal/continue", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1364,6 +1430,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         if (isTagFilterEnabled) {
             body.use_tag = true; 
+        }
+
+         const ocrInputElement = searchGroup.querySelector('.ocr-input');
+        if (isOcrFilterEnabled && ocrInputElement && ocrInputElement.value.trim() !== '') {
+            body.ocr = ocrInputElement.value.trim();
         }
 
         const tagInputElement = searchGroup.querySelector('.tag-input');
@@ -1470,6 +1541,16 @@ function handleSearchResults(images, isReranked = false) {
 
     // Thiết lập Intersection Observer để detect khi scroll đến cuối
     setupInfiniteScroll();
+}
+
+function resetOcrFiltering() {
+    isOcrFilterEnabled = false;
+    if (ocrFilterBtn) {
+        ocrFilterBtn.classList.remove('active');
+    }
+    // document.querySelectorAll('.ocr-filter-container.visible').forEach(container => {
+    //     container.classList.remove('visible');
+    // });
 }
 
 function loadMoreImages() {
