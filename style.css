@@ -1,10 +1,45 @@
-/* @import url(https://fonts.googleapis.com/css2?family=Poppins:wght@100;200;300;400;500;600&display=swap);
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    font-family: 'Poppins',sans-serif;
-} */
+/*
+================================================================
+  STYLESHEET
+================================================================
+  1.  FONT & VARIABLES
+      - @font-face
+      - :root (CSS Custom Properties)
+  2.  GLOBAL & BASE STYLES
+      - Reset & Box-sizing
+      - Body styles
+      - Global scrollbar
+      - Accessibility & Transitions
+  3.  LAYOUT STRUCTURE
+      - Header
+      - Main Container
+      - Sidebar
+      - Main Content
+  4.  COMPONENTS
+      - Buttons (Header, Mode)
+      - Search & Input fields
+      - Image Upload Area
+      - Masonry Grid & Image Items
+      - Selection Toolbar
+      - Settings Menu
+      - Tag Filtering
+      - Submit Queue
+      - Loading Indicators
+      - Placeholders & Info Displays
+  5.  MODALS & OVERLAYS
+      - General Modal Styles
+      - Image/Keyframe Modal
+      - Video Player Modal
+      - Shortcuts Modal
+      - Toast Notifications
+  6.  KEYFRAME ANIMATIONS
+      - pop-in, spin, fade-in, zoom-in, pulse
+  7.  RESPONSIVE DESIGN
+      - Media Queries for various screen sizes
+================================================================
+*/
+
+/* --- 1. FONT & VARIABLES --- */
 
 @font-face {
   font-family: 'PoppinsVH';
@@ -13,15 +48,9 @@
   font-style: normal;
 }
 
-* {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    font-family: 'PoppinsVH', sans-serif;
-}
-
 :root {
     color-scheme: light;
+
     /* Bảng màu Matcha */
     --matcha-dark: #556B2F;
     --matcha-primary: #8AB86E;
@@ -33,6 +62,7 @@
     --matcha-highlight: #9DC88D;
     --matcha-border: #47663B;
     --matcha-header: #62825D;
+
     /* Màu sắc giao diện */
     --text-dark: #2C3E50;
     --text-light: #FFFFFF;
@@ -45,14 +75,58 @@
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+/* --- 2. GLOBAL & BASE STYLES --- */
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'PoppinsVH', sans-serif;
+}
+
 body {
-    /* background: linear-gradient(rgba(0,0,0,0.3),rgba(0,0,0,0.3)), scr="/home/liex/Desktop/Work/AIC/web/public/_.jpeg" no-repeat; */
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     height: 100vh;
     overflow: hidden;
     background-color: var(--matcha-cream);
     color: var(--text-dark);
 }
+
+/* Tùy chỉnh thanh cuộn cho toàn bộ ứng dụng */
+::-webkit-scrollbar {
+    width: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: var(--matcha-pale);
+}
+
+::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 6px;
+    border: 2px solid var(--matcha-pale);
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background-color: var(--matcha-dark);
+}
+
+/* Hiệu ứng chuyển tiếp mượt mà & cải thiện hiệu suất */
+button, input, textarea, .image-item, .thumbnail-strip img {
+    will-change: transform, opacity, box-shadow;
+}
+
+/* Cải thiện hiệu ứng focus cho khả năng tiếp cận */
+button:focus, input:focus, textarea:focus {
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.4);
+}
+
+.pulse {
+    animation: pulse 2s infinite;
+}
+
+/* --- 3. LAYOUT STRUCTURE --- */
 
 /* Header - chiếm 4% chiều cao */
 .header {
@@ -82,6 +156,71 @@ body {
     letter-spacing: 0.5px;
 }
 
+/* Vùng chứa chính */
+.main-container {
+    height: 95vh;
+    display: flex;
+    background: linear-gradient(rgba(0,0,0,0.2),rgba(0,0,0,0.2)),url("./public/_.jpeg") no-repeat;
+    background-size: cover;
+    background-position: center;
+    scrollbar-width: thin;
+    color: #EED3B1;
+}
+
+/* Sidebar - chiếm 1/5 chiều ngang */
+.sidebar {
+    width: 15%;
+    background: var(--matcha-pale);
+    border-top: 2px solid var(--matcha-light);
+    border-right: 2px solid var(--matcha-light);
+    border-bottom: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    padding: 25px 5px;
+    margin-top: 0.5%;
+    margin-bottom: 0.5%;
+    overflow-y: auto;
+    box-shadow: inset -5px 0 15px -5px rgba(0, 0, 0, 0.05);
+}
+
+/* Nội dung chính - chiếm 4/5 chiều ngang còn lại */
+.main-content {
+    width: 85%;
+    margin: 0.5%;
+    border-radius: 10px;
+    border: 2px solid #47663B;
+    padding: 15px;
+    overflow-y: auto;
+    background: rgba(71, 65, 65, 0.25);
+    backdrop-filter: blur(5px);
+    box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.03);
+}
+
+.main-content::-webkit-scrollbar {
+    width: 10px;
+}
+.main-content::-webkit-scrollbar-track {
+    background: #f0f0f0;
+    border-radius: 10px;
+    margin: 2px 0;
+}
+.main-content::-webkit-scrollbar-thumb {
+    background: #47663B;
+    border-radius: 10px;
+    border: 3px solid #f0f0f0;
+    background-clip: padding-box;
+}
+.main-content::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(45deg, var(--matcha-dark), var(--matcha-primary));
+}
+
+.content-area {
+    height: 100%;
+    padding: 5px;
+}
+
+/* --- 4. COMPONENTS --- */
+
+/* Buttons */
 .header-buttons {
     display: flex;
     gap: 12px;
@@ -102,81 +241,34 @@ body {
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
     backdrop-filter: blur(5px);
 }
-
-
-.header-btn:hover {
+.header-btn:hover, .header-btn.header-btn-hover:not(.keyboard-focus) {
     background: rgba(255, 255, 255, 0.3);
     transform: translateY(-2px);
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
-
 .header-btn.active {
     background: var(--matcha-pale);
     color: var(--matcha-dark);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     transform: translateY(0);
 }
-
-/* Vùng chứa chính - chiếm 95% chiều cao còn lại */
-.main-container {
-    height: 95vh;
-    display: flex;
-    background: linear-gradient(rgba(0,0,0,0.2),rgba(0,0,0,0.2)),url("./public/_.jpeg") no-repeat;
-    background-size: cover;
-    background-position: center;
-    scrollbar-width: thin;
-    color: #EED3B1;
-    /* background-color: var(--matcha-cream); */
-    
+.header-btn:focus {
+    outline: none;
 }
-
-.main-content::-webkit-scrollbar {
-    width: 10px;
+.header-btn.keyboard-focus {
+    outline: 2px solid white;
+    box-shadow: 0 0 0 2px var(--matcha-pale);
+    transform: translateY(-3px);
 }
-.main-content::-webkit-scrollbar-track {
-    background: #f0f0f0;
-    border-radius: 10px;
-    margin: 2px 0;
-}
-
-.main-content::-webkit-scrollbar-thumb {
-    background: #47663B;
-    border-radius: 10px;
-    border: 3px solid #f0f0f0;
-    background-clip: padding-box;
-}
-.main-content::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(45deg, var(--matcha-dark), var(--matcha-primary));
-}
-
-/* Sidebar - chiếm 1/5 chiều ngang */
-.sidebar {
-    width: 15%;
-    background: var(--matcha-pale);
-    border-top: 2px solid var(--matcha-light);
-    border-right: 2px solid var(--matcha-light);
-    border-bottom: 2px solid var(--matcha-light);
-    border-radius: 10px;
-    padding: 25px 5px;
-    margin-top: 0.5%;
-    margin-bottom: 0.5%;
-    overflow-y: auto;
-    box-shadow: inset -5px 0 15px -5px rgba(0, 0, 0, 0.05);
-    /* background: rgba(250, 255, 250, 0.25);
-    backdrop-filter: blur(5px) */
-}
-
-.search-container h3 {
+#settingsBtn {
     color: var(--matcha-dark);
-    margin-bottom: 18px;
-    font-size: 18px;
-    font-weight: 600;
-    border-bottom: 2px solid var(--matcha-light);
-    padding-bottom: 10px;
-    letter-spacing: 0.5px;
+    background-color: var(--matcha-pale);
+}
+#shortcutsBtn {
+    margin-left: auto;
+    color: var(--matcha-cream);
 }
 
-/* Nút chế độ tìm kiếm */
 .search-mode-buttons {
     display: flex;
     gap: 10px;
@@ -196,13 +288,11 @@ body {
     transition: var(--transition-smooth);
     box-shadow: var(--shadow-soft);
 }
-
 .mode-btn:hover {
     border-color: var(--matcha-primary);
     background: var(--matcha-cream);
     transform: translateY(-2px);
 }
-
 .mode-btn.active {
     border-color: var(--matcha-primary);
     background: var(--matcha-primary);
@@ -210,7 +300,17 @@ body {
     box-shadow: var(--shadow-medium);
 }
 
-/* Vùng chứa ô nhập tìm kiếm */
+/* Search & Input Fields */
+.search-container h3 {
+    color: var(--matcha-dark);
+    margin-bottom: 18px;
+    font-size: 18px;
+    font-weight: 600;
+    border-bottom: 2px solid var(--matcha-light);
+    padding-bottom: 10px;
+    letter-spacing: 0.5px;
+}
+
 .search-inputs-container {
     margin-bottom: 10px;
 }
@@ -218,7 +318,6 @@ body {
 .search-input-group {
     margin-bottom: 18px;
 }
-
 .search-input-group:last-child {
     margin-bottom: 0;
 }
@@ -245,14 +344,13 @@ body {
     box-shadow: var(--shadow-soft);
     background-color: white;
 }
-
 .search-input:focus {
     outline: none;
     border-color: var(--matcha-primary);
     box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
-/* Khu vực tải ảnh lên */
+/* Image Upload Area */
 .image-upload-area {
     width: 100%;
     margin-top: 25px;
@@ -274,26 +372,22 @@ body {
     background-color: rgba(255, 255, 255, 0.7);
     box-shadow: inset 0 0 15px rgba(183, 213, 163, 0.3);
 }
-
 .upload-zone:hover {
     border-color: var(--matcha-primary);
     background: rgba(231, 241, 225, 0.7);
     transform: translateY(-2px);
 }
-
 .upload-zone.drag-over {
     border-color: var(--matcha-primary);
     background: rgba(214, 233, 198, 0.5);
     transform: scale(1.02);
 }
-
 .upload-zone svg {
     color: var(--matcha-primary);
     margin-bottom: 12px;
     font-size: 30px;
     filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.1));
 }
-
 .upload-zone p {
     color: var(--text-muted);
     font-size: 14px;
@@ -311,7 +405,6 @@ body {
     overflow: hidden;
     box-shadow: var(--shadow-medium);
 }
-
 .uploaded-image img {
     width: 100%;
     height: 100%;
@@ -336,121 +429,46 @@ body {
     transition: var(--transition-smooth);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
-
 .remove-image:hover {
     background: rgba(255, 255, 255, 1);
     transform: scale(1.1);
 }
 
-.search-info {
-    background: white;
-    border-radius: 12px;
-    padding: 18px;
-    border: 1px solid var(--border-light);
-    box-shadow: var(--shadow-soft);
-    margin-top: 15px;
-}
-
-.search-placeholder {
-    color: var(--text-muted);
-    font-style: italic;
-    font-size: 13px;
-    line-height: 1.5;
-}
-
-/* Nội dung chính - chiếm 4/5 chiều ngang còn lại */
-.main-content {
-    width: 85%;
-    margin: 0.5%;
-    border-radius: 10px;
-    border: 2px solid #47663B;
-    padding: 15px;
-    overflow-y: auto;
-    /* background: var(--matcha-cream); */
-    box-shadow: inset 0 0 20px r    gba(0, 0, 0, 0.03);
-    background: rgba(71, 65, 65, 0.25);
-    backdrop-filter: blur(5px)
-}
-
-.content-area {
-    height: 100%;
-    padding: 5px;
-}
-
-.content-placeholder {
-    /* background: var(--matcha-pale); */
-    padding: 40px;
-    border-radius: 16px;
-    /* border: 1px solid var(--matcha-light); */
-    text-align: center;
-    height: 220px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    /* box-shadow: var(--shadow-soft); */
-}
-
-.content-placeholder h2 {
-    color: #EED3B1;
-    margin-bottom: 18px;
-    font-size: 28px;
-    font-weight: 600;
-    letter-spacing: 1px;
-}
-
-.content-placeholder p {
-    color: #EED3B1;
-    font-size: 16px;
-    line-height: 1.6;
-    max-width: 80%;
-}
-
+/* Masonry Grid & Image Items */
 .masonry-container {
     display: flex;
-    flex-direction: row; /* Xếp các cột theo hàng ngang */
+    flex-direction: row;
     justify-content: center;
-    align-items: flex-start; /* Các cột sẽ bắt đầu từ trên cùng */
-    gap: 5px; /* Khoảng cách giữa các cột */
+    align-items: flex-start;
+    gap: 5px;
     width: 100%;
 }
 
 .masonry-column {
     display: flex;
-    flex-direction: column; /* Các ảnh trong cột xếp theo chiều dọc */
-    gap: 5px; /* Khoảng cách giữa các ảnh trong cùng 1 cột */
-    flex: 1; /* Chia đều chiều rộng cho các cột */
-    min-width: 0; /* Cần thiết để flexbox hoạt động đúng */
+    flex-direction: column;
+    gap: 5px;
+    flex: 1;
+    min-width: 0;
 }
 
 .image-item {
+    position: relative;
     border-radius: 12px;
     overflow: hidden;
     box-shadow: var(--shadow-soft);
     transition: var(--transition-smooth);
     cursor: pointer;
-    position: relative;
     border: 1px solid transparent;
     background-color: var(--matcha-pale);
-    width: 100%; /* Ảnh sẽ chiếm toàn bộ chiều rộng của cột */
+    width: 100%;
 }
-
 .image-item:hover {
     transform: translateY(-3px) scale(1.02);
     box-shadow: var(--shadow-medium);
     border-color: #EED3B1;
     z-index: 1;
 }
-
-.image-item img {
-    width: 100%;
-    height: auto;
-    display: block;
-    object-fit: cover;
-    transition: var(--transition-smooth);
-}
-
-/* Hiệu ứng khi hover frame */
 .image-item:hover::before {
     content: '';
     position: absolute;
@@ -462,16 +480,12 @@ body {
     border-radius: 10px;
     z-index: 1;
 }
-
-/* Hiệu ứng khi frame được chọn */
 .image-item.selected {
     box-shadow: 0 0 0 3px rgb(0, 170, 255), var(--shadow-medium);
     transform: translateY(-3px);
     z-index: 2;
     border-color: var(--matcha-brown);
 }
-
-/* Biểu tượng tích khi frame được chọn */
 .image-item.selected::after {
     content: '✓';
     position: absolute;
@@ -491,12 +505,429 @@ body {
     z-index: 3;
     animation: pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
-
-@keyframes pop-in {
-    0% { transform: scale(0); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
+.image-item img {
+    width: 100%;
+    height: auto;
+    display: block;
+    object-fit: cover;
+    transition: var(--transition-smooth);
+}
+.image-item:hover .frame-info {
+    opacity: 1;
+    transform: translateY(0);
 }
 
+/* Selection Toolbar */
+.selection-toolbar {
+    position: fixed;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(100px);
+    background: linear-gradient(to right, var(--matcha-dark), var(--matcha-primary));
+    color: white;
+    border-radius: 12px;
+    padding: 12px 20px;
+    display: none;
+    align-items: center;
+    gap: 15px;
+    z-index: 1000;
+    border: 2px solid rgba(255, 255, 255, 0.2);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
+    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    opacity: 0;
+}
+.selection-toolbar.visible {
+    display: flex; /* Change display to flex when visible */
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+}
+.selection-info {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    letter-spacing: 0.5px;
+}
+.selection-count {
+    background-color: var(--matcha-light);
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: var(--matcha-dark);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+.toolbar-actions {
+    display: flex;
+    gap: 10px;
+}
+.toolbar-btn {
+    background-color: rgba(255, 255, 255, 0.2);
+    border: none;
+    border-radius: 8px;
+    padding: 8px 14px;
+    color: white;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+    backdrop-filter: blur(5px);
+}
+.toolbar-btn:hover:not(:disabled) {
+    background-color: rgba(255, 255, 255, 0.3);
+    transform: translateY(-2px);
+    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
+}
+.toolbar-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.toolbar-btn i {
+    font-size: 16px;
+}
+
+/* Settings Menu */
+.settings-menu {
+    position: fixed;
+    top: 50px;
+    right: 20px;
+    background: var(--matcha-pale);
+    border: 1px solid var(--matcha-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-medium);
+    z-index: 1001;
+    padding: 10px;
+    min-width: 250px;
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none;
+}
+.settings-menu.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+}
+.settings-menu h4 {
+    color: var(--matcha-dark);
+    margin: 0 5px 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--matcha-light);
+    font-size: 16px;
+    font-weight: 600;
+}
+.settings-menu ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.settings-menu li {
+    padding: 10px 15px;
+    color: var(--matcha-dark);
+    cursor: pointer;
+    border-radius: 8px;
+    transition: background-color 0.2s ease;
+    font-size: 14px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.settings-menu li:hover {
+    background-color: var(--matcha-accent);
+}
+.settings-menu li.highlighted {
+    background-color: var(--matcha-highlight);
+    border: 1px solid var(--matcha-dark);
+}
+.settings-menu li.selected {
+    background-color: var(--matcha-primary);
+    color: white;
+    font-weight: 600;
+}
+.settings-menu li.selected::after {
+    content: '✓';
+    font-weight: bold;
+}
+
+/* Tag Filtering */
+.tag-filter-container,
+.ocr-filter-container {
+    margin-top: 8px;
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
+    pointer-events: none;
+}
+.tag-filter-container.visible,
+.ocr-filter-container.visible {
+    max-height: 100px;
+    opacity: 1;
+    pointer-events: auto;
+}
+.tag-input,
+.ocr-input {
+    width: 70%;
+    padding: 8px 12px;
+    font-size: 13px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    background-color: white;
+    color: var(--matcha-dark);
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-soft);
+    margin-left: 15%;
+}
+.tag-input::placeholder,
+.ocr-input::placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+.tag-input:focus,
+.ocr-input:focus {
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
+}
+
+/* Submit Queue */
+.submit-queue {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%) translateY(100%);
+    width: 95%;
+    background: var(--matcha-pale);
+    border-top-left-radius: 16px;
+    border-top-right-radius: 16px;
+    border: 2px solid var(--matcha-border);
+    border-bottom: none;
+    box-shadow: 0 -5px 30px rgba(0, 0, 0, 0.2);
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    opacity: 0;
+    transition: transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.1s ease;
+    pointer-events: none;
+    max-height: 40vh;
+}
+.submit-queue.visible {
+    transform: translateX(-50%) translateY(0);
+    opacity: 1;
+    pointer-events: auto;
+}
+.submit-queue.minimized {
+    transform: translateX(-50%) translateY(calc(100% - 46px));
+    transition: transform 0.1s cubic-bezier(0.6, 0, 0.1, 1);
+}
+.submit-queue.minimized .submit-queue-frames {
+    display: none;
+}
+.submit-queue.visible.minimized {
+    transform: translateX(-50%) translateY(calc(100% - 46px));
+}
+.submit-queue.visible:not(.minimized) {
+    transform: translateX(-50%) translateY(0);
+}
+.submit-queue-header {
+    position: relative;
+    cursor: pointer;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 1px 20px;
+    border-bottom: 1px solid var(--matcha-light);
+    flex-shrink: 0;
+}
+.submit-queue-header h3 {
+    margin: 0;
+    color: var(--matcha-dark);
+    font-size: 18px;
+    font-weight: 600;
+}
+.queue-actions {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+.queue-count {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+.queue-action-btn {
+    background-color: transparent;
+    border: 1px solid var(--matcha-primary);
+    color: var(--matcha-dark);
+    padding: 6px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.queue-action-btn:hover {
+    background-color: var(--matcha-accent);
+    border-color: var(--matcha-dark);
+}
+.queue-action-btn.submit-btn {
+    background-color: var(--matcha-primary);
+    color: black;
+    border-color: var(--matcha-dark);
+}
+.queue-action-btn.submit-btn:hover {
+    background-color: var(--matcha-dark);
+}
+.queue-toggle-btn {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: var(--matcha-accent);
+    border: 1px solid var(--matcha-border);
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--matcha-dark);
+    transition: all 0.2s ease;
+}
+.queue-toggle-btn:hover {
+    background: var(--matcha-primary);
+    color: white;
+}
+.submit-queue-frames {
+    display: flex;
+    gap: 10px;
+    padding: 5px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--matcha-primary) transparent;
+}
+.submit-queue-frames::-webkit-scrollbar {
+    height: 8px;
+}
+.submit-queue-frames::-webkit-scrollbar-track {
+    background: transparent;
+}
+.submit-queue-frames::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 4px;
+}
+.queue-frame-item {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 115px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    background-color: var(--matcha-cream);
+    transition: transform 0.2s ease, box-shadow 0.2s ease;
+    cursor: pointer;
+}
+.queue-frame-item.selected {
+    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 5px 5px rgba(0,0,0,0.2);
+    z-index: 10;
+}
+.queue-frame-item.has-votes {
+    box-shadow: 0 0 8px 2px var(--matcha-brown);
+}
+.queue-frame-item.has-votes.selected {
+    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 0 12px 4px rgba(255, 193, 7, 0.8);
+}
+.queue-frame-image-container {
+    position: relative;
+    height: 95px;
+    overflow: hidden;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}
+.queue-frame-item img {
+    height: 100%;
+    width: auto;
+    display: block;
+}
+.queue-frame-user {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    background-color: var(--matcha-pale);
+    color: var(--matcha-dark);
+    padding: 2px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    border-radius: 4px;
+    backdrop-filter: blur(2px);
+}
+.queue-frame-vote {
+    position: absolute;
+    bottom: 4px;
+    right: 4px;
+    background-color: rgba(255, 255, 255, 0.8);
+    color: var(--matcha-dark);
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: bold;
+    border-radius: 10px;
+    backdrop-filter: blur(3px);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+.queue-frame-vote i {
+    color: #ff4757;
+}
+.queue-frame-info-bar {
+    height: 20px;
+    background-color: var(--matcha-header);
+    color: var(--matcha-pale);
+    font-size: 11px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 5px;
+    border-bottom-left-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+.remove-queue-item-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(2px);
+    border: none;
+    border-radius: 50%;
+    width: 22px;
+    height: 22px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    color: #dc3545;
+    transition: all 0.2s ease;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+    line-height: 1;
+}
+.remove-queue-item-btn:hover {
+    background: white;
+    transform: scale(1.1);
+    color: #a71d2a;
+}
+
+/* Loading Indicators */
 .loading-indicator {
     text-align: center;
     padding: 50px;
@@ -513,170 +944,101 @@ body {
     box-shadow: 0 0 10px rgba(0, 0, 0, 0.05);
 }
 
-@keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+/* Placeholders & Info Displays */
+.search-info {
+    background: white;
+    border-radius: 12px;
+    padding: 18px;
+    border: 1px solid var(--border-light);
+    box-shadow: var(--shadow-soft);
+    margin-top: 15px;
 }
-
-/* hiệu ứng chuyển động khung hình */
-.image-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.75);
+.search-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.content-placeholder {
+    padding: 40px;
+    border-radius: 16px;
+    text-align: center;
+    height: 220px;
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    z-index: 9999;
-    backdrop-filter: blur(3px);
-    opacity: 0;
-    animation: fade-in 0.3s ease forwards;
 }
-@keyframes fade-in {
-    0% { opacity: 0; }
-    100% { opacity: 1; }
+.content-placeholder h2 {
+    color: #EED3B1;
+    margin-bottom: 18px;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: 1px;
+}
+.content-placeholder p {
+    color: #EED3B1;
+    font-size: 16px;
+    line-height: 1.6;
+    max-width: 80%;
+}
+.translated-query-display {
+    color: var(--matcha-brown);
+    font-size: 13px;
+    font-style: italic;
+    padding: 2px 12px;
+    background-color: var(--matcha-accent);
+    border-radius: 8px;
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: all 0.4s ease-in-out;
+    border-left: 3px solid var(--matcha-primary);
+}
+.translated-query-display.visible {
+    opacity: 1;
+    max-height: 100px;
+}
+.frame-info {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--matcha-pale);
+    color: var(--matcha-brown);
+    text-align: center;
+    padding: 3px 5px;
+    font-size: 11px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.3s ease, transform 0.1s ease;
+    pointer-events: none;
+}
+.modal-frame-info {
+    color: var(--matcha-brown);
+    font-weight: 500;
+    font-size: 15px;
+    background-color: var(--matcha-accent);
+    padding: 5px 5px;
+    border-radius: 8px;
+    margin-top: 1px;
+    margin-bottom: 1px;
+    border: 1px solid var(--matcha-border);
+    z-index: 2;
 }
 
+/* --- 5. MODALS & OVERLAYS --- */
+
+/* General Modal Styles */
 .modal-overlay {
     position: absolute;
     width: 100%;
     height: 100%;
     cursor: zoom-out;
 }
-
-.modal-content {
-    position: relative;
-    background: var(--matcha-pale);
-    border-radius: 16px;
-    padding: 5px;
-    max-width: 90%;
-    max-height: 90%;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-    border: 1px solid var(--matcha-dark);
-    animation: zoom-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-}
-
-@keyframes zoom-in {
-    0% { transform: scale(0.9); opacity: 0; }
-    100% { transform: scale(1); opacity: 1; }
-}
-
-.main-preview {
-    max-width: 100%;
-    max-height: 65vh;
-    margin-bottom: 5px;
-    border-radius: 10px;
-    object-fit: contain;
-    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
-    border: 2px solid var(--matcha-border);
-}
-
-.thumbnail-strip {
-    display: flex;
-    overflow-x: auto;
-    gap: 10px;
-    padding: 10px 5px;
-    width: 100%;
-    border-radius: 5px;
-    background: var(--matcha-header);
-    border: var(--matcha-border) 2px solid;
-    scrollbar-width: thin;
-    scrollbar-color: var(--matcha-primary) var(--matcha-pale);
-}
-
-.thumbnail-strip::-webkit-scrollbar {
-    height: 8px;
-}
-
-.thumbnail-strip::-webkit-scrollbar-track {
-    background: #f0f0f0;
-    border-radius: 10px;
-    margin: 2px 0;
-}
-
-.thumbnail-strip::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(45deg, var(--matcha-dark), var(--matcha-primary));
-}
-.thumbnail-strip::-webkit-scrollbar-thumb {
-    background: #47663B;
-    border-radius: 10px;
-    border: 3px solid #f0f0f0;
-    background-clip: padding-box;
-}
-
-.thumbnail-strip img {
-    height: 90px;
-    cursor: pointer;
-    border-radius: 8px;
-    transition: var(--transition-smooth);
-    border: 2px solid transparent;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
-.thumbnail-strip img:hover {
-    transform: translateY(-3px) scale(1.05);
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-}
-
-.thumbnail-strip img.active-frame {
-    outline: none;
-    border: 2px solid #ff4949;
-    box-shadow: 0 0 12px rgba(212, 0, 0, 0.4);
-    transform: translateY(-3px);
-}
-
-.thumbnail-strip img.current-frame {
-    outline: none;
-    border: 2px solid #00d0ff;
-    box-shadow: 0 0 12px rgba(0, 162, 171, 0.4);
-    transform: translateY(-3px);
-}
-
-/* trình phát video */
-.video-modal {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background: rgba(0, 0, 0, 0.85);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-    backdrop-filter: blur(5px);
-    opacity: 0;
-    animation: fade-in 0.3s ease forwards;
-}
-
-/* Dùng chung style của image-modal cho content và overlay */
-.video-modal .modal-content {
-    background: #1c1c1c;
-    padding: 20px;
-    border: 1px solid #333;
-    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
-}
-
-.video-modal .modal-overlay {
-    position: absolute;
-    width: 100%;
-    height: 100%;
-}
-
-.video-player {
-    width: 100%;
-    max-width: 85vw;
-    max-height: 85vh;
-    border-radius: 10px;
-    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
-}
-
 .close-btn {
     position: absolute;
     top: -20px;
@@ -698,482 +1060,143 @@ body {
     box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
     transition: var(--transition-smooth);
 }
-
 .close-btn:hover {
     background: #f8f8f8;
     transform: scale(1.1);
 }
+.modal-content {
+    animation: zoom-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
 
-/* Thanh công cụ hiển thị khi có frame được chọn */
-.selection-toolbar {
+/* Image/Keyframe Modal */
+.image-modal {
     position: fixed;
-    bottom: 20px;
-    left: 50%;
-    transform: translateX(-50%) translateY(100px);
-    background: linear-gradient(to right, var(--matcha-dark), var(--matcha-primary));
-    color: white;
-    border-radius: 12px;
-    padding: 12px 20px;
-    display: none;
-    align-items: center;
-    gap: 15px;
-    z-index: 1000;
-    border: 2px solid rgba(255, 255, 255, 0.2);
-    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.25);
-    transition: transform 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    opacity: 0;
-}
-
-.selection-toolbar.visible {
-    transform: translateX(-50%) translateY(0);
-    opacity: 1;
-}
-
-.selection-info {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 500;
-    letter-spacing: 0.5px;
-}
-
-.selection-count {
-    background-color: var(--matcha-light);
-    border-radius: 50%;
-    width: 28px;
-    height: 28px;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.75);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
-    color: var(--matcha-dark);
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+    z-index: 9999;
+    backdrop-filter: blur(3px);
+    opacity: 0;
+    animation: fade-in 0.3s ease forwards;
 }
-
-.toolbar-actions {
-    display: flex;
-    gap: 10px;
-}
-
-.toolbar-btn {
-    background-color: rgba(255, 255, 255, 0.2);
-    border: none;
-    border-radius: 8px;
-    padding: 8px 14px;
-    color: white;
-    cursor: pointer;
-    transition: var(--transition-smooth);
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 500;
-    backdrop-filter: blur(5px);
-}
-
-.toolbar-btn:hover:not(:disabled) {
-    background-color: rgba(255, 255, 255, 0.3);
-    transform: translateY(-2px);
-    box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
-}
-
-.toolbar-btn:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-}
-
-.toolbar-btn i {
-    font-size: 16px;
-}
-
-/* Thiết kế responsive */
-@media (max-width: 1200px) {
-    .image-grid {
-        grid-template-columns: repeat(5, 1fr);
-    }
-    
-    .sidebar {
-        width: 20%;
-    }
-    
-    .main-content {
-        width: 80%;
-    }
-}
-
-@media (max-width: 992px) {
-    .image-grid {
-        grid-template-columns: repeat(4, 1fr);
-    }
-    
-    .sidebar {
-        width: 25%;
-    }
-    
-    .main-content {
-        width: 75%;
-    }
-}
-
-@media (max-width: 768px) {
-    .main-container {
-        flex-direction: column;
-    }
-    
-    .sidebar {
-        width: 100%;
-        height: 300px;
-        border-right: none;
-        border-bottom: 2px solid var(--matcha-light);
-    }
-    
-    .main-content {
-        width: 100%;
-        height: calc(95vh - 300px);
-    }
-    
-    .header-content h1 {
-        font-size: 16px;
-    }
-    
-    .image-grid {
-        grid-template-columns: repeat(3, 1fr);
-    }
-    
-    .search-mode-buttons {
-        flex-direction: row;
-    }
-    
-    .modal-content {
-        max-width: 95%;
-        padding: 15px;
-    }
-    
-    .thumbnail-strip img {
-        height: 70px;
-    }
-}
-
-@media (max-width: 480px) {
-    .image-grid {
-        grid-template-columns: repeat(2, 1fr);
-        gap: 8px;
-    }
-    
-    .header {
-        padding: 0 10px;
-    }
-    
-    .sidebar {
-        padding: 15px 10px;
-    }
-    
-    .search-input {
-        padding: 10px;
-    }
-    
-    .upload-zone {
-        padding: 15px;
-        min-height: 120px;
-    }
-    
-    .toolbar-btn {
-        padding: 6px 10px;
-        font-size: 13px;
-    }
-    
-    .thumbnail-strip img {
-        height: 60px;
-    }
-    
-    .main-preview {
-        max-height: 50vh;
-    }
-    
-    .close-btn {
-        top: -15px;
-        right: -15px;
-        width: 30px;
-        height: 30px;
-        font-size: 18px;
-    }
-}
-
-/* Hiệu ứng chuyển động bổ sung */
-@keyframes pulse {
-    0% { transform: scale(1); }
-    50% { transform: scale(1.05); }
-    100% { transform: scale(1); }
-}
-
-.pulse {
-    animation: pulse 2s infinite;
-}
-
-/* Hiệu ứng chuyển tiếp mượt mà cho tất cả các phần tử tương tác */
-button, input, textarea, .image-item, .thumbnail-strip img {
-    will-change: transform, opacity, box-shadow;
-}
-
-/* Cải thiện hiệu ứng focus cho khả năng tiếp cận */
-button:focus, input:focus, textarea:focus {
-    outline: none;
-    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.4);
-}
-
-/* Tùy chỉnh thanh cuộn cho toàn bộ ứng dụng */
-::-webkit-scrollbar {
-    width: 10px;
-    
-}
-
-::-webkit-scrollbar-track {
+.image-modal .modal-content {
+    position: relative;
     background: var(--matcha-pale);
+    border-radius: 16px;
+    padding: 5px;
+    max-width: 90%;
+    max-height: 90%;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    border: 1px solid var(--matcha-dark);
 }
-
-::-webkit-scrollbar-thumb {
-    background-color: var(--matcha-primary);
-    border-radius: 6px;
-    border: 2px solid var(--matcha-pale);
+.main-preview {
+    max-width: 100%;
+    max-height: 65vh;
+    margin-bottom: 5px;
+    border-radius: 10px;
+    object-fit: contain;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+    border: 2px solid var(--matcha-border);
 }
-
-::-webkit-scrollbar-thumb:hover {
-    background-color: var(--matcha-dark);
+.thumbnail-strip {
+    display: flex;
+    overflow-x: auto;
+    gap: 10px;
+    padding: 10px 5px;
+    width: 100%;
+    border-radius: 5px;
+    background: var(--matcha-header);
+    border: var(--matcha-border) 2px solid;
+    scrollbar-width: thin;
+    scrollbar-color: var(--matcha-primary) var(--matcha-pale);
 }
-
-/* header focus */
-.header-btn.keyboard-focus {
-    outline: 2px solid white;
-    box-shadow: 0 0 0 2px var(--matcha-pale);
-    /* background: rgba(255, 255, 255, 0.4); */
+.thumbnail-strip::-webkit-scrollbar {
+    height: 8px;
+}
+.thumbnail-strip::-webkit-scrollbar-track {
+    background: #f0f0f0;
+    border-radius: 10px;
+    margin: 2px 0;
+}
+.thumbnail-strip::-webkit-scrollbar-thumb {
+    background: #47663B;
+    border-radius: 10px;
+    border: 3px solid #f0f0f0;
+    background-clip: padding-box;
+}
+.thumbnail-strip::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(45deg, var(--matcha-dark), var(--matcha-primary));
+}
+.thumbnail-strip img {
+    height: 90px;
+    cursor: pointer;
+    border-radius: 8px;
+    transition: var(--transition-smooth);
+    border: 2px solid transparent;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.thumbnail-strip img:hover {
+    transform: translateY(-3px) scale(1.05);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+.thumbnail-strip img.active-frame {
+    outline: none;
+    border: 2px solid #ff4949;
+    box-shadow: 0 0 12px rgba(212, 0, 0, 0.4);
+    transform: translateY(-3px);
+}
+.thumbnail-strip img.current-frame {
+    outline: none;
+    border: 2px solid #00d0ff;
+    box-shadow: 0 0 12px rgba(0, 162, 171, 0.4);
     transform: translateY(-3px);
 }
 
-/* Hiệu ứng khi hover chuột */
-.header-btn.header-btn-hover:not(.keyboard-focus) {
-    transform: translateY(-2px);
-    background: rgba(255, 255, 255, 0.3);
-}
-
-/* Đảm bảo không hiện outline mặc định của trình duyệt */
-.header-btn:focus {
-    outline: none;
-}
-
-
-
-.translated-query-display {
-    color: var(--matcha-brown);
-    font-size: 13px;
-    font-style: italic;
-    padding: 2px 12px;
-    /* margin-top: 5px; */
-    background-color: var(--matcha-accent);
-    border-radius: 8px;
-    opacity: 0;
-    max-height: 0;
-    overflow: hidden;
-    transition: all 0.4s ease-in-out;
-    border-left: 3px solid var(--matcha-primary);
-}
-
-.translated-query-display.visible {
-    opacity: 1;
-    max-height: 100px; /* Chiều cao đủ lớn để chứa nội dung */
-}
-
-.image-item {
-    /* Đảm bảo image-item có position relative để định vị phần tử con */
-    position: relative; 
-}
-
-.frame-info {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--matcha-pale);
-    color: var(--matcha-brown);
-    text-align: center;
-    padding: 3px 5px;
-    font-size: 11px;
-
-    /* font-family: 'Courier New', Courier, monospace; */
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    
-    /* Ẩn theo mặc định */
-    opacity: 0;
-    transform: translateY(10px);
-    transition: opacity 0.3s ease, transform 0.1s ease;
-    
-    /* Ngăn không cho nó bắt các sự kiện chuột */
-    pointer-events: none;
-}
-
-/* Khi hover vào image-item, hiện thông tin frame */
-.image-item:hover .frame-info {
-    opacity: 1;
-    transform: translateY(0);
-}
-
-
-/* --- Định dạng cho thông tin frame trong Modal Keyframe --- */
-.modal-frame-info {
-    color: var(--matcha-brown);
-    font-weight: 500;
-    font-size: 15px;
-    background-color: var(--matcha-accent);
-    padding: 5px 5px;
-    border-radius: 8px;
-    margin-top: 1px; /* Kéo nó lên một chút để che viền dưới của ảnh */
-    margin-bottom: 1px;
-    border: 1px solid var(--matcha-border);
-    z-index: 2; /* Đảm bảo nó nằm trên các phần tử khác */
-    /* font-family: 'Courier New', Courier, monospace; */
-    /* border: 1px solid var(--matcha-light); */
-    /* box-shadow: 0 2px 4px rgba(0,0,0,0.05); */
-}
-
-
-.settings-menu {
+/* Video Player Modal */
+.video-modal {
     position: fixed;
-    top: 50px; /* Vừa dưới header */
-    right: 20px;
-    background: var(--matcha-pale);
-    border: 1px solid var(--matcha-border);
-    border-radius: 12px;
-    box-shadow: var(--shadow-medium);
-    z-index: 1001; /* Phải cao hơn header */
-    padding: 10px;
-    min-width: 250px;
-    opacity: 0;
-    transform: translateY(-10px);
-    transition: opacity 0.2s ease, transform 0.2s ease;
-    pointer-events: none; /* Không thể click khi bị ẩn */
-}
-
-.settings-menu.visible {
-    opacity: 1;
-    transform: translateY(0);
-    pointer-events: auto; /* Có thể click khi hiện */
-}
-
-.settings-menu h4 {
-    color: var(--matcha-dark);
-    margin: 0 5px 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--matcha-light);
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.settings-menu ul {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-}
-
-.settings-menu li {
-    padding: 10px 15px;
-    color: var(--matcha-dark);
-    cursor: pointer;
-    border-radius: 8px;
-    transition: background-color 0.2s ease;
-    font-size: 14px;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
     display: flex;
-    justify-content: space-between;
     align-items: center;
-}
-
-.settings-menu li:hover {
-    background-color: var(--matcha-accent);
-}
-
-.settings-menu li.selected {
-    background-color: var(--matcha-primary);
-    color: white;
-    font-weight: 600;
-}
-
-/* Biểu tượng check cho model được chọn */
-.settings-menu li.selected::after {
-    content: '✓';
-    font-weight: bold;
-}
-
-.settings-menu li:hover {
-    background-color: var(--matcha-accent);
-}
-
-/* --- THÊM CLASS MỚI NÀY --- */
-.settings-menu li.highlighted {
-    background-color: var(--matcha-highlight); /* Một màu khác để phân biệt với hover */
-    border: 1px solid var(--matcha-dark);
-}
-/* --- HẾT PHẦN THÊM --- */
-
-.settings-menu li.selected {
-    background-color: var(--matcha-primary);
-    color: white;
-    font-weight: 600;
-}
-
-#settingsBtn {
-    /* margin-left: auto;  */
-    background-color: var(--matcha-accent);
-    color: var(--matcha-dark) 
-}
-
-#shortcutsBtn {
-    margin-left: auto; 
-    /* background-color: var(--matcha-accent); */
-    color: var(--matcha-cream) 
-}
-
-/* tag filtering */
-
-.tag-filter-container {
-    margin-top: 8px;
-    max-height: 0;
+    justify-content: center;
+    z-index: 10000;
+    backdrop-filter: blur(5px);
     opacity: 0;
-    overflow: hidden;
-    transition: max-height 0.3s ease-out, opacity 0.3s ease-out, margin-top 0.3s ease-out;
-    pointer-events: none; /* Không thể tương tác khi ẩn */
+    animation: fade-in 0.3s ease forwards;
 }
-
-/* Class 'visible' sẽ được JS thêm vào để hiện ô nhập */
-.tag-filter-container.visible {
-    max-height: 100px; /* Chiều cao đủ lớn */
-    opacity: 1;
-    pointer-events: auto; /* Có thể tương tác khi hiện */
+.video-modal .modal-content {
+    background: #1c1c1c;
+    padding: 20px;
+    border: 1px solid #333;
+    box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
 }
-
-/* Style cho ô nhập tag */
-.tag-input {
-    width: 70%;
-    padding: 8px 12px;
-    font-size: 13px;
-    border: 2px solid var(--matcha-light);
+.video-modal .modal-overlay {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+.video-player {
+    width: 100%;
+    max-width: 85vw;
+    max-height: 85vh;
     border-radius: 10px;
-    background-color: white;
-    color: var(--matcha-dark);
-    transition: var(--transition-smooth);
-    box-shadow: var(--shadow-soft);
-    margin-left: 15%;
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.4);
 }
 
-.tag-input::placeholder {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-.tag-input:focus {
-    outline: none;
-    border-color: var(--matcha-primary);
-    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
-}
-
+/* Shortcuts Modal */
 .shortcuts-modal {
     position: fixed;
     top: 0;
@@ -1190,13 +1213,10 @@ button:focus, input:focus, textarea:focus {
     pointer-events: none;
     transition: opacity 0.3s ease;
 }
-
-/* Class 'visible' sẽ được JS thêm vào để hiện modal */
 .shortcuts-modal.visible {
     opacity: 1;
     pointer-events: auto;
 }
-
 .shortcuts-modal .modal-content {
     background: var(--matcha-cream);
     color: var(--text-dark);
@@ -1209,34 +1229,27 @@ button:focus, input:focus, textarea:focus {
     position: relative;
     transform: scale(0.95);
     transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-    max-height: 85vh; /* Giới hạn chiều cao của modal là 85% chiều cao màn hình */
+    max-height: 85vh;
     overflow-y: auto;
 }
-
-.modal-content::-webkit-scrollbar {
-    height: 90%;
-    width: 8px; /* Độ rộng của thanh cuộn */
-}
-
-.modal-content::-webkit-scrollbar-track {
-    background: transparent; /* Nền của track trong suốt */
-    border-radius: 10px;
-}
-
-.modal-content::-webkit-scrollbar-thumb {
-    background-color: var(--matcha-primary); /* Màu của thanh cuộn */
-    border-radius: 10px; /* Bo tròn các góc của thanh cuộn */
-    border: 2px solid var(--matcha-cream); /* Tạo một đường viền nhỏ, giúp thanh cuộn nổi bật */
-}
-
-.modal-content::-webkit-scrollbar-thumb:hover {
-    background-color: var(--matcha-dark); /* Đổi màu khi di chuột qua */
-}
-
 .shortcuts-modal.visible .modal-content {
     transform: scale(1);
 }
-
+.shortcuts-modal .modal-content::-webkit-scrollbar {
+    height: 90%;
+    width: 8px;
+}
+.shortcuts-modal .modal-content::-webkit-scrollbar-track {
+    background: transparent;
+}
+.shortcuts-modal .modal-content::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 10px;
+    border: 2px solid var(--matcha-cream);
+}
+.shortcuts-modal .modal-content::-webkit-scrollbar-thumb:hover {
+    background-color: var(--matcha-dark);
+}
 .shortcuts-modal h3 {
     text-align: center;
     color: var(--matcha-dark);
@@ -1246,7 +1259,6 @@ button:focus, input:focus, textarea:focus {
     border-bottom: 1px solid var(--matcha-light);
     padding-bottom: 15px;
 }
-
 .shortcuts-modal .close-btn {
     position: absolute;
     top: 10px;
@@ -1263,13 +1275,11 @@ button:focus, input:focus, textarea:focus {
 .shortcuts-modal .close-btn:hover {
     color: var(--matcha-dark);
 }
-
 .shortcuts-list {
     display: flex;
     flex-direction: column;
     gap: 15px;
 }
-
 .shortcut-item {
     display: flex;
     justify-content: space-between;
@@ -1277,16 +1287,13 @@ button:focus, input:focus, textarea:focus {
     padding-bottom: 10px;
     border-bottom: 1px solid var(--matcha-pale);
 }
-
 .shortcut-item:last-child {
     border-bottom: none;
 }
-
 .shortcut-description {
     font-size: 15px;
     color: var(--text-dark);
 }
-
 .shortcut-key {
     background: var(--matcha-pale);
     border: 1px solid var(--matcha-light);
@@ -1300,234 +1307,7 @@ button:focus, input:focus, textarea:focus {
     font-size: 14px;
 }
 
-.submit-queue {
-    position: fixed;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%) translateY(100%); /* Ẩn ban đầu ở dưới */
-    width: 95%;
-    background: var(--matcha-pale);
-    border-top-left-radius: 16px;
-    border-top-right-radius: 16px;
-    border: 2px solid var(--matcha-border);
-    border-bottom: none;
-    box-shadow: 0 -5px 30px rgba(0, 0, 0, 0.2);
-    z-index: 2000; /* Phải cao hơn selection toolbar */
-    display: flex;
-    flex-direction: column;
-    opacity: 0;
-    transition: transform 0.1s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.1s ease;
-    pointer-events: none; /* Không thể tương tác khi bị ẩn */
-    max-height: 40vh; /* Giới hạn chiều cao tối đa */
-}
-
-.submit-queue.visible {
-    transform: translateX(-50%) translateY(0); /* Hiện ra */
-    opacity: 1;
-    pointer-events: auto; /* Có thể tương tác khi hiện */
-}
-
-.submit-queue-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 1px 20px;
-    border-bottom: 1px solid var(--matcha-light);
-    flex-shrink: 0; /* Không co lại khi nội dung nhiều */
-}
-
-.submit-queue-header h3 {
-    margin: 0;
-    color: var(--matcha-dark);
-    font-size: 18px;
-    font-weight: 600;
-}
-
-.queue-actions {
-    display: flex;
-    align-items: center;
-    gap: 15px;
-}
-
-.queue-count {
-    font-size: 14px;
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.queue-action-btn {
-    background-color: transparent;
-    border: 1px solid var(--matcha-primary);
-    color: var(--matcha-dark);
-    padding: 6px 12px;
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    font-weight: 500;
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.queue-action-btn:hover {
-    background-color: var(--matcha-accent);
-    border-color: var(--matcha-dark);
-}
-
-.submit-queue-frames {
-    display: flex;
-    gap: 10px;
-    padding: 5px;
-    overflow-x: auto; /* Cho phép cuộn ngang nếu có nhiều frame */
-    overflow-y: hidden;
-    scrollbar-width: thin;
-    scrollbar-color: var(--matcha-primary) transparent;
-}
-
-.submit-queue-frames::-webkit-scrollbar {
-    height: 8px;
-}
-.submit-queue-frames::-webkit-scrollbar-track {
-    background: transparent;
-}
-.submit-queue-frames::-webkit-scrollbar-thumb {
-    background-color: var(--matcha-primary);
-    border-radius: 4px;
-}
-
-.queue-frame-item {
-    position: relative;
-    display: flex;
-    flex-direction: column; /* Xếp ảnh trên, thanh info dưới */
-    height: 115px; /* Tăng chiều cao để chứa thanh info */
-    flex-shrink: 0;
-    border-radius: 8px;
-    background-color: var(--matcha-cream);
-    /* box-shadow: 0 2px 5px rgba(0,0,0,0.1); */
-    /* border: 2px solid var(--matcha-border); */
-    transition: transform 0.2s ease, box-shadow 0.2s ease;
-    cursor: pointer; /* Cho phép click để chọn */
-}
-
-.queue-frame-image-container {
-    position: relative;
-    height: 95px; /* Chiều cao cố định cho ảnh */
-    overflow: hidden;
-    border-top-left-radius: 6px;
-    border-top-right-radius: 6px;
-}
-
-.queue-frame-item img {
-    height: 100%;
-    width: auto;
-    display: block;
-}
-
-/* Lớp phủ cho tên người submit */
-.queue-frame-user {
-    position: absolute;
-    top: 4px;
-    left: 4px;
-    background-color: var(--matcha-pale);
-    color: var(--matcha-dark);
-    padding: 2px 4px;
-    font-size: 10px;
-    font-weight: 600;
-    border-radius: 4px;
-    backdrop-filter: blur(2px);
-}
-
-/* Lớp phủ cho vote */
-.queue-frame-vote {
-    position: absolute;
-    bottom: 4px;
-    right: 4px;
-    background-color: rgba(255, 255, 255, 0.8);
-    color: var(--matcha-dark);
-    padding: 2px 6px;
-    font-size: 11px;
-    font-weight: bold;
-    border-radius: 10px;
-    backdrop-filter: blur(3px);
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.queue-frame-vote i {
-    color: #ff4757; /* Màu đỏ cho trái tim */
-}
-
-/* Thanh thông tin dưới cùng */
-.queue-frame-info-bar {
-    height: 20px;
-    background-color: var(--matcha-header);
-    color: var(--matcha-pale);
-    font-size: 11px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 0 5px;
-    border-bottom-left-radius: 6px;
-    border-bottom-right-radius: 6px;
-}
-
-.remove-queue-item-btn {
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(2px);
-    border: none;
-    border-radius: 50%;
-    width: 22px;
-    height: 22px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    color: #dc3545;
-    transition: all 0.2s ease;
-    box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-    line-height: 1;
-}
-
-.remove-queue-item-btn:hover {
-    background: white;
-    transform: scale(1.1);
-    color: #a71d2a;
-}
-
-/* --- Style cho trạng thái được chọn và vote --- */
-
-.queue-frame-item.selected {
-    /* transform: translateY(-4px); */
-    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 5px 5px rgba(0,0,0,0.2);
-    z-index: 10;
-}
-
-.queue-frame-item.has-votes {
-    /* Thêm hiệu ứng phát sáng nhẹ khi có vote */
-    box-shadow: 0 0 8px 2px var(--matcha-brown);
-}
-
-.queue-frame-item.has-votes.selected {
-    /* Kết hợp cả hai hiệu ứng */
-    box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 0 12px 4px rgba(255, 193, 7, 0.8);
-}
-.queue-action-btn.submit-btn {
-    background-color: var(--matcha-primary);
-    color: black;
-    border-color: var(--matcha-dark);
-}
-
-.queue-action-btn.submit-btn:hover {
-    background-color: var(--matcha-dark);
-}
-
-/* Style cho Toast Notification */
+/* Toast Notifications */
 .toast-notification {
     position: fixed;
     top: 20px;
@@ -1551,56 +1331,115 @@ button:focus, input:focus, textarea:focus {
     background-color: var(--matcha-accent)
 }
 .toast-notification.error {
-    background-color: #f44336; /* Đỏ */
-}
-.submit-queue-header {
-    /* Thêm position relative để định vị nút toggle */
-    position: relative;
-    cursor: pointer; /* Cho phép click vào cả header để toggle */
+    background-color: #f44336;
 }
 
-/* Định dạng nút Toggle */
-.queue-toggle-btn {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    background: var(--matcha-accent);
-    border: 1px solid var(--matcha-border);
-    border-radius: 50%;
-    width: 28px;
-    height: 28px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    color: var(--matcha-dark);
-    transition: all 0.2s ease;
+/* --- 6. KEYFRAME ANIMATIONS --- */
+
+@keyframes pop-in {
+    0% { transform: scale(0); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
 }
 
-.queue-toggle-btn:hover {
-    background: var(--matcha-primary);
-    color: white;
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
 }
 
-/* Lớp CSS mới để quản lý trạng thái thu nhỏ */
-.submit-queue.minimized {
-    /* Khi thu nhỏ, chỉ cho header hiển thị */
-    /* Chúng ta di chuyển toàn bộ queue lên trên, trừ chiều cao của header */
-    transform: translateX(-50%) translateY(calc(100% - 46px)); /* 45px là chiều cao header + 1px border */
-    transition: transform 0.1s cubic-bezier(0.6, 0, 0.1, 1); /* Hiệu ứng khác một chút cho mượt */
+@keyframes fade-in {
+    0% { opacity: 0; }
+    100% { opacity: 1; }
 }
 
-/* Khi thu nhỏ, ẩn phần nội dung đi */
-.submit-queue.minimized .submit-queue-frames {
-    display: none;
+@keyframes zoom-in {
+    0% { transform: scale(0.9); opacity: 0; }
+    100% { transform: scale(1); opacity: 1; }
 }
 
-/* Đảm bảo khi thu nhỏ và hiện, hiệu ứng không bị gián đoạn */
-.submit-queue.visible.minimized {
-    transform: translateX(-50%) translateY(calc(100% - 46px));
+@keyframes pulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.05); }
+    100% { transform: scale(1); }
 }
 
-.submit-queue.visible:not(.minimized) {
-    transform: translateX(-50%) translateY(0);
+/* --- 7. RESPONSIVE DESIGN --- */
+
+@media (max-width: 1200px) {
+    .sidebar {
+        width: 20%;
+    }
+    .main-content {
+        width: 80%;
+    }
+}
+
+@media (max-width: 992px) {
+    .sidebar {
+        width: 25%;
+    }
+    .main-content {
+        width: 75%;
+    }
+}
+
+@media (max-width: 768px) {
+    .main-container {
+        flex-direction: column;
+    }
+    .sidebar {
+        width: 100%;
+        height: 300px;
+        border-right: none;
+        border-bottom: 2px solid var(--matcha-light);
+    }
+    .main-content {
+        width: 100%;
+        height: calc(95vh - 300px);
+    }
+    .header-content h1 {
+        font-size: 16px;
+    }
+    .search-mode-buttons {
+        flex-direction: row;
+    }
+    .modal-content {
+        max-width: 95%;
+        padding: 15px;
+    }
+    .thumbnail-strip img {
+        height: 70px;
+    }
+}
+
+@media (max-width: 480px) {
+    .header {
+        padding: 0 10px;
+    }
+    .sidebar {
+        padding: 15px 10px;
+    }
+    .search-input {
+        padding: 10px;
+    }
+    .upload-zone {
+        padding: 15px;
+        min-height: 120px;
+    }
+    .toolbar-btn {
+        padding: 6px 10px;
+        font-size: 13px;
+    }
+    .thumbnail-strip img {
+        height: 60px;
+    }
+    .main-preview {
+        max-height: 50vh;
+    }
+    .close-btn {
+        top: -15px;
+        right: -15px;
+        width: 30px;
+        height: 30px;
+        font-size: 18px;
+    }
 }
