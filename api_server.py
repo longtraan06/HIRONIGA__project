@@ -44,6 +44,7 @@ Available models:
 "google/siglip2-so400m-patch16-naflex"
 "google/siglip2-giant-opt-patch16-384"
 """
+
 model_paths=[
     # "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
@@ -57,7 +58,7 @@ model_paths=[
 milvus = MilvusManager(host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths
-                        )
+                    )
 
 # clear cache method
 
