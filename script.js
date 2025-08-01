@@ -1640,8 +1640,8 @@ function loadMoreImages() {
             // Tạo phần tử ảnh (logic này giữ nguyên)
             const imageItem = document.createElement('div');
             imageItem.className = 'image-item';
-            const frameId = `frame-${image.id}`;
-            imageItem.setAttribute('data-frame-id', frameId);
+            const uniqueFrameId = image.frameIdentifier; // Sử dụng định danh duy nhất
+            imageItem.setAttribute('data-frame-id', uniqueFrameId); // Gán định danh duy nhất
             imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
             const scoreInfo = image.temporal_score
                 ? `T-Score: ${image.temporal_score.toFixed(4)}`
@@ -1666,7 +1666,7 @@ function loadMoreImages() {
                     
                     // Nếu nhấn Ctrl, cho phép chọn nhiều frame
                     if (event.ctrlKey) {
-                        frameSelectionManager.toggleSelection(frameId, {
+                            frameSelectionManager.toggleSelection(uniqueFrameId, { // Sử dụng định danh mới ở đây
                             id: image.id,
                             path: image.path,
                             element: imageItem,
@@ -1675,10 +1675,8 @@ function loadMoreImages() {
                     }
                     // Không nhấn Ctrl, chỉ chọn một frame
                     else {
-                        // Xóa tất cả chọn hiện tại
                         frameSelectionManager.clearAllSelections();
-                        // Chọn frame mới
-                        frameSelectionManager.selectFrame(frameId, {
+                        frameSelectionManager.selectFrame(uniqueFrameId, { // Và ở đây
                             id: image.id,
                             path: image.path,
                             element: imageItem,
@@ -2240,10 +2238,10 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                             const id = frameId.replace('frame-', '');
                             
                             frameSelectionManager.selectFrame(frameId, {
-                                id: id,
+                                id: frameIdentifier.split('_').pop(),
                                 path: path,
                                 element: item,
-                                data: {frameIdentifier: frameIdentifier} // Thông tin bổ sung có thể được lưu trữ ở đây
+                                data: { frameIdentifier: frameIdentifier, path: path } // Thông tin bổ sung có thể được lưu trữ ở đây
                             });
                         }
                     });
