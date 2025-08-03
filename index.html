@@ -29,26 +29,24 @@
                 </button>
                 <button id="ocrFilterBtn" class="header-btn" title="Enable/Disable OCR Filter (F1)">
                 <!-- Bạn có thể dùng một icon khác phù hợp hơn cho OCR, ví dụ icon scan text -->
-                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-scan-text">
-                    <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
-                    <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
-                    <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
-                    <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-                    <path d="M7 12h10"/>
-                    <path d="M7 9h10"/>
-                    <path d="M7 15h4"/>
-                </svg>
-            </button>
-                <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-languages-icon lucide-languages"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-scan-text"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/><path d="M7 9h10"/><path d="M7 15h4"/></svg>
                 </button>
 
                 <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F5)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags"><path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z"/><path d="M6 9.01V9"/><path d="m15 5 6.3 6.3a2.69 2.69 0 0 1 0 3.79L18.02 18"/><path d="m13.5 15.5 5-5"/></svg>
+                </button>            
+                <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-languages-icon lucide-languages"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
                 </button>
+
+
                 
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
+                </button>
+
+                <button id="vqaSubmitBtn" class="header-btn" title="VQA Submit (F10)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-square-plus"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
                 </button>
 
                 <button id="settingsBtn" class="header-btn" title="Settings (F9)">
@@ -97,7 +95,7 @@
                                 <input type="text" class="tag-input" placeholder="Enter tags">
                             </div> 
                             <div class="ocr-filter-container">
-                                <input type="text" class="ocr-input" placeholder="Filter by OCR text...">
+                                <input type="text" class="ocr-input" placeholder="Enter OCR">
                             </div>
                             <!-- Image upload area (hidden by default) -->
                             <div class="image-upload-area" style="display: none;">
@@ -280,5 +278,25 @@
             <!-- Các frame được chọn sẽ được thêm vào đây bằng JavaScript -->
         </div>
     </div>
+
+    <div id="vqaModal" class="vqa-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn">×</button>
+            <h3>VQA Submission</h3>
+            <form id="vqaForm">
+                <div class="form-group">
+                    <label for="vqaIdInput">ID</label>
+                    <input type="text" id="vqaIdInput" name="id" placeholder="Enter the ID" required>
+                </div>
+                <div class="form-group">
+                    <label for="vqaAnswerInput">Answer</label>
+                    <textarea id="vqaAnswerInput" name="answer" placeholder="Enter the answer" rows="3" required></textarea>
+                </div>
+                <button type="submit" class="submit-form-btn">Submit</button>
+            </form>
+        </div>
+    </div>
+
 </body>
 </html>
