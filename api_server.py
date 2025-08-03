@@ -23,6 +23,9 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
 from fastapi import WebSocket, WebSocketDisconnect 
 from typing import Dict, List
+from fastapi.middleware.cors import CORSMiddleware
+
+VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/vqa_results" 
 
 app = FastAPI()
 # Kết nối Redis
@@ -50,12 +53,12 @@ model_paths=[
     "google/siglip2-large-patch16-512",
     "google/siglip2-so400m-patch16-512",
     # "google/siglip2-so400m-patch16-naflex",
-    "google/siglip2-giant-opt-patch16-384", #->>>>>>>dmmm
+    "google/siglip2-giant-opt-patch16-384",
     # "google/siglip2-so400m-patch16-384"
-    
 ]
 
-milvus = MilvusManager(host="192.168.20.156",
+milvus = MilvusManager(
+                        host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths
                     )
@@ -401,6 +404,10 @@ class TextSearchRequest(BaseModel):
     tags_filter: Optional[List[str]] = None
     ocr: str = None
 
+class VqaSubmissionRequest(BaseModel):
+    id: str
+    answer: str
+
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
     try:
@@ -532,8 +539,11 @@ def check_video(video_name: str):
 @app.post("/api/search/text")
 @cache_result(expire_time=60)  # Cache 1 phút
 async def search_text(req: TextSearchRequest):
+    query_lower = req.query.lower()
+    lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+    lower_ocr = req.ocr.lower() if req.ocr else None
     results = milvus.search(
-        query=req.query,
+        query=query_lower,
         mode="text",
         search_in=req.search_in,
         top_k=min(req.top_k, 2000),  # Giới hạn top_k tối đa
@@ -541,8 +551,8 @@ async def search_text(req: TextSearchRequest):
         model_name=req.model_name,
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
         top_k_tags=req.top_k_tags,
-        tags_filter=req.tags_filter,
-        ocr = req.ocr
+        tags_filter=lower_tag,
+        ocr = lower_ocr
     )
     return process_milvus_results_for_frontend(results)
 
@@ -639,9 +649,12 @@ async def temporal_search_start(req: TemporalStartRequest):
         # 1. Tạo một ID duy nhất cho chuỗi tìm kiếm này
         chain_id = str(uuid.uuid4())
         
+        lower_query = req.query.lower() if req.query else ""
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+        lower_ocr = req.ocr.lower() if req.ocr else None
         # 2. Thực hiện tìm kiếm đầu tiên (Query A) với tham số start_temporal_chain=True
         initial_results = milvus.search(
-            query=req.query,
+            query=lower_query,
             mode="text",
             search_in="image",
             start_temporal_chain=True,
@@ -649,8 +662,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
-            tags_filter=req.tags_filter,
-            ocr = req.ocr
+            tags_filter=lower_tag,
+            ocr = lower_ocr
         )
         
         # 3. Lấy trạng thái temporal
@@ -718,15 +731,19 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         with milvus._lock:  # Sử dụng lock để tránh race condition
             milvus.temporal_state = saved_state
         
+        lower_query = req.query.lower() if req.query else ""
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+        lower_ocr = req.ocr.lower() if req.ocr else None
+
         # 4. Thực hiện temporal search sequence
         temporal_answer = milvus.temporal_search_sequence(
-            query=req.query,
+            query=lower_query,
             mode="text",
             top_k=min(req.top_k, 2000),
             use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
             top_k_tags=req.top_k_tags,
-            tags_filter=req.tags_filter,
-            ocr = req.ocr
+            tags_filter=lower_tag,
+            ocr = lower_ocr,
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
@@ -970,6 +987,44 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
     except WebSocketDisconnect:
         manager.disconnect(username)
+
+
+@app.post("/api/submit/vqa")
+async def handle_vqa_submission(submission: VqaSubmissionRequest):
+    """
+    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
+    Tên file sẽ là {id}.json.
+    """
+    try:
+        # Đảm bảo thư mục lưu trữ tồn tại
+        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
+        
+        # Tạo tên file an toàn từ ID
+        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid ID provided.")
+
+        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
+        
+        # Tạo dữ liệu để lưu
+        data_to_save = {
+            "id": submission.id,
+            "answer": submission.answer
+        }
+        
+        # Ghi file JSON
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
+            
+        return {
+            "success": True,
+            "message": "VQA submission saved successfully.",
+            "path": file_path
+        }
+
+    except Exception as e:
+        print(f"ERROR saving VQA submission: {e}")
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
 
 
 # Mount static files
