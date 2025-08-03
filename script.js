@@ -44,6 +44,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const clearQueueBtn = document.getElementById('clearQueueBtn');
     const queueCountSpan = document.getElementById('queueCount');
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
+
+    const vqaSubmitBtn = document.getElementById('vqaSubmitBtn');
+    const vqaModal = document.getElementById('vqaModal');
+    const vqaForm = document.getElementById('vqaForm');
+    const vqaIdInput = document.getElementById('vqaIdInput');
+    const vqaAnswerInput = document.getElementById('vqaAnswerInput');
+    const vqaCloseBtn = vqaModal.querySelector('.close-btn');
+    const vqaOverlay = vqaModal.querySelector('.modal-overlay');
     initializeEventListeners();
 
     // Initialize
@@ -212,6 +220,15 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (e.key === 'F9') {
                 e.preventDefault();
                 if (settingsBtn) settingsBtn.click(); // hoặc toggleSettingsMenu();
+            }
+            else if (e.key === 'F10') {
+                e.preventDefault();
+                // Nếu modal đang mở thì đóng lại, nếu không thì mở ra
+                if (vqaModal.classList.contains('visible')) {
+                    closeVqaModal();
+                } else {
+                    openVqaModal();
+                }
             }
             else if (e.altKey && e.key.toLowerCase() === 's') {
                 e.preventDefault(); 
@@ -448,7 +465,89 @@ document.addEventListener('DOMContentLoaded', function() {
         // Người dùng có thể click vào bất kỳ đâu trên header (trừ vùng actions) để thu nhỏ.
         queueHeader.addEventListener('click', toggleQueueDisplay);
 
+        const openVqaModal = () => {
+            vqaModal.style.display = 'flex';
+            setTimeout(() => {
+                vqaModal.classList.add('visible');
+                vqaIdInput.focus(); // Tự động focus vào ô ID
+            }, 10);
+        };
+        const closeVqaModal = () => {
+            vqaModal.classList.remove('visible');
+            setTimeout(() => {
+                vqaModal.style.display = 'none';
+                vqaForm.reset(); // Xóa nội dung trong form
+            }, 300);
+        };
+        async function submit_form(id, answer) {
+            console.log("Submitting VQA Data:", { id, answer });
+            try {
+                const response = await fetch('/api/submit/vqa', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ id, answer }),
+                });
 
+                const result = await response.json();
+
+                if (response.ok && result.success) {
+                    showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
+                } else {
+                    throw new Error(result.detail || 'Failed to submit.');
+                }
+
+            } catch (error) {
+                console.error('Submission Error:', error);
+                showToastNotification(`Error: ${error.message}`, 'error', 2000);
+            }
+        }
+
+        // Lắng nghe sự kiện click nút trên header
+        vqaSubmitBtn.addEventListener('click', openVqaModal);
+
+        // Lắng nghe sự kiện đóng modal
+        vqaCloseBtn.addEventListener('click', closeVqaModal);
+        vqaOverlay.addEventListener('click', closeVqaModal);
+        
+        // Lắng nghe sự kiện submit của form (khi nhấn Enter hoặc click nút Submit)
+        vqaForm.addEventListener('submit', function(e) {
+            e.preventDefault(); // Ngăn trình duyệt tải lại trang
+            const id = vqaIdInput.value.trim();
+            const answer = vqaAnswerInput.value.trim();
+
+            if (id && answer) {
+                submit_form(id, answer);
+                closeVqaModal(); // Đóng modal sau khi submit
+            } else {
+                showToastNotification('Please fill out both ID and Answer.', 'error');
+            }
+        });
+
+        vqaIdInput.addEventListener('keydown', function(e) {
+            // Nếu phím được nhấn là 'Enter'
+            if (e.key === 'Enter') {
+                // Ngăn hành vi mặc định của Enter (là submit form)
+                e.preventDefault(); 
+                // Chuyển focus xuống ô nhập Answer
+                vqaAnswerInput.focus();
+            }
+        });
+        // 2. Xử lý sự kiện nhấn Enter trên ô Answer
+        vqaAnswerInput.addEventListener('keydown', function(e) {
+            // Nếu phím được nhấn là 'Enter' VÀ người dùng KHÔNG giữ phím Shift
+            // (Điều này cho phép người dùng dùng Shift + Enter để xuống dòng nếu cần)
+            if (e.key === 'Enter' && !e.shiftKey) {
+                // Ngăn hành vi mặc định của Enter (là tạo một dòng mới trong textarea)
+                e.preventDefault(); 
+                
+                // Giả lập một cú click vào nút submit.
+                // Cách này sẽ kích hoạt sự kiện 'submit' của form một cách an toàn,
+                // đảm bảo mọi logic kiểm tra dữ liệu trong listener ở trên đều được chạy.
+                vqaForm.querySelector('.submit-form-btn').click();
+            }
+});
         // Tự động kích hoạt chế độ text-to-image khi trang tải xong
         setTimeout(function() {
             // Đã mặc định là text-to-image rồi, không cần kích hoạt nữa
