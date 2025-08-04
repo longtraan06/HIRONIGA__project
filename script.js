@@ -52,6 +52,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const vqaAnswerInput = document.getElementById('vqaAnswerInput');
     const vqaCloseBtn = vqaModal.querySelector('.close-btn');
     const vqaOverlay = vqaModal.querySelector('.modal-overlay');
+
+    const frameVqaModal = document.getElementById('frameVqaModal');
+    const frameVqaForm = document.getElementById('frameVqaForm');
+    const frameVqaIdInput = document.getElementById('frameVqaIdInput');
+    const frameVqaAnswerDisplay = document.getElementById('frameVqaAnswerDisplay');
+    const frameVqaCloseBtn = frameVqaModal.querySelector('.close-btn');
+    const frameVqaOverlay = frameVqaModal.querySelector('.modal-overlay');
+    let preparedAnswerData = null; // Biến tạm để lưu dữ liệu Answer
     initializeEventListeners();
 
     // Initialize
@@ -330,6 +338,36 @@ document.addEventListener('DOMContentLoaded', function() {
             const activeElement = document.activeElement;
             const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
+            if (e.key === 'Enter' && !isTyping && frameSelectionManager.getSelectionCount() > 0) {
+    
+                // Ngăn chặn các hành vi mặc định khác của phím Enter
+                e.preventDefault();
+
+                // Lấy thông tin các frame đã chọn
+                const selectedFrames = frameSelectionManager.getAllSelectedFrames();
+                
+                // *** THAY ĐỔI QUAN TRỌNG: Chỉ lấy 'frameIdentifier' từ mỗi frame ***
+                const allFrameIdentifiers = selectedFrames.map(frame => frame.data.frameIdentifier);
+
+                let answerData;
+
+                // Nếu chỉ có 1 frame, answer sẽ là một chuỗi string duy nhất
+                // if (allFrameIdentifiers.length === 1) {
+                //     answerData = allFrameIdentifiers[0];
+                // } else {
+                // // Nếu có nhiều frame, answer sẽ là một mảng các chuỗi string
+                //     answerData = allFrameIdentifiers;
+                // }
+                answerData = allFrameIdentifiers;
+
+                // Mở modal mới và truyền dữ liệu đã được đơn giản hóa vào
+                openFrameVqaModal(answerData);
+
+                // Bỏ chọn tất cả các frame sau khi mở modal
+                frameSelectionManager.clearAllSelections();
+                return; // Dừng lại để không chạy các logic khác của phím Enter
+            }
+
             // Chỉ xử lý nếu có frame được chọn trong queue và không đang gõ chữ
             if (selectedQueueFrame && !isTyping) {
                 const frameId = selectedQueueFrame.dataset.frameId;
@@ -482,21 +520,44 @@ document.addEventListener('DOMContentLoaded', function() {
         async function submit_form(id, answer) {
             console.log("Submitting VQA Data:", { id, answer });
             try {
-                const response = await fetch('/api/submit/vqa', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ id, answer }),
-                });
+                if(Array.isArray(answer)){
+                    const response = await fetch('/api/submit/frame', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ id, answer }),
+                    });
+                    const result = await response.json();
 
-                const result = await response.json();
-
-                if (response.ok && result.success) {
-                    showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
+                    if (response.ok && result.success) {
+                        showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
+                    } else {
+                        throw new Error(result.detail || 'Failed to submit.');
+                    }
                 } else {
-                    throw new Error(result.detail || 'Failed to submit.');
+                    const response = await fetch('/api/submit/vqa', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ id, answer }),
+                    });
+                    const result = await response.json();
+
+                    if (response.ok && result.success) {
+                        showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
+                    } else {
+                        throw new Error(result.detail || 'Failed to submit.');
+                    }
                 }
+                // const result = await response.json();
+
+                // if (response.ok && result.success) {
+                //     showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
+                // } else {
+                //     throw new Error(result.detail || 'Failed to submit.');
+                // }
 
             } catch (error) {
                 console.error('Submission Error:', error);
@@ -536,19 +597,54 @@ document.addEventListener('DOMContentLoaded', function() {
         });
         // 2. Xử lý sự kiện nhấn Enter trên ô Answer
         vqaAnswerInput.addEventListener('keydown', function(e) {
-            // Nếu phím được nhấn là 'Enter' VÀ người dùng KHÔNG giữ phím Shift
-            // (Điều này cho phép người dùng dùng Shift + Enter để xuống dòng nếu cần)
             if (e.key === 'Enter' && !e.shiftKey) {
-                // Ngăn hành vi mặc định của Enter (là tạo một dòng mới trong textarea)
                 e.preventDefault(); 
-                
-                // Giả lập một cú click vào nút submit.
-                // Cách này sẽ kích hoạt sự kiện 'submit' của form một cách an toàn,
-                // đảm bảo mọi logic kiểm tra dữ liệu trong listener ở trên đều được chạy.
                 vqaForm.querySelector('.submit-form-btn').click();
             }
-});
-        // Tự động kích hoạt chế độ text-to-image khi trang tải xong
+        });
+
+        const openFrameVqaModal = (answerData) => {
+            // Lưu dữ liệu answer vào biến tạm
+            preparedAnswerData = answerData;
+            // Hiển thị dữ liệu JSON một cách đẹp mắt trong thẻ <pre>
+            frameVqaAnswerDisplay.textContent = JSON.stringify(answerData, null, 2);
+
+            // Mở modal
+            frameVqaModal.style.display = 'flex';
+            setTimeout(() => {
+                frameVqaModal.classList.add('visible');
+                frameVqaIdInput.focus(); // Tự động focus vào ô ID
+            }, 10);
+        };
+
+        const closeFrameVqaModal = () => {
+            frameVqaModal.classList.remove('visible');
+            setTimeout(() => {
+                frameVqaModal.style.display = 'none';
+                frameVqaForm.reset(); // Xóa nội dung
+                preparedAnswerData = null; // Reset biến tạm
+            }, 300);
+        };
+
+        // Đóng modal khi click nút X hoặc overlay
+        frameVqaCloseBtn.addEventListener('click', closeFrameVqaModal);
+        frameVqaOverlay.addEventListener('click', closeFrameVqaModal);
+
+        // Xử lý submit form
+        frameVqaForm.addEventListener('submit', function(e) {
+            e.preventDefault(); // Ngăn submit mặc định
+            const id = frameVqaIdInput.value.trim();
+
+            // Kiểm tra xem ID đã được nhập và dữ liệu Answer đã sẵn sàng chưa
+            if (id && preparedAnswerData) {
+                // Tận dụng hàm submit_form đã có!
+                submit_form(id, preparedAnswerData);
+                closeFrameVqaModal();
+            } else {
+                showToastNotification('Please enter an ID.', 'error');
+            }
+        });
+
         setTimeout(function() {
             // Đã mặc định là text-to-image rồi, không cần kích hoạt nữa
             
@@ -863,21 +959,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-
-    // async function translateText(text, sourceLang = "vi", targetLang = "en") {
-    //     if (!text) return ' ';
-    //     const url = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${sourceLang}&tl=${targetLang}&dt=t&q=${encodeURIComponent(text)}`;
-    //     try {
-    //         const response = await fetch(url);
-    //         const data = await response.json();
-    //         console.log("Translation response:", data);
-    //         return data[0].map(item => item[0]).join('');
-    //     } catch (error) {
-    //         console.error('Translation error:', error);
-    //         return text; // Trả về văn bản gốc nếu có lỗi
-    //     }
-    // }
-
     async function translateText(text, sourceLang = 'vi', targetLang = 'en', apiKey = 'AIzaSyCYrbDzXcdf0ENylmW9JZ2ulMGhLSn0XOw') {
         if (!text || typeof text !== "string") return '';
 
