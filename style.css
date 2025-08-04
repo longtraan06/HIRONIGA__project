@@ -1644,3 +1644,17 @@ button:focus, input:focus, textarea:focus {
     transform: translateY(-2px);
     box-shadow: var(--shadow-medium);
 }
+
+#frameVqaAnswerDisplay {
+    background-color: var(--matcha-pale);
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    padding: 10px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: var(--matcha-dark);
+    max-height: 200px; /* Giới hạn chiều cao */
+    overflow-y: auto;   /* Thêm thanh cuộn khi nội dung quá dài */
+    white-space: pre-wrap; /* Đảm bảo xuống dòng */
+    word-break: break-all;
+}
