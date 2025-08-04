@@ -46,7 +46,7 @@
                 </button>
 
                 <button id="vqaSubmitBtn" class="header-btn" title="VQA Submit (F10)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-square-plus"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-send-icon lucide-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
                 </button>
 
                 <button id="settingsBtn" class="header-btn" title="Settings (F9)">
@@ -245,6 +245,17 @@
                     <span class="shortcut-key">Enter</span>
                 </div>
             </div>
+            <h3>Form Submit</h3>
+            <div class="shortcuts-list">
+                 <div class="shortcut-item">
+                    <span class="shortcut-description">VQA Submit</span>
+                    <span class="shortcut-key">F10</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Frame/MultiFrame Submit</span>
+                    <span class="shortcut-key">Select + Enter</span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -297,6 +308,23 @@
             </form>
         </div>
     </div>
-
+    <div id="frameVqaModal" class="vqa-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn">×</button>
+            <h3>Submit Frame Info with ID</h3>
+            <form id="frameVqaForm">
+                <div class="form-group">
+                    <label for="frameVqaIdInput">ID</label>
+                    <input type="text" id="frameVqaIdInput" name="id" placeholder="Enter the ID and press Enter to submit" required>
+                </div>
+                <div class="form-group">
+                    <label>Answer (Auto-generated from selected frames)</label>
+                    <!-- Dùng thẻ <pre> để hiển thị JSON đẹp hơn và có thể cuộn -->
+                    <pre id="frameVqaAnswerDisplay"></pre>
+                </div>
+            </form>
+        </div>
+    </div>
 </body>
 </html>
