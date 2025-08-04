@@ -25,7 +25,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
 
-VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/vqa_results" 
+VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
 
 app = FastAPI()
 # Kết nối Redis
@@ -407,6 +407,10 @@ class TextSearchRequest(BaseModel):
 class VqaSubmissionRequest(BaseModel):
     id: str
     answer: str
+
+class FrameSubmissionRequest(BaseModel):
+    id: str
+    answer: Optional[List[str]] = None
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -1025,6 +1029,43 @@ async def handle_vqa_submission(submission: VqaSubmissionRequest):
     except Exception as e:
         print(f"ERROR saving VQA submission: {e}")
         raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
+@app.post("/api/submit/frame")
+async def handle_vqa_submission(submission: FrameSubmissionRequest):
+    """
+    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
+    Tên file sẽ là {id}.json.
+    """
+    try:
+        # Đảm bảo thư mục lưu trữ tồn tại
+        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
+        
+        # Tạo tên file an toàn từ ID
+        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
+        if not safe_filename:
+            raise HTTPException(status_code=400, detail="Invalid ID provided.")
+
+        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
+        
+        # Tạo dữ liệu để lưu
+        data_to_save = {
+            "id": submission.id,
+            "answer": submission.answer
+        }
+        
+        # Ghi file JSON
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
+            
+        return {
+            "success": True,
+            "message": "Frame submission saved successfully.",
+            "path": file_path
+        }
+
+    except Exception as e:
+        print(f"ERROR saving Frame submission: {e}")
+        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
+
 
 
 # Mount static files
