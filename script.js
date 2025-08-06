@@ -11,6 +11,12 @@ document.addEventListener('DOMContentLoaded', function() {
     let submitQueueFrames = new Map();
     let isOcrFilterEnabled = false;
     
+    const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
+    const DEFAULT_DRES_SESSION_ID = 'tfGPKdKa2Qf2mfrsNK_oMFWYorZkz-0r'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+
+    let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
+    let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
+
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
 
@@ -59,6 +65,16 @@ document.addEventListener('DOMContentLoaded', function() {
     const frameVqaAnswerDisplay = document.getElementById('frameVqaAnswerDisplay');
     const frameVqaCloseBtn = frameVqaModal.querySelector('.close-btn');
     const frameVqaOverlay = frameVqaModal.querySelector('.modal-overlay');
+
+    const submitAsQaBtn = document.getElementById('submitAsQaBtn');
+    const submitAsKisBtn = document.getElementById('submitAsKisBtn');
+
+    const qaInputModal = document.getElementById('qaInputModal');
+    const qaInputForm = document.getElementById('qaInputForm');
+    const qaAnswerTextInput = document.getElementById('qaAnswerTextInput');
+    const qaInputModalCloseBtn = qaInputModal.querySelector('.close-btn');
+    const qaInputModalOverlay = qaInputModal.querySelector('.modal-overlay');
+
     let preparedAnswerData = null; // Biến tạm để lưu dữ liệu Answer
     initializeEventListeners();
 
@@ -386,24 +402,24 @@ document.addEventListener('DOMContentLoaded', function() {
                         selectedQueueFrame = null;
                         break;
                     
-                    case 'enter':
-                        e.preventDefault();
-                        const submit = (identifier) => {
-                            console.log("=== SUBMITTING FRAME ===");
-                            console.log("Frame Identifier:", identifier);
-                            showToastNotification(`Frame submitted: ${identifier}`, 'success');
-                        };
+                    // case 'enter':
+                    //     e.preventDefault();
+                    //     const submit = (identifier) => {
+                    //         console.log("=== SUBMITTING FRAME ===");
+                    //         console.log("Frame Identifier:", identifier);
+                    //         showToastNotification(`Frame submitted: ${identifier}`, 'success');
+                    //     };
 
 
 
-                        submit(frameId);
+                    //     submit(frameId);
 
 
 
-                        // Bỏ chọn sau khi submit
-                        selectedQueueFrame.classList.remove('selected');
-                        selectedQueueFrame = null;
-                        break;
+                    //     // Bỏ chọn sau khi submit
+                    //     selectedQueueFrame.classList.remove('selected');
+                    //     selectedQueueFrame = null;
+                    //     break;
 
                     // <<< THÊM MỚI: Mở modal keyframe lân cận >>>
                     case 'f':
@@ -458,25 +474,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 submitQueueFramesContainer.scrollLeft += e.deltaY;
             }
         });
-
-        // <<< THÊM MỚI: Listener cho nút Submit All >>>
-        const submitAllBtn = document.getElementById('submitAllBtn');
-        submitAllBtn.addEventListener('click', () => {
-            if (submitQueueFrames.size === 0) {
-                showToastNotification("Queue is empty.", "error");
-                return;
-            }
-            
-            const allIdentifiers = Array.from(submitQueueFrames.keys());
-            console.log("=== SUBMITTING ALL FRAMES ===");
-            console.log(allIdentifiers);
-
-            // Gọi hàm submit cho từng frame
-            // allIdentifiers.forEach(id => submit(id)); // Bỏ comment khi có hàm submit thật
-            
-            showToastNotification(`Submitting ${allIdentifiers.length} frames...`, 'success');
-        });
-
     const toggleQueueBtn = document.getElementById('toggleQueueBtn');
         const queueHeader = document.querySelector('.submit-queue-header');
 
@@ -662,6 +659,253 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
     
+function getQaAnswerFromModal() {
+        return new Promise((resolve, reject) => {
+            // Mở modal
+            qaInputModal.style.display = 'flex';
+            setTimeout(() => {
+                qaInputModal.classList.add('visible');
+                qaAnswerTextInput.focus(); // Tự động focus vào ô input
+            }, 10);
+
+            // Hàm để đóng modal và dọn dẹp
+            const closeModal = (reason = 'closed') => {
+                qaInputModal.classList.remove('visible');
+                setTimeout(() => {
+                    qaInputModal.style.display = 'none';
+                    qaInputForm.reset(); // Xóa nội dung trong form
+                    // Gỡ bỏ các event listener để tránh rò rỉ bộ nhớ
+                    qaInputForm.onsubmit = null;
+                    qaInputModalCloseBtn.onclick = null;
+                    qaInputModalOverlay.onclick = null;
+                    if (reason === 'closed') {
+                        reject('Modal closed by user.'); // Từ chối promise nếu đóng
+                    }
+                }, 300);
+            };
+
+            // Gán sự kiện cho nút đóng và vùng nền
+            qaInputModalCloseBtn.onclick = () => closeModal();
+            qaInputModalOverlay.onclick = () => closeModal();
+
+            // Xử lý khi form được submit
+            qaInputForm.onsubmit = (e) => {
+                e.preventDefault();
+                const answerText = qaAnswerTextInput.value.trim();
+                if (answerText) {
+                    resolve(answerText); // Giải quyết promise với text
+                    closeModal('submitted'); // Đóng modal sau khi submit
+                }
+            };
+        });
+    }
+
+
+function updateSubmitButtonStates() {
+        const selectionCount = selectedQueueFrameIds.size;
+        
+        // Luôn tắt nút KIS nếu không có lựa chọn
+        submitAsKisBtn.disabled = selectionCount === 0;
+        
+        // Chỉ bật nút QA khi có đúng 1 lựa chọn
+        submitAsQaBtn.disabled = selectionCount !== 1;
+    }
+
+    // Xử lý việc chọn/bỏ chọn frame trong queue
+    submitQueueContainer.addEventListener('click', (e) => {
+        const frameItem = e.target.closest('.queue-frame-item');
+        if (!frameItem) return; // Bỏ qua nếu không click vào frame
+
+        const frameId = frameItem.dataset.frameId;
+        const removeBtn = e.target.closest('.remove-queue-item-btn');
+
+        if (removeBtn) {
+            // Logic xóa frame (đã có từ trước)
+            const frameData = submitQueueFrames.get(frameId);
+            if (frameData) {
+                sendWebSocketMessage('remove_frame', frameData);
+                selectedQueueFrameIds.delete(frameId); // Xóa khỏi danh sách chọn nếu nó đang được chọn
+            }
+        } else {
+            // Logic chọn frame (MỚI)
+            if (e.ctrlKey) { // Giữ Ctrl để chọn nhiều
+                if (selectedQueueFrameIds.has(frameId)) {
+                    selectedQueueFrameIds.delete(frameId);
+                    frameItem.classList.remove('selected');
+                } else {
+                    selectedQueueFrameIds.add(frameId);
+                    frameItem.classList.add('selected');
+                }
+            } else { // Click chuột thường
+                // Bỏ chọn tất cả
+                document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
+                selectedQueueFrameIds.clear();
+                // Chọn frame mới
+                selectedQueueFrameIds.add(frameId);
+                frameItem.classList.add('selected');
+            }
+        }
+        updateSubmitButtonStates(); // Cập nhật trạng thái nút sau mỗi lần thay đổi lựa chọn
+    });
+
+    // Gán sự kiện cho nút Submit as KIS
+    submitAsKisBtn.addEventListener('click', async () => {
+        const selectedFrames = Array.from(selectedQueueFrameIds).map(id => submitQueueFrames.get(id));
+        const success = await submitToDres(selectedFrames, 'KIS');
+        if (success) {
+            // Nếu thành công, xóa các frame đã submit khỏi queue
+            selectedFrames.forEach(frameData => {
+                sendWebSocketMessage('remove_frame', frameData);
+            });
+            selectedQueueFrameIds.clear();
+            updateSubmitButtonStates();
+        }
+    });
+
+    // Gán sự kiện cho nút Submit as QA
+    submitAsQaBtn.addEventListener('click', async () => {
+        try {
+            // Gọi hàm mở modal và đợi người dùng nhập câu trả lời
+            const answerText = await getQaAnswerFromModal();
+            
+            // Nếu promise được giải quyết (người dùng đã submit), tiếp tục xử lý
+            const selectedFrames = Array.from(selectedQueueFrameIds).map(id => submitQueueFrames.get(id));
+            const success = await submitToDres(selectedFrames, 'QA', answerText);
+
+            if (success){
+                // Nếu thành công, xóa frame đã submit khỏi queue
+                selectedFrames.forEach(frameData => {
+                    sendWebSocketMessage('remove_frame', frameData);
+                });
+                selectedQueueFrameIds.clear();
+                updateSubmitButtonStates();
+            }
+        } catch (error) {
+            // Nếu promise bị từ chối (người dùng đóng modal), log ra console
+            // Hoặc bạn có thể hiển thị một toast notification nhỏ
+            console.log("QA submission canceled:", error);
+            showToastNotification("QA submission canceled.", "error");
+        }
+    });
+
+
+async function ensureDresPrerequisites() {
+        // Nếu đã có evaluationId, không cần làm gì cả.
+        if (dresEvaluationId) {
+            return true;
+        }
+
+        // Kiểm tra xem session id mặc định đã được đặt chưa.
+        if (!DEFAULT_DRES_SESSION_ID || DEFAULT_DRES_SESSION_ID === 'YOUR_SESSION_ID_HERE') {
+            showToastNotification("Default DRES Session ID is not set in the code.", "error");
+            return false;
+        }
+
+        try {
+            showToastNotification("Fetching DRES evaluation list...", "success");
+            const evalResponse = await fetch(`http://192.168.28.151:5000/api/v2/client/evaluation/list?session=${DEFAULT_DRES_SESSION_ID}`);
+
+            if (!evalResponse.ok) {
+                throw new Error(`Failed to get evaluation list: ${evalResponse.statusText}`);
+            }
+            const evalList = await evalResponse.json();
+            
+            // Tìm evaluation đang hoạt động
+            const activeEvaluation = evalList.find(e => e.status === 'ACTIVE');
+            if (!activeEvaluation) {
+                throw new Error("No active evaluation found in DRES.");
+            }
+
+            dresEvaluationId = activeEvaluation.id;
+            showToastNotification(`Active evaluation set: ${activeEvaluation.name}`, "success");
+            return true;
+
+        } catch (error) {
+            console.error("DRES Prerequisites Error:", error);
+            showToastNotification(error.message, "error", 3000);
+            dresEvaluationId = null; // Reset lại để lần sau thử lại
+            return false;
+        }
+    }
+
+    /**
+     * Hàm submit chính, có khả năng gửi cả KIS và QA.
+     * @param {Array<Object>} framesToSubmit - Mảng các đối tượng frame được chọn.
+     * @param {'KIS' | 'QA'} submissionType - Loại submit.
+     * @param {string} [qaText=''] - Văn bản trả lời cho loại QA.
+     */
+    async function submitToDres(framesToSubmit, submissionType, qaText = '') {
+        if (!framesToSubmit || framesToSubmit.length === 0) return false;
+
+        // Đảm bảo đã có evaluationID.
+        const isReady = await ensureDresPrerequisites();
+        if (!isReady) {
+            showToastNotification("Submission failed. Could not prepare DRES session.", "error");
+            return false;
+        }
+
+        let submissionBody = {};
+
+        try {
+            if (submissionType === 'KIS') {
+                let answers;
+                if (framesToSubmit.length === 1) {
+                    // Trường hợp 1 frame
+                    const frame = framesToSubmit[0];
+                    const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / DRES_FPS) * 1000);
+                    console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
+                    answers = [{ mediaItemName: frame.videoName, start: timeMs, end: timeMs }];
+                } else {
+                    // Trường hợp nhiều frame
+                    const firstVideoName = framesToSubmit[0].videoName;
+                    if (!framesToSubmit.every(f => f.videoName === firstVideoName)) {
+                        throw new Error("Please select frames from the same video for KIS submission.");
+                    }
+                    const frameIds = framesToSubmit.map(f => parseInt(f.frame_id_ori, 10));
+                    const minTimeMs = Math.round((Math.min(...frameIds) / DRES_FPS) * 1000);
+                    const maxTimeMs = Math.round((Math.max(...frameIds) / DRES_FPS) * 1000);
+                    console.log("frame id:", frame.frame_id_ori, "timeMs:", minTimeMs, maxTimeMs);
+                    answers = [{ mediaItemName: firstVideoName, start: minTimeMs, end: maxTimeMs }];
+                }
+                console.log("Final answers for KIS submission:", answers);
+                submissionBody = { answerSets: [{ answers: answers }] };
+
+            } else if (submissionType === 'QA') {
+                if (framesToSubmit.length !== 1) throw new Error("QA submission only supports a single frame.");
+                const frame = framesToSubmit[0];
+                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / DRES_FPS) * 1000);
+                console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
+                const finalText = `${qaText}-${frame.videoName}-${timeMs}`;
+                console.log("Final text for QA submission:", finalText);
+                submissionBody = { answerSets: [{ answers: [{ text: finalText }] }] };
+
+            } else {
+                throw new Error("Invalid submission type.");
+            }
+
+            const submitUrl = `http://192.168.28.151:5000/api/v2/submit/${dresEvaluationId}?session=${DEFAULT_DRES_SESSION_ID}`;
+            showToastNotification(`Submitting as ${submissionType}...`, "success");
+
+            const response = await fetch(submitUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(submissionBody)
+            });
+
+            if (response.ok) {
+                showToastNotification("Submission to DRES successful!", "success", 2000);
+                return true;
+            } else {
+                const errorText = await response.text();
+                throw new Error(`Submission failed: ${response.status} - ${errorText}`);
+            }
+        } catch (error) {
+            console.error("DRES Submission Error:", error);
+            showToastNotification(error.message, "error", 4000);
+            return false;
+        }
+    }
+
 
 // quan ly nguoi dung
     function getUsername() {
