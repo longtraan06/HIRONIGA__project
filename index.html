@@ -277,8 +277,11 @@
             </button>
             <div class="queue-actions">
                 <span id="queueCount" class="queue-count">0 frames</span>
-                <button id="submitAllBtn" class="queue-action-btn submit-btn" title="Submit All Frames in Queue">
-                    <i class="fas fa-paper-plane"></i> Submit All
+                <button id="submitAsQaBtn" class="queue-action-btn" title="Submit selected frame as QA" disabled>
+                    <i class="fas fa-question-circle"></i> Submit as QA
+                </button>
+                <button id="submitAsKisBtn" class="queue-action-btn" title="Submit selected frame(s) as KIS" disabled>
+                    <i class="fas fa-film"></i> Submit as KIS
                 </button>
                 <button id="clearQueueBtn" class="queue-action-btn" title="Clear All Frames">
                     <i class="fas fa-trash"></i> Clear All
@@ -326,5 +329,22 @@
             </form>
         </div>
     </div>
+
+    <div id="qaInputModal" class="mini-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn">×</button>
+            <h3>Enter QA Answer</h3>
+            <p>Your answer will be combined with the selected frame's info.</p>
+            <form id="qaInputForm">
+                <div class="form-group">
+                    <label for="qaAnswerTextInput">Answer Text</label>
+                    <input type="text" id="qaAnswerTextInput" name="answerText" placeholder="Enter your text answer here" required>
+                </div>
+                <button type="submit" class="submit-form-btn">Submit QA</button>
+            </form>
+        </div>
+    </div>
+
 </body>
 </html>
