@@ -2674,8 +2674,9 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 // }
 
                 const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                console.log('Selected frame for semantic search:', selectedFrame.path);
                 const imagePath = selectedFrame.path; // Lấy đường dẫn ảnh của frame đã chọn
-
+                console.log('Selected frame path:', imagePath);
                 if (!imagePath) {
                     showToastNotification('Cannot perform search: image path is missing.', 'error');
                     return;
