@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let isTagFilterEnabled = false;
     let submitQueueFrames = new Map();
     let isOcrFilterEnabled = false;
-    
+    let lastClickedFrameId = null;
     const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
     const DEFAULT_DRES_SESSION_ID = 'tfGPKdKa2Qf2mfrsNK_oMFWYorZkz-0r'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
 
@@ -314,40 +314,6 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        let selectedQueueFrame = null; // Biến để theo dõi frame nào đang được chọn trong queue
-    
-        // Sử dụng event delegation cho toàn bộ container của queue
-        submitQueueContainer.addEventListener('click', (e) => {
-            const frameItem = e.target.closest('.queue-frame-item');
-            const removeBtn = e.target.closest('.remove-queue-item-btn');
-
-            if (removeBtn) {
-                // Logic xóa frame (đã có ở lần trước)
-                const frameId = frameItem.dataset.frameId;
-                const frameData = submitQueueFrames.get(frameId);
-                if (frameData) {
-                    sendWebSocketMessage('remove_frame', frameData);
-                }
-                return; // Dừng lại để không xử lý việc chọn
-            }
-
-            if (frameItem) {
-                // Logic chọn frame
-                // Bỏ chọn frame đang được chọn cũ
-                if (selectedQueueFrame) {
-                    selectedQueueFrame.classList.remove('selected');
-                }
-
-                // Nếu click vào frame đang được chọn -> bỏ chọn nó
-                if (selectedQueueFrame === frameItem) {
-                    selectedQueueFrame = null;
-                } else {
-                    // Chọn frame mới
-                    frameItem.classList.add('selected');
-                    selectedQueueFrame = frameItem;
-                }
-            }
-        });
 
         // Thêm listener cho phím tắt khi tương tác với queue
         document.addEventListener('keydown', (e) => {
@@ -719,16 +685,38 @@ function updateSubmitButtonStates() {
         const frameId = frameItem.dataset.frameId;
         const removeBtn = e.target.closest('.remove-queue-item-btn');
 
+        // Ưu tiên xử lý nút xóa
         if (removeBtn) {
-            // Logic xóa frame (đã có từ trước)
             const frameData = submitQueueFrames.get(frameId);
             if (frameData) {
                 sendWebSocketMessage('remove_frame', frameData);
                 selectedQueueFrameIds.delete(frameId); // Xóa khỏi danh sách chọn nếu nó đang được chọn
             }
-        } else {
-            // Logic chọn frame (MỚI)
-            if (e.ctrlKey) { // Giữ Ctrl để chọn nhiều
+        }
+        // Logic chọn frame
+        else {
+            const allFrames = Array.from(submitQueueFramesContainer.querySelectorAll('.queue-frame-item'));
+            const clickedIndex = allFrames.findIndex(f => f.dataset.frameId === frameId);
+
+            // --- Logic MỚI: Xử lý Shift + Click ---
+            if (e.shiftKey && lastClickedFrameId) {
+                const lastClickedIndex = allFrames.findIndex(f => f.dataset.frameId === lastClickedFrameId);
+                
+                const start = Math.min(clickedIndex, lastClickedIndex);
+                const end = Math.max(clickedIndex, lastClickedIndex);
+
+                // Bỏ chọn tất cả trước khi chọn khoảng mới
+                document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
+                selectedQueueFrameIds.clear();
+                
+                for (let i = start; i <= end; i++) {
+                    const id = allFrames[i].dataset.frameId;
+                    selectedQueueFrameIds.add(id);
+                    allFrames[i].classList.add('selected');
+                }
+            } 
+            // --- Logic đã có: Xử lý Ctrl + Click ---
+            else if (e.ctrlKey) {
                 if (selectedQueueFrameIds.has(frameId)) {
                     selectedQueueFrameIds.delete(frameId);
                     frameItem.classList.remove('selected');
@@ -736,7 +724,9 @@ function updateSubmitButtonStates() {
                     selectedQueueFrameIds.add(frameId);
                     frameItem.classList.add('selected');
                 }
-            } else { // Click chuột thường
+            } 
+            // --- Logic đã có: Xử lý Click thường ---
+            else {
                 // Bỏ chọn tất cả
                 document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
                 selectedQueueFrameIds.clear();
@@ -744,8 +734,17 @@ function updateSubmitButtonStates() {
                 selectedQueueFrameIds.add(frameId);
                 frameItem.classList.add('selected');
             }
+
+            // Cập nhật frame được click cuối cùng (nếu không phải là Ctrl+Click để bỏ chọn)
+            if (!e.ctrlKey || selectedQueueFrameIds.has(frameId)) {
+                lastClickedFrameId = frameId;
+            } else if (lastClickedFrameId === frameId) {
+                lastClickedFrameId = null; // Reset nếu bỏ chọn frame cuối cùng
+            }
         }
-        updateSubmitButtonStates(); // Cập nhật trạng thái nút sau mỗi lần thay đổi lựa chọn
+        
+        // Cập nhật trạng thái các nút submit sau mỗi lần thay đổi
+        updateSubmitButtonStates(); 
     });
 
     // Gán sự kiện cho nút Submit as KIS
