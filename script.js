@@ -14,6 +14,8 @@ document.addEventListener('DOMContentLoaded', function() {
     const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
     const DEFAULT_DRES_SESSION_ID = 'tfGPKdKa2Qf2mfrsNK_oMFWYorZkz-0r'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
 
+    let isRestoringState = false;
+
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
 
@@ -112,6 +114,25 @@ document.addEventListener('DOMContentLoaded', function() {
             switchSearchMode('image-to-image');
         });
         
+        window.addEventListener('popstate', (event) => {
+            // Chỉ xử lý nếu có state hợp lệ do chúng ta tạo ra
+            if (event.state && event.state.description === 'AIC_LUNCH_SEARCH') {
+                // Đặt cờ để hàm restore không đẩy state mới vào history
+                isRestoringState = true;
+                
+                restoreStateFromHistory(event.state).finally(() => {
+                    // Sau khi khôi phục xong, reset cờ
+                    isRestoringState = false;
+                });
+            } else {
+                // Nếu người dùng back về trạng thái ban đầu (không có state),
+                // có thể xóa kết quả để giao diện sạch sẽ.
+                contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
+                searchInputsContainer.innerHTML = '';
+                createNewSearchInput(); // Tạo lại một thanh tìm kiếm trống
+            }
+        });
+
         ocrFilterBtn.addEventListener('click', function() {
             const activeElement = document.activeElement;
             if (activeElement && activeElement.classList.contains('search-input')) {
@@ -1581,66 +1602,98 @@ async function ensureDresPrerequisites() {
     }
     
     async function performSearch(query, type, searchGroup) {
-        // resetTagFiltering();
-        if ((type === 'text' && !query.trim()) || (type === 'image' && !query)) {
-            return;
-        }
+    if ((type === 'text' && !query.trim()) || (type === 'image' && !query)) {
+        return;
+    }
 
-        showLoadingIndicator();
+    showLoadingIndicator();
 
+    try {
         const translationDisplay = searchGroup.querySelector('.translated-query-display');
-
         let finalQuery = query;
+
         if (isTranslationEnabled && type === 'text') {
-            // --- BẮT ĐẦU PHẦN CẬP NHẬT ---
-            const startTime = performance.now(); // Ghi lại thời điểm bắt đầu
-
-            try {
-                finalQuery = await translateText(query);
-                
-                const endTime = performance.now(); // Ghi lại thời điểm kết thúc
-                const duration = ((endTime - startTime) / 1000).toFixed(2); // Tính toán và làm tròn đến 2 chữ số thập phân
-
-                if (translationDisplay) {
-                    // Hiển thị cả kết quả dịch và thời gian dịch
-                    translationDisplay.innerHTML = `Searching for: "<strong>${finalQuery}</strong>" <em>(Translated in ${duration}s)</em>`;
-                    translationDisplay.classList.add('visible');
-                }
-
-            } catch (error) {
-                console.error("Translation failed, using original query.", error);
-                if (translationDisplay) {
-                    translationDisplay.textContent = `Translation failed. Searching for original text.`;
-                    translationDisplay.classList.add('visible');
-                }
-                finalQuery = query;
-            }
-            // --- KẾT THÚC PHẦN CẬP NHẬT ---
-        } else {
+            finalQuery = await translateText(query);
             if (translationDisplay) {
-                translationDisplay.classList.remove('visible');
+                translationDisplay.innerHTML = `Searching for: "<strong>${finalQuery}</strong>"`;
+                translationDisplay.classList.add('visible');
             }
+        } else if (translationDisplay) {
+            translationDisplay.classList.remove('visible');
         }
+
+        let searchPromise;
         if (type === 'text') {
             if (currentSearchMode === 'text-to-image') {
-                handleTextToImageSearch(finalQuery, searchGroup);
+                // Tách riêng logic temporal search
+                const isFirstSearch = !searchGroup.previousElementSibling;
+                if (isFirstSearch) {
+                     searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, searchGroup)
+                        .then(response => {
+                            temporalChainId = response.chain_id; // Cập nhật chain_id
+                            handleSearchResults(response.initial_results, false);
+                            manageNextSearchInput();
+                        });
+                } else if (temporalChainId) {
+                    searchPromise = callTemporalSearchContinue(finalQuery, temporalChainId, searchGroup)
+                        .then(response => {
+                             handleSearchResults(response.query_A_reranked, true);
+                             manageNextSearchInput();
+                        });
+                } else {
+                    searchPromise = callTextToImageAPI(finalQuery, currentSelectedModel, searchGroup)
+                        .then(results => {
+                            handleSearchResults(results, false);
+                            manageNextSearchInput();
+                        });
+                }
             } else if (currentSearchMode === 'text-to-text') {
-                callTextToTextAPI(finalQuery)
+                searchPromise = callTextToTextAPI(finalQuery)
                     .then(results => {
                         handleSearchResults(results, false);
                         manageNextSearchInput();
-                    })
-                    .catch(handleSearchError);
+                    });
             }
         } else if (type === 'image' && currentSearchMode === 'image-to-image') {
-            // Tìm kiếm bằng ảnh không thay đổi
-            callImageToImageAPI(query, currentSelectedModel)
-                .then(results => handleSearchResults(results, false))
-                .catch(handleSearchError);
+            // *** BẮT ĐẦU THAY ĐỔI ***
+            let imageFilePromise;
+
+            if (typeof query === 'string') {
+                // TRƯỜNG HỢP 1: Semantic search (query là một đường dẫn URL)
+                // Chúng ta cần chuyển URL thành một đối tượng File
+                imageFilePromise = fetch(query)
+                    .then(response => response.blob())
+                    .then(blob => new File([blob], "semantic_search_image.jpg", { type: blob.type }));
+            } else {
+                // TRƯỜNG HỢP 2: Tải ảnh lên (query đã là một đối tượng File)
+                imageFilePromise = Promise.resolve(query);
+            }
+
+            // `searchPromise` sẽ đợi cho đến khi có File object
+            searchPromise = imageFilePromise.then(imageFile => {
+                return callImageToImageAPI(imageFile, currentSelectedModel)
+                    .then(results => handleSearchResults(results, false));
+            });
+            // *** KẾT THÚC THAY ĐỔI ***
         }
+
+        await searchPromise;
+
+        // *** ĐOẠN CODE QUAN TRỌNG NHẤT ĐƯỢC THÊM VÀO ĐÂY ***
+        if (!isRestoringState) {
+            const currentState = buildStateObject();
+            // URL này chỉ để tạo mục lịch sử mới, không cần đẹp
+            const newUrl = `/?search_timestamp=${Date.now()}`; 
+            window.history.pushState(currentState, '', newUrl);
+        }
+
+    } catch (error) {
+        handleSearchError(error);
+    } finally {
         resetTagFiltering();
         resetOcrFiltering();
     }
+}
 
     // Tách logic text-to-image để dễ quản lý
     function handleTextToImageSearch(query, searchGroup) {
@@ -2601,11 +2654,41 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             }
             
             if (e.key === 's' || e.key === 'S') {
-                // Ngăn các hành vi mặc định của trình duyệt (ví dụ: mở hộp thoại Save)
-                // e.preventDefault();
-                
-                // Gọi hàm xử lý logic tìm kiếm
-                performSearchFromSelectedFrame();
+                // Ngăn các hành vi mặc định (ví dụ: mở hộp thoại Save)
+                e.preventDefault();
+
+                if (frameSelectionManager.getSelectionCount() !== 1) {
+                    showToastNotification('Please select exactly one frame for semantic search.', 'error');
+                    return;
+                }
+
+                const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                const imagePath = selectedFrame.path; // Lấy đường dẫn ảnh của frame đã chọn
+
+                if (!imagePath) {
+                    showToastNotification('Cannot perform search: image path is missing.', 'error');
+                    return;
+                }
+
+                // 1. Chuyển sang chế độ tìm kiếm bằng ảnh
+                switchSearchMode('image-to-image');
+
+                // 2. Cập nhật giao diện sidebar để hiển thị ảnh đang được dùng để tìm kiếm
+                const uploadArea = document.querySelector('.image-upload-area');
+                if (uploadArea) {
+                    const imgElement = uploadArea.querySelector('.uploaded-image img');
+                    const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
+                    imgElement.src = imagePath;
+                    uploadedImageDiv.style.display = 'block';
+                }
+
+                // 3. Lấy thanh tìm kiếm đầu tiên để truyền vào performSearch
+                const firstSearchGroup = document.querySelector('.search-input-group');
+
+                // 4. Gọi hàm performSearch TRUNG TÂM
+                // `imagePath` chính là `query`
+                // `type` là `image`
+                performSearch(imagePath, 'image', firstSearchGroup);
             }
             if (e.key === 'd' || e.key ==='D') {
                 const selectedCount = frameSelectionManager.getSelectionCount();
@@ -2821,5 +2904,134 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         // Thêm vào đầu của .queue-actions
         actionsContainer.prepend(legendContainer);
     }
+
+    function buildStateObject() {
+        const state = {
+            description: 'AIC_LUNCH_SEARCH', // Dùng để nhận dạng
+            searchMode: currentSearchMode,
+            selectedModel: currentSelectedModel,
+            temporalChainId: temporalChainId,
+            queries: [],
+            filters: {
+                ocr: { enabled: false, value: '' },
+                tag: { enabled: false, value: '' }
+            },
+            imageDataUrl: null
+        };
+
+        // Lấy tất cả các truy vấn văn bản và bộ lọc tương ứng
+        const searchInputGroups = document.querySelectorAll('.search-input-group');
+        searchInputGroups.forEach((group, index) => {
+            const searchInput = group.querySelector('.search-input');
+            const ocrInput = group.querySelector('.ocr-input');
+            const tagInput = group.querySelector('.tag-input');
+            
+            state.queries.push({
+                id: group.dataset.searchId,
+                value: searchInput.value
+            });
+            
+            // Chỉ cần lấy filter từ search bar đầu tiên, vì logic hiện tại là vậy
+            if (index === 0) {
+                state.filters.ocr.enabled = ocrFilterBtn.classList.contains('active');
+                state.filters.ocr.value = ocrInput ? ocrInput.value : '';
+
+                state.filters.tag.enabled = tagFilterBtn.classList.contains('active');
+                state.filters.tag.value = tagInput ? tagInput.value : '';
+            }
+        });
+
+        // Lấy dữ liệu ảnh nếu đang ở chế độ tìm kiếm bằng ảnh
+        if (currentSearchMode === 'image-to-image') {
+            const uploadedImage = document.querySelector('.uploaded-image img');
+            const uploadedImageContainer = document.querySelector('.uploaded-image');
+            if (uploadedImage && uploadedImageContainer.style.display !== 'none') {
+                state.imageDataUrl = uploadedImage.src;
+            }
+        }
+        
+        return state;
+    }
+/**
+ * Khôi phục lại giao diện và thực hiện lại tìm kiếm từ một đối tượng state.
+ * @param {object} state - Đối tượng state đã được lưu trong history.
+ */
+async function restoreStateFromHistory(state) {
+    if (!state || state.description !== 'AIC_LUNCH_SEARCH') return;
+
+    // ----- 1. KHÔI PHỤC GIAO DIỆN -----
+    
+    // Xóa các thanh tìm kiếm hiện tại
+    searchInputsContainer.innerHTML = ''; 
+    
+    // Khôi phục các giá trị toàn cục
+    switchSearchMode(state.searchMode);
+    selectModel(state.selectedModel);
+    temporalChainId = state.temporalChainId;
+
+    // Tạo lại các thanh tìm kiếm
+    state.queries.forEach(queryInfo => {
+        const newSearchInput = createNewSearchInput();
+        newSearchInput.value = queryInfo.value;
+        const group = newSearchInput.closest('.search-input-group');
+        group.dataset.searchId = queryInfo.id;
+    });
+
+    // Khôi phục bộ lọc (áp dụng cho thanh đầu tiên)
+    const firstGroup = document.querySelector('.search-input-group');
+    if (firstGroup) {
+        if (state.filters.ocr.enabled) {
+            ocrFilterBtn.classList.add('active');
+            const ocrInput = firstGroup.querySelector('.ocr-input');
+            const ocrContainer = firstGroup.querySelector('.ocr-filter-container');
+            if (ocrInput) ocrInput.value = state.filters.ocr.value;
+            if (ocrContainer) ocrContainer.classList.add('visible');
+        }
+        if (state.filters.tag.enabled) {
+            tagFilterBtn.classList.add('active');
+            const tagInput = firstGroup.querySelector('.tag-input');
+            const tagContainer = firstGroup.querySelector('.tag-filter-container');
+            if (tagInput) tagInput.value = state.filters.tag.value;
+            if (tagContainer) tagContainer.classList.add('visible');
+        }
+    }
+    
+    // Khôi phục ảnh preview
+    if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
+        const uploadedImageDiv = firstGroup.querySelector('.uploaded-image');
+        const img = uploadedImageDiv.querySelector('img');
+        img.src = state.imageDataUrl;
+        uploadedImageDiv.style.display = 'block';
+    }
+
+    // ----- 2. THỰC HIỆN LẠI TÌM KIẾM -----
+    showLoadingIndicator();
+    try {
+        // Lấy thông tin từ state để gọi API trực tiếp
+        const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
+        const firstSearchGroup = document.querySelector('.search-input-group');
+
+        // Logic này tương tự như performSearch nhưng nguồn là `state`
+        if (state.searchMode === 'text-to-image') {
+            const results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+            handleSearchResults(results, false);
+        } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
+            // Chuyển data URL thành File để tìm kiếm
+            const response = await fetch(state.imageDataUrl);
+            const blob = await response.blob();
+            const file = new File([blob], "restored_image.jpg", { type: blob.type });
+            const results = await callImageToImageAPI(file, state.selectedModel);
+            handleSearchResults(results, false);
+        } else if (state.searchMode === 'text-to-text') {
+             const results = await callTextToTextAPI(firstQuery);
+             handleSearchResults(results, false);
+        } else {
+             // Nếu không có gì để tìm kiếm (trạng thái trống), hiển thị placeholder
+             contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
+        }
+    } catch (error) {
+        handleSearchError(error);
+    }
+}
 
 });
