@@ -2352,10 +2352,11 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         if (videoMetadata && videoMetadata[videoId] && videoMetadata[videoId][frameIdFromFilename]) {
             const metadataForFrame = videoMetadata[videoId][frameIdFromFilename];
             currentModalFrameData = {
-                 path: mainPreview.src,
-                 videoName: videoId,
-                 timestamp: metadataForFrame.timestamp,
-                 frameIdentifier: `${videoId}_${metadataForFrame.id}`
+                path: mainPreview.src,
+                videoName: videoId,
+                timestamp: metadataForFrame.timestamp,
+                frameIdentifier: `${videoId}_${metadataForFrame.id}`,
+                frame_id_ori: metadataForFrame.id 
             };
             modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
         } else {
