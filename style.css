@@ -991,8 +991,8 @@ button:focus, input:focus, textarea:focus {
 }
 .close-btn {
     position: absolute;
-    top: -20px;
-    right: -20px;
+    /* top: 3vh;
+    right: 1vh; */
     background: white;
     color: black;
     border: none;
@@ -1132,6 +1132,7 @@ button:focus, input:focus, textarea:focus {
     padding: 20px;
     border: 1px solid #333;
     box-shadow: 0 15px 40px rgba(0, 0, 0, 0.5);
+    border-radius: 20px;
 }
 .video-modal .modal-overlay {
     position: absolute;
@@ -1282,6 +1283,7 @@ button:focus, input:focus, textarea:focus {
 }
 .toast-notification.error {
     background-color: #f44336;
+    color: var(--matcha-cream);
 }
 
 /* --- 6. KEYFRAME ANIMATIONS --- */
