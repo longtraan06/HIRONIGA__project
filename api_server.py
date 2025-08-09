@@ -24,6 +24,9 @@ import secrets
 from fastapi import WebSocket, WebSocketDisconnect 
 from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
+import aioredis
+import asyncio
+
 
 VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
 
@@ -31,14 +34,14 @@ app = FastAPI()
 # Kết nối Redis
 
 # #aic
-# redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
-# video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
+redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
+video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
 
 #acm
-redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
+# redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
+# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
+# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 
 """
 Available models:
@@ -60,7 +63,8 @@ model_paths=[
 milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
-                        model_paths=model_paths
+                        model_paths=model_paths,
+                        mode = 'AIC'
                     )
 
 # clear cache method
@@ -242,122 +246,61 @@ def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
 
 # websocker system
 
-# remove user
-
-# usage
-# curl -X POST -u "admin:hlgay" \
-#      -H "Content-Type: application/json" \
-#      -d '{"username": "StuckUser"}' \
-#      http://YOUR_SERVER_IP:PORT/api/admin/remove-user
-
-
-
-class RemoveUserRequest(BaseModel):
-    username: str
-
-@app.post("/api/admin/remove-user")
-async def remove_user_from_queue(
-    req: RemoveUserRequest,
-    admin: str = Depends(verify_admin)
-):
-    """
-    Xóa một người dùng khỏi danh sách user của queue và ẩn danh
-    các frame mà họ đã thêm vào. Yêu cầu quyền admin.
-    """
-    username_to_remove = req.username
-
-    # Sử dụng pipeline để đảm bảo các thao tác trên Redis là nguyên tử
-    pipe = redis_client.pipeline()
-
-    try:
-        # 1. Kiểm tra xem user có tồn tại trong hash không
-        if not redis_client.hexists(QUEUE_USERS_KEY, username_to_remove):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{username_to_remove}' not found in the active user list."
-            )
-
-        # 2. Xóa user khỏi hash user
-        pipe.hdel(QUEUE_USERS_KEY, username_to_remove)
-
-        # 3. Lấy toàn bộ queue hiện tại để cập nhật
-        current_queue_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
-        new_queue = []
-        updated = False
-        for item_json in current_queue_json:
-            item = json.loads(item_json)
-            if item.get("added_by") == username_to_remove:
-                # Ẩn danh frame
-                item["added_by"] = "Unknown"
-                item["user_color"] = "#888888" # Màu xám
-                new_queue.append(json.dumps(item))
-                updated = True
-            else:
-                new_queue.append(item_json)
-
-        # 4. Nếu có sự thay đổi, xóa list cũ và push list mới vào
-        if updated:
-            pipe.delete(QUEUE_STATE_KEY)
-            if new_queue:
-                pipe.rpush(QUEUE_STATE_KEY, *new_queue)
-        
-        # 5. Thực thi tất cả các lệnh trong pipeline
-        pipe.execute()
-
-        # 6. Lấy trạng thái mới nhất để phát sóng cho tất cả client
-        final_queue_items_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
-        final_queue_items = [json.loads(item) for item in final_queue_items_json]
-        
-        final_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
-        final_users = {name.decode(): color.decode() for name, color in final_users_raw.items()}
-
-        # 7. Phát sóng trạng thái mới (init_state) cho tất cả client
-        update_message = {
-            "action": "init_state",
-            "payload": {
-                "queue": final_queue_items,
-                "users": final_users
-            }
-        }
-        await manager.broadcast(json.dumps(update_message))
-
-        return {
-            "success": True,
-            "message": f"User '{username_to_remove}' has been removed and their frames anonymized."
-        }
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
+REDIS_URL = "redis://192.168.20.170:6330" # Đảm bảo địa chỉ này đúng với Redis của bạn
+WEBSOCKET_CHANNEL = "submit_queue_channel"  # Tên kênh chung
 
 
 class ConnectionManager:
-    """Quản lý các kết nối WebSocket đang hoạt động."""
+    """Quản lý các kết nối WebSocket và đồng bộ qua Redis Pub/Sub."""
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
+        self.redis_pubsub_client = None
+        self.listener_task = None
 
     async def connect(self, websocket: WebSocket, username: str):
-        """Chấp nhận kết nối mới."""
+        """Chấp nhận kết nối mới và khởi tạo listener nếu cần."""
         await websocket.accept()
         self.active_connections[username] = websocket
+        
+        # Chỉ khởi tạo một lần cho mỗi worker
+        if self.redis_pubsub_client is None:
+            self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+            self.listener_task = asyncio.create_task(self._pubsub_listener())
 
     def disconnect(self, username: str):
-        """Ngắt kết nối."""
+        """Ngắt kết nối của một user."""
         if username in self.active_connections:
             del self.active_connections[username]
 
-    async def broadcast(self, message: str):
-        """Gửi tin nhắn đến tất cả các kết nối đang hoạt động."""
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
+    async def _pubsub_listener(self):
+        """Lắng nghe tin nhắn từ kênh Redis và gửi đến các client của worker này."""
+        async with self.redis_pubsub_client.pubsub() as pubsub:
+            await pubsub.subscribe(WEBSOCKET_CHANNEL)
+            try:
+                while True:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                    if message and message["type"] == "message":
+                        # Gửi tin nhắn đến tất cả các client đang kết nối với WORKER NÀY
+                        living_connections = list(self.active_connections.values())
+                        for connection in living_connections:
+                            await connection.send_text(message["data"])
+            except asyncio.CancelledError:
+                pass # Tắt listener một cách sạch sẽ
+            finally:
+                print("Pub/Sub listener stopped.")
+    
+    async def publish_update(self, message: str):
+        """Đăng (publish) một tin nhắn cập nhật lên kênh Redis."""
+        # Đây là client đồng bộ dùng cho các tác vụ ghi thông thường
+        sync_redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        sync_redis.publish(WEBSOCKET_CHANNEL, message)
 
 # Khởi tạo manager
 manager = ConnectionManager()
 
 # Khóa các key trong Redis
-QUEUE_STATE_KEY = "submit_queue:frames"
+QUEUE_SORTED_SET_KEY = "submit_queue:order"  # Sorted Set để lưu thứ tự (score, frameIdentifier)
+QUEUE_DATA_HASH_KEY = "submit_queue:data"    # Hash để lưu dữ liệu chi tiết (frameIdentifier, jsonData)
 QUEUE_USERS_KEY = "submit_queue:users"
 
 def get_color_for_user(username: str) -> str:
@@ -819,6 +762,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         frame_identifier = f"{video_name}_{frame_id_ori}"
 
         processed_list.append({
+            "frame_id_ori": frame_id_ori,  # Thêm frame_id_ori
             "id": frame_id,
             "path": path,  # Đường dẫn mới
             "videoName": video_name,
@@ -866,9 +810,15 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     
     # 2. Lấy trạng thái hiện tại của queue (từ SORTED SET) và users
     # Lấy theo thứ tự điểm số giảm dần (vote cao nhất lên trước)
-    current_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
-    current_queue_items = [json.loads(item) for item in current_queue_items_json]
-    
+    sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+    current_queue_items = []
+    if sorted_identifiers:
+        # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
+        frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+        for item_json in frame_data_list:
+            if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+                current_queue_items.append(json.loads(item_json))
+
     current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
     current_users = {name.decode(): color.decode() for name, color in current_users_raw.items()}
 
@@ -887,7 +837,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         "action": "user_update",
         "payload": {"users": current_users}
     }
-    await manager.broadcast(json.dumps(join_notification))
+    await manager.publish_update(json.dumps(join_notification))
 
     try:
         # 5. Vòng lặp chính: Lắng nghe tin nhắn từ client
@@ -901,81 +851,100 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
-                items_to_add = {}
                 
                 # Hằng số lớn để ưu tiên vote
                 VOTE_PRIORITY_MULTIPLIER = 10**10 
 
-                for frame in frames_to_add:
-                    # Thêm các trường dữ liệu cần thiết
-                    frame['added_by'] = username
-                    frame['user_color'] = user_color
-                    frame['voters'] = [] 
-                    frame['vote_count'] = 0
-                    # <<< THÊM MỚI: Lưu thời gian tạo vào trong frame data >>>
-                    frame['creation_time'] = time.time()
-                    
-                    # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
-                    # Điểm ban đầu (0 vote) sẽ chính là thời gian tạo
-                    score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
-                    
-                    items_to_add[json.dumps(frame)] = score
+                # Sử dụng pipeline để các lệnh được thực hiện cùng lúc
+                pipe = redis_client.pipeline()
                 
-                if items_to_add:
-                    redis_client.zadd(QUEUE_STATE_KEY, items_to_add)
+                for frame in frames_to_add:
+                    identifier = frame.get("frameIdentifier")
+                    if not identifier:
+                        continue # Bỏ qua nếu frame không có định danh
+
+                    # >>> LOGIC MỚI: Chỉ thêm nếu frame chưa tồn tại <<<
+                    # hsetnx: chỉ set nếu field chưa tồn tại. Trả về 1 nếu set thành công, 0 nếu đã tồn tại.
+                    if redis_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
+                        # Nếu thêm dữ liệu thành công (frame này là mới)
+                        # thì mới thêm vào sorted set để sắp xếp
+                        frame['added_by'] = username
+                        frame['user_color'] = user_color
+                        frame['voters'] = [] 
+                        frame['vote_count'] = 0
+                        frame['creation_time'] = time.time()
+                        
+                        score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
+                        
+                        # Thêm dữ liệu đã cập nhật (có user, vote...) vào lại Hash
+                        pipe.hset(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame))
+                        # Thêm vào Sorted Set để sắp xếp
+                        pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier: score})
+                
+                # Thực thi tất cả các lệnh đã thêm vào pipeline
+                pipe.execute()
 
             elif action == "remove_frame":
-                frame_to_remove_json = json.dumps(payload)
-                # <<< THAY ĐỔI: Xóa khỏi Sorted Set
-                redis_client.zrem(QUEUE_STATE_KEY, frame_to_remove_json)
+                # Payload từ client vẫn là một đối tượng JSON đầy đủ
+                frame_to_remove = payload 
+                identifier_to_remove = frame_to_remove.get("frameIdentifier")
+                if identifier_to_remove:
+                    # >>> LOGIC MỚI: Xóa ở cả 2 nơi <<<
+                    pipe = redis_client.pipeline()
+                    pipe.zrem(QUEUE_SORTED_SET_KEY, identifier_to_remove) # Xóa khỏi Sorted Set
+                    pipe.hdel(QUEUE_DATA_HASH_KEY, identifier_to_remove)  # Xóa dữ liệu khỏi Hash
+                    pipe.execute()
 
             elif action == "clear_all":
-                # Xóa cả hai key
-                redis_client.delete(QUEUE_STATE_KEY, QUEUE_USERS_KEY)
+                # >>> LOGIC MỚI: Xóa cả 3 key <<<
+                redis_client.delete(QUEUE_SORTED_SET_KEY, QUEUE_DATA_HASH_KEY, QUEUE_USERS_KEY)
                 
             elif action == "vote_frame":
                 identifier_to_vote = payload.get("frameIdentifier")
-                all_items_json_with_scores = redis_client.zrange(QUEUE_STATE_KEY, 0, -1, withscores=True)
+                if not identifier_to_vote:
+                    continue
 
-                # Hằng số lớn phải giống hệt như ở trên
-                VOTE_PRIORITY_MULTIPLIER = 10**10
+                # >>> LOGIC MỚI: Lấy trực tiếp dữ liệu từ Hash <<<
+                item_json_str = redis_client.hget(QUEUE_DATA_HASH_KEY, identifier_to_vote)
 
-                for item_json_bytes, old_score in all_items_json_with_scores:
-                    item_json_str = item_json_bytes.decode('utf-8')
+                if item_json_str:
                     item = json.loads(item_json_str)
                     
-                    if item.get("frameIdentifier") == identifier_to_vote:
-                        # Logic toggle vote giữ nguyên
-                        voters = set(item.get("voters", []))
-                        if username in voters:
-                            voters.remove(username)
-                        else:
-                            voters.add(username)
-                        
-                        item["voters"] = list(voters)
-                        item["vote_count"] = len(voters)
+                    # Logic toggle vote giữ nguyên
+                    voters = set(item.get("voters", []))
+                    if username in voters:
+                        voters.remove(username)
+                    else:
+                        voters.add(username)
+                    
+                    item["voters"] = list(voters)
+                    item["vote_count"] = len(voters)
 
-                        # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
-                        # Lấy thời gian tạo đã được lưu
-                        creation_time = item.get('creation_time', time.time()) # Dùng time.time() làm dự phòng
-                        new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
-                        
-                        # Cập nhật trong Redis
-                        pipe = redis_client.pipeline()
-                        # Xóa item cũ bằng chuỗi JSON cũ (không phải bytes)
-                        pipe.zrem(QUEUE_STATE_KEY, item_json_str) 
-                        # Thêm item mới với score mới
-                        pipe.zadd(QUEUE_STATE_KEY, {json.dumps(item): new_score})
-                        pipe.execute()
-                        
-                        break # Đã tìm thấy và xử lý, thoát vòng lặp
+                    # Hằng số lớn phải giống hệt như ở trên
+                    VOTE_PRIORITY_MULTIPLIER = 10**10
+                    creation_time = item.get('creation_time', time.time())
+                    new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
+                    
+                    # Cập nhật trong Redis
+                    pipe = redis_client.pipeline()
+                    # 1. Cập nhật dữ liệu mới trong Hash
+                    pipe.hset(QUEUE_DATA_HASH_KEY, identifier_to_vote, json.dumps(item))
+                    # 2. Cập nhật điểm trong Sorted Set
+                    pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
+                    pipe.execute()
 
             # --- Phát sóng trạng thái mới cho TẤT CẢ client sau mỗi hành động ---
             
             # Lấy lại toàn bộ queue đã được sắp xếp
-            updated_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
-            updated_queue_items = [json.loads(item) for item in updated_queue_items_json]
-            
+            sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+            updated_queue_items = []
+            if sorted_identifiers:
+                # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
+                frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+                for item_json in frame_data_list:
+                    if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+                        updated_queue_items.append(json.loads(item_json))
+
             updated_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
             updated_users = {name.decode(): color.decode() for name, color in updated_users_raw.items()}
 
@@ -987,10 +956,22 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     "users": updated_users
                 }
             }
-            await manager.broadcast(json.dumps(full_update_message))
+            await manager.publish_update(json.dumps(full_update_message))
 
     except WebSocketDisconnect:
         manager.disconnect(username)
+        # redis_client.hdel(QUEUE_USERS_KEY, username) # Xóa user khỏi danh sách
+        
+        # # Lấy danh sách user mới nhất
+        # remaining_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
+        # remaining_users = {name.decode(): color.decode() for name, color in remaining_users_raw.items()}
+
+        # # Thông báo cho những người còn lại
+        # leave_notification = {
+        #     "action": "user_update",
+        #     "payload": {"users": remaining_users}
+        # }
+        # await manager.publish_update(json.dumps(leave_notification))
 
 
 @app.post("/api/submit/vqa")
@@ -1071,4 +1052,4 @@ async def handle_vqa_submission(submission: FrameSubmissionRequest):
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
-# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 4 --timeout-keep-alive 65
+# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 20 --ws-ping-timeout 20
