@@ -149,6 +149,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
             if (frameData && frameData.videoName && frameData.timestamp) {
                 openVideoModal(frameData.videoName, frameData.timestamp);
+                console.log("frame info", frameData);
             } else {
                 console.warn("Missing videoName or timestamp for this queued frame.", frameData);
                 showToastNotification("Không đủ thông tin để mở video.", "error");
@@ -2243,7 +2244,12 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
 
     // --- Tải dữ liệu cần thiết ---
     const pathParts = clickedPath.split('/');
-    const videoId = pathParts[2];
+    const videoId = pathParts[pathParts.length - 2]; 
+    if (!videoId) {
+        console.error("Không thể trích xuất videoId từ đường dẫn:", clickedPath);
+        showToastNotification("Lỗi: Đường dẫn ảnh không hợp lệ.", "error");
+        return;
+    }
     
     let videoInfo = videoInfoCache[videoId];
     let videoMetadata = null;
@@ -2292,13 +2298,18 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         
         const frameIdFromFilename = frameName.split('.')[0];
         if (videoMetadata && videoMetadata[videoId] && videoMetadata[videoId][frameIdFromFilename]) {
+            console.log("video ID", videoId, frameIdFromFilename);
             const metadataForFrame = videoMetadata[videoId][frameIdFromFilename];
             currentModalFrameData = {
                 path: mainPreview.src,
                 videoName: videoId,
                 timestamp: metadataForFrame.timestamp,
                 frameIdentifier: `${videoId}_${metadataForFrame.id}`,
-                frame_id_ori: metadataForFrame.id 
+                frame_id_ori: metadataForFrame.id ,
+                id: frameNum,
+                score: 0,
+                temporal_score: 0,
+                videoPath: `/videos/${videoId}.mp4`
             };
             modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
         } else {
@@ -2350,10 +2361,11 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         
         e.preventDefault(); // Ngăn hành vi mặc định cho 'a' và 's'
 
-        if (key === 'a') {
+        if (key === 'd') {
             if (currentModalFrameData) {
                 sendWebSocketMessage('add_frames', { frames: [currentModalFrameData] });
                 showToastNotification('Frame added to queue!', 'success');
+                closeModal(); 
             } else {
                 showToastNotification('Cannot add frame: metadata not found.', 'error');
             }
@@ -2709,6 +2721,10 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 performSearch(imagePath, 'image', firstSearchGroup);
             }
             if (e.key === 'd' || e.key ==='D') {
+                const imageModal = document.getElementById('imageModal');
+                if (imageModal && imageModal.style.display === 'flex') {
+                    return; 
+                }
                 const selectedCount = frameSelectionManager.getSelectionCount();
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
