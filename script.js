@@ -147,8 +147,19 @@ document.addEventListener('DOMContentLoaded', function() {
             const frameId = frameItem.dataset.frameId;
             const frameData = submitQueueFrames.get(frameId);
 
-            if (frameData && frameData.videoName && frameData.timestamp) {
-                openVideoModal(frameData.videoName, frameData.timestamp);
+            check_timestamp =  frameData.timestamp;
+            if (check_timestamp === undefined) {
+                const totalSeconds = frameData.frame_id_ori / DRES_FPS;
+                const minutes = Math.floor(totalSeconds / 60);
+                const seconds = (totalSeconds % 60).toFixed(3);
+
+                // format minutes: 2 chữ số, seconds: ít nhất 6 ký tự với 3 số thập phân
+                check_timestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+            }
+
+
+            if (frameData && frameData.videoName && check_timestamp) {
+                openVideoModal(frameData.videoName, check_timestamp);
                 console.log("frame info", frameData);
             } else {
                 console.warn("Missing videoName or timestamp for this queued frame.", frameData);
@@ -2900,18 +2911,12 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         });
     }
 
-    /**
-     * Vẽ lại chú thích người dùng và màu sắc trên header của queue.
-     */
     function renderUserLegend() {
-        // Tìm vị trí để thêm chú thích, ví dụ: trong .queue-actions
         const actionsContainer = document.querySelector('.submit-queue-header .queue-actions');
         
-        // Xóa chú thích cũ
         const oldLegend = document.getElementById('userLegend');
         if (oldLegend) oldLegend.remove();
         
-        // Tạo chú thích mới
         const legendContainer = document.createElement('div');
         legendContainer.id = 'userLegend';
         legendContainer.style.display = 'flex';
@@ -2935,7 +2940,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             userSpan.append(name);
             legendContainer.appendChild(userSpan);
         }
-        // Thêm vào đầu của .queue-actions
         actionsContainer.prepend(legendContainer);
     }
 
@@ -2952,8 +2956,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             },
             imageDataUrl: null
         };
-
-        // Lấy tất cả các truy vấn văn bản và bộ lọc tương ứng
         const searchInputGroups = document.querySelectorAll('.search-input-group');
         searchInputGroups.forEach((group, index) => {
             const searchInput = group.querySelector('.search-input');
@@ -2964,8 +2966,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 id: group.dataset.searchId,
                 value: searchInput.value
             });
-            
-            // Chỉ cần lấy filter từ search bar đầu tiên, vì logic hiện tại là vậy
             if (index === 0) {
                 state.filters.ocr.enabled = ocrFilterBtn.classList.contains('active');
                 state.filters.ocr.value = ocrInput ? ocrInput.value : '';
@@ -2974,8 +2974,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 state.filters.tag.value = tagInput ? tagInput.value : '';
             }
         });
-
-        // Lấy dữ liệu ảnh nếu đang ở chế độ tìm kiếm bằng ảnh
         if (currentSearchMode === 'image-to-image') {
             const uploadedImage = document.querySelector('.uploaded-image img');
             const uploadedImageContainer = document.querySelector('.uploaded-image');
@@ -2986,24 +2984,14 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         
         return state;
     }
-/**
- * Khôi phục lại giao diện và thực hiện lại tìm kiếm từ một đối tượng state.
- * @param {object} state - Đối tượng state đã được lưu trong history.
- */
 async function restoreStateFromHistory(state) {
     if (!state || state.description !== 'AIC_LUNCH_SEARCH') return;
 
-    // ----- 1. KHÔI PHỤC GIAO DIỆN -----
-    
-    // Xóa các thanh tìm kiếm hiện tại
     searchInputsContainer.innerHTML = ''; 
     
-    // Khôi phục các giá trị toàn cục
     switchSearchMode(state.searchMode);
     selectModel(state.selectedModel);
     temporalChainId = state.temporalChainId;
-
-    // Tạo lại các thanh tìm kiếm
     state.queries.forEach(queryInfo => {
         const newSearchInput = createNewSearchInput();
         newSearchInput.value = queryInfo.value;
@@ -3011,7 +2999,6 @@ async function restoreStateFromHistory(state) {
         group.dataset.searchId = queryInfo.id;
     });
 
-    // Khôi phục bộ lọc (áp dụng cho thanh đầu tiên)
     const firstGroup = document.querySelector('.search-input-group');
     if (firstGroup) {
         if (state.filters.ocr.enabled) {
@@ -3029,28 +3016,21 @@ async function restoreStateFromHistory(state) {
             if (tagContainer) tagContainer.classList.add('visible');
         }
     }
-    
-    // Khôi phục ảnh preview
     if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
         const uploadedImageDiv = firstGroup.querySelector('.uploaded-image');
         const img = uploadedImageDiv.querySelector('img');
         img.src = state.imageDataUrl;
         uploadedImageDiv.style.display = 'block';
     }
-
-    // ----- 2. THỰC HIỆN LẠI TÌM KIẾM -----
     showLoadingIndicator();
     try {
-        // Lấy thông tin từ state để gọi API trực tiếp
         const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
         const firstSearchGroup = document.querySelector('.search-input-group');
 
-        // Logic này tương tự như performSearch nhưng nguồn là `state`
         if (state.searchMode === 'text-to-image') {
             const results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
             handleSearchResults(results, false);
         } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
-            // Chuyển data URL thành File để tìm kiếm
             const response = await fetch(state.imageDataUrl);
             const blob = await response.blob();
             const file = new File([blob], "restored_image.jpg", { type: blob.type });
@@ -3060,7 +3040,6 @@ async function restoreStateFromHistory(state) {
              const results = await callTextToTextAPI(firstQuery);
              handleSearchResults(results, false);
         } else {
-             // Nếu không có gì để tìm kiếm (trạng thái trống), hiển thị placeholder
              contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
         }
     } catch (error) {
@@ -3072,20 +3051,13 @@ function clearQueueSelection() {
     selectedQueueFrameIds.clear();
     updateSubmitButtonStates();
 }
-
 function toggleFilter(filterType) {
-    // 1. Tìm ô tìm kiếm đang được focus
     const activeElement = document.activeElement;
-    // Lấy thẻ cha '.search-input-group' để xác định ngữ cảnh
     const searchGroup = activeElement.closest('.search-input-group');
-
-    // Nếu không focus vào ô tìm kiếm nào thì hiển thị thông báo và thoát
     if (!searchGroup) {
         showToastNotification(`Vui lòng click vào một ô tìm kiếm để dùng bộ lọc ${filterType.toUpperCase()}!`, 'error');
         return;
     }
-
-    // 2. Xác định các element cần thiết dựa trên loại bộ lọc
     const containerSelector = `.${filterType}-filter-container`;
     const inputSelector = `.${filterType}-input`;
     const buttonSelector = `#${filterType}FilterBtn`;
@@ -3095,18 +3067,13 @@ function toggleFilter(filterType) {
     const mainSearchInput = searchGroup.querySelector('.search-input');
     const headerButton = document.querySelector(buttonSelector);
 
-    // 3. Logic bật/tắt chính
     if (filterContainer.classList.contains('visible')) {
-        // --- NẾU ĐANG BẬT -> TẮT ĐI ---
         filterContainer.classList.remove('visible');
         headerButton.classList.remove('active');
-        // Trả lại focus cho ô tìm kiếm chính
         mainSearchInput.focus();
     } else {
-        // --- NẾU ĐANG TẮT -> BẬT LÊN ---
         filterContainer.classList.add('visible');
         headerButton.classList.add('active');
-        // Đợi một chút để đảm bảo ô input đã hiện ra rồi mới focus
         setTimeout(() => filterInput.focus(), 10);
     }
 }
