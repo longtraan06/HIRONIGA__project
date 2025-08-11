@@ -398,6 +398,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                 } else {
                                     showToastNotification("Please select only one frame to view keyframes.", "error");
                                 }
+                                clearQueueSelection();
                                 break;
                             // Xử lý phím mũi tên để điều hướng lựa chọn trong queue
                             case 'arrowright':
@@ -950,11 +951,11 @@ async function ensureDresPrerequisites() {
             case 'init_state':
                 userColors = payload.users;
                 renderFullQueue(payload.queue);
-                renderUserLegend();
+                // renderUserLegend();
                 break;
             case 'user_update':
                 userColors = payload.users;
-                renderUserLegend();
+                // renderUserLegend();
                 break;
             case 'frames_added':
                 // Chỉ cần thêm các frame mới vào queue
@@ -1199,7 +1200,7 @@ async function ensureDresPrerequisites() {
             }
         });
     }
-    async function translateText(text, sourceLang = 'vi', targetLang = 'en', apiKey = 'AIzaSyCYrbDzXcdf0ENylmW9JZ2ulMGhLSn0XOw') {
+    async function translateText(text, sourceLang = 'vi', targetLang = 'en', apiKey = 'AIzaSyDvIhSOv06Tt8FTwOp40P1wjU9itsgDFvw') {
         if (!text || typeof text !== "string") return '';
 
         const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
