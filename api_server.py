@@ -273,21 +273,43 @@ class ConnectionManager:
             del self.active_connections[username]
 
     async def _pubsub_listener(self):
-        """Lắng nghe tin nhắn từ kênh Redis và gửi đến các client của worker này."""
-        async with self.redis_pubsub_client.pubsub() as pubsub:
-            await pubsub.subscribe(WEBSOCKET_CHANNEL)
+        """Lắng nghe kênh Redis một cách kiên cường và tự động kết nối lại."""
+        while True: # Vòng lặp chính để đảm bảo listener chạy mãi mãi
             try:
-                while True:
-                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
-                    if message and message["type"] == "message":
-                        # Gửi tin nhắn đến tất cả các client đang kết nối với WORKER NÀY
-                        living_connections = list(self.active_connections.values())
-                        for connection in living_connections:
-                            await connection.send_text(message["data"])
-            except asyncio.CancelledError:
-                pass # Tắt listener một cách sạch sẽ
-            finally:
-                print("Pub/Sub listener stopped.")
+                # Kết nối lại nếu cần
+                if self.redis_pubsub_client is None:
+                    self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+
+                async with self.redis_pubsub_client.pubsub() as pubsub:
+                    await pubsub.subscribe(WEBSOCKET_CHANNEL)
+                    print(f"Worker (PID: {os.getpid()}) subscribed to '{WEBSOCKET_CHANNEL}'")
+                    
+                    # Vòng lặp lắng nghe tin nhắn
+                    while True:
+                        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                        if message and message["type"] == "message":
+                            # Lặp qua một bản sao của danh sách kết nối để tránh lỗi
+                            living_connections = list(self.active_connections.values())
+                            for connection in living_connections:
+                                try:
+                                    # Gửi tin nhắn đến từng client
+                                    await connection.send_text(message["data"])
+                                except Exception as e:
+                                    # Nếu gửi lỗi (vd: client đã ngắt kết nối), chỉ in lỗi và tiếp tục
+                                    print(f"Could not send message to a client: {e}")
+
+            except (aioredis.exceptions.ConnectionError, asyncio.TimeoutError) as e:
+                # Nếu mất kết nối với Redis, in lỗi và thử kết nối lại sau 1 khoảng thời gian
+                print(f"Redis Pub/Sub connection error: {e}. Reconnecting in 5 seconds...")
+                self.redis_pubsub_client = None
+                await asyncio.sleep(5)
+            except Exception as e:
+                # Bắt các lỗi không lường trước khác, chờ và thử lại
+                print(f"An unexpected error occurred in pubsub listener: {e}. Restarting in 5 seconds...")
+                import traceback
+                traceback.print_exc()
+                self.redis_pubsub_client = None # Reset để kết nối lại
+                await asyncio.sleep(5)
     
     async def publish_update(self, message: str):
         """Đăng (publish) một tin nhắn cập nhật lên kênh Redis."""
