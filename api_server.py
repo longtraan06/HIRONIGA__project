@@ -556,6 +556,69 @@ async def search_image(
     return process_milvus_results_for_frontend(results)
 
 
+@app.post("/api/search/temporal/start_with_image")
+async def temporal_search_start_with_image(
+    file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
+    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    model_name: Optional[str] = Form(None, description="Tên model để sử dụng")
+):
+    """
+    Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
+    Trả về kết quả tìm kiếm ban đầu và một chain_id mới.
+    """
+    try:
+        # 1. Tạo một chain_id mới và duy nhất
+        chain_id = str(uuid.uuid4())
+        
+        # 2. Đọc nội dung ảnh
+        image_bytes = await file.read()
+        
+        # 3. Thực hiện tìm kiếm ban đầu với cờ start_temporal_chain=True
+        initial_results = milvus.search(
+            query=image_bytes,
+            mode="image",
+            search_in="image",
+            start_temporal_chain=True,  # Điểm mấu chốt để khởi tạo trạng thái
+            top_k=min(top_k, 2000),
+            model_name=model_name
+        )
+        
+        # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
+        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        if not temporal_state:
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to initialize temporal chain state from image search."
+            )
+            
+        pickled_state = pickle.dumps(temporal_state)
+        base64_state = base64.b64encode(pickled_state).decode('utf-8')
+        
+        temporal_chain_data = {
+            "state_format": "pickle_base64",
+            "state": base64_state,
+            "last_update": time.time()
+        }
+        
+        redis_client.set(
+            f"temporal_chain:{chain_id}",
+            json.dumps(temporal_chain_data)
+        )
+        
+        print(f"Started new image-based temporal chain with ID: {chain_id}")
+        
+        # 5. Trả về kết quả và chain_id
+        return {
+            "chain_id": chain_id,
+            "initial_results": process_milvus_results_for_frontend(initial_results)
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/metadata/{video_id}")
 async def get_frame_metadata(video_id: str):
     """
