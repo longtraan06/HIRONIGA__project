@@ -347,7 +347,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
                     const key = e.key.toLowerCase();
                     if (key === 's') {
-                        clearQueueSelection(); 
                         const imageModal = document.getElementById('imageModal');
                         if (imageModal && imageModal.style.display === 'flex') {
                             return; 
@@ -358,21 +357,11 @@ document.addEventListener('DOMContentLoaded', function() {
                                 showToastNotification("Frame data is incomplete for this action.", "error");
                             } else {
                                 const imagePath = frameData.path;
-                                switchSearchMode('image-to-image');
-                                const uploadArea = document.querySelector('.image-upload-area');
-                                if (uploadArea) {
-                                    const imgElement = uploadArea.querySelector('.uploaded-image img');
-                                    const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
-                                    imgElement.src = imagePath;
-                                    uploadedImageDiv.style.display = 'block';
-                                }
-                                const firstSearchGroup = document.querySelector('.search-input-group');
-                                
-                                performSearch(imagePath, 'image', firstSearchGroup);
-                                
+                                clearQueueSelection(); // Bỏ chọn trước khi bắt đầu
+                                initiateImageTemporalSearch(imagePath); // Gọi hàm điều phối mới
                             }
                         } else {
-                            showToastNotification("Please select only one frame for semantic search.", "error");
+                            showToastNotification("Please select only one frame for this action.", "error");
                         }
                     } else {
                         e.preventDefault(); // Ngăn hành vi mặc định cho các phím tắt này
@@ -2385,22 +2374,10 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         else if (key === 's') {
             if (currentModalFrameData && currentModalFrameData.path) {
                 const imagePath = currentModalFrameData.path;
-                
-                const searchTask = () => {
-                    switchSearchMode('image-to-image');
-                    const uploadArea = document.querySelector('.image-upload-area');
-                    if (uploadArea) {
-                        const imgElement = uploadArea.querySelector('.uploaded-image img');
-                        const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
-                        imgElement.src = imagePath;
-                        uploadedImageDiv.style.display = 'block';
-                    }
-                    const firstSearchGroup = document.querySelector('.search-input-group');
-                    performSearch(imagePath, 'image', firstSearchGroup);
-                    showToastNotification('Performing semantic search...', 'success');
-                };
-                
-                closeModal(searchTask);
+                // Đóng modal và gọi hàm điều phối mới
+                closeModal(() => {
+                    initiateImageTemporalSearch(imagePath);
+                });
             } else {
                 showToastNotification('Cannot perform search: image data is missing.', 'error');
             }
@@ -2690,47 +2667,29 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 }
             }
             
-            if (e.key === 's' || e.key === 'S') {
+            if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) {
                 const imageModal = document.getElementById('imageModal');
-                if (imageModal && imageModal.style.display === 'flex') {
-                    return; 
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+
+                // Chỉ chạy khi không ở trong modal và không đang gõ chữ
+                if (!isTyping && (!imageModal || imageModal.style.display !== 'flex')) {
+                    e.preventDefault(); // Ngăn các hành vi mặc định
+                    console.log("count: ", frameSelectionManager.getSelectionCount());
+                    if (frameSelectionManager.getSelectionCount() === 1) {
+                        const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                        // Lấy path từ data object, đây là nơi chứa thông tin đầy đủ nhất
+                        const imagePath = selectedFrame.data.path; 
+                        if (imagePath) {
+                            // GỌI HÀM ĐIỀU PHỐI MỚI
+                            initiateImageTemporalSearch(imagePath); 
+                        } else {
+                            showToastNotification('Cannot start search: image path is missing.', 'error');
+                        }
+                    } else {
+                        showToastNotification('Please select exactly one frame to start a new temporal search.', 'error');
+                    }
                 }
-                // Ngăn các hành vi mặc định (ví dụ: mở hộp thoại Save)
-                // e.preventDefault();
-
-                // if (frameSelectionManager.getSelectionCount() !== 1) {
-                //     showToastNotification('Please select exactly one frame for semantic search.', 'error');
-                //     return;
-                // }
-
-                const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
-                console.log('Selected frame for semantic search:', selectedFrame.path);
-                const imagePath = selectedFrame.path; // Lấy đường dẫn ảnh của frame đã chọn
-                console.log('Selected frame path:', imagePath);
-                if (!imagePath) {
-                    showToastNotification('Cannot perform search: image path is missing.', 'error');
-                    return;
-                }
-
-                // 1. Chuyển sang chế độ tìm kiếm bằng ảnh
-                switchSearchMode('image-to-image');
-
-                // 2. Cập nhật giao diện sidebar để hiển thị ảnh đang được dùng để tìm kiếm
-                const uploadArea = document.querySelector('.image-upload-area');
-                if (uploadArea) {
-                    const imgElement = uploadArea.querySelector('.uploaded-image img');
-                    const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
-                    imgElement.src = imagePath;
-                    uploadedImageDiv.style.display = 'block';
-                }
-
-                // 3. Lấy thanh tìm kiếm đầu tiên để truyền vào performSearch
-                const firstSearchGroup = document.querySelector('.search-input-group');
-
-                // 4. Gọi hàm performSearch TRUNG TÂM
-                // `imagePath` chính là `query`
-                // `type` là `image`
-                performSearch(imagePath, 'image', firstSearchGroup);
             }
             if (e.key === 'd' || e.key ==='D') {
                 const imageModal = document.getElementById('imageModal');
@@ -2985,68 +2944,109 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         
         return state;
     }
-async function restoreStateFromHistory(state) {
-    if (!state || state.description !== 'AIC_LUNCH_SEARCH') return;
+    async function restoreStateFromHistory(state) {
+        if (!state || state.description !== 'AIC_LUNCH_SEARCH') return;
+        showLoadingIndicator();
+        searchInputsContainer.innerHTML = ''; 
+        switchSearchMode(state.searchMode);
+        selectModel(state.selectedModel);
+        temporalChainId = state.temporalChainId;
 
-    searchInputsContainer.innerHTML = ''; 
-    
-    switchSearchMode(state.searchMode);
-    selectModel(state.selectedModel);
-    temporalChainId = state.temporalChainId;
-    state.queries.forEach(queryInfo => {
-        const newSearchInput = createNewSearchInput();
-        newSearchInput.value = queryInfo.value;
-        const group = newSearchInput.closest('.search-input-group');
-        group.dataset.searchId = queryInfo.id;
-    });
-
-    const firstGroup = document.querySelector('.search-input-group');
-    if (firstGroup) {
-        if (state.filters.ocr.enabled) {
-            ocrFilterBtn.classList.add('active');
-            const ocrInput = firstGroup.querySelector('.ocr-input');
-            const ocrContainer = firstGroup.querySelector('.ocr-filter-container');
-            if (ocrInput) ocrInput.value = state.filters.ocr.value;
-            if (ocrContainer) ocrContainer.classList.add('visible');
+        if (state.isImageTemporalStart && state.imageTemporalStartPath) {
+            const imageBlock = createImageTemporalSearchBlock(state.imageTemporalStartPath);
+            searchInputsContainer.appendChild(imageBlock);
         }
-        if (state.filters.tag.enabled) {
-            tagFilterBtn.classList.add('active');
-            const tagInput = firstGroup.querySelector('.tag-input');
-            const tagContainer = firstGroup.querySelector('.tag-filter-container');
-            if (tagInput) tagInput.value = state.filters.tag.value;
-            if (tagContainer) tagContainer.classList.add('visible');
-        }
-    }
-    if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
-        const uploadedImageDiv = firstGroup.querySelector('.uploaded-image');
-        const img = uploadedImageDiv.querySelector('img');
-        img.src = state.imageDataUrl;
-        uploadedImageDiv.style.display = 'block';
-    }
-    showLoadingIndicator();
-    try {
-        const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
-        const firstSearchGroup = document.querySelector('.search-input-group');
 
-        if (state.searchMode === 'text-to-image') {
-            const results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+        state.queries.forEach((queryInfo, index) => {
+            // Bỏ qua việc tạo ô text cho truy vấn đầu tiên nếu nó là ảnh
+            if (state.isImageTemporalStart && index === 0) {
+                return;
+            }
+            
+            const newSearchInput = createNewSearchInput();
+            newSearchInput.value = queryInfo.value;
+            const group = newSearchInput.closest('.search-input-group');
+            group.dataset.searchId = queryInfo.id;
+        });
+
+        const firstGroup = document.querySelector('.search-input-group');
+        if (firstGroup) {
+            if (state.filters.ocr.enabled) {
+                ocrFilterBtn.classList.add('active');
+                const ocrInput = firstGroup.querySelector('.ocr-input');
+                const ocrContainer = firstGroup.querySelector('.ocr-filter-container');
+                if (ocrInput) ocrInput.value = state.filters.ocr.value;
+                if (ocrContainer) ocrContainer.classList.add('visible');
+            }
+            if (state.filters.tag.enabled) {
+                tagFilterBtn.classList.add('active');
+                const tagInput = firstGroup.querySelector('.tag-input');
+                const tagContainer = firstGroup.querySelector('.tag-filter-container');
+                if (tagInput) tagInput.value = state.filters.tag.value;
+                if (tagContainer) tagContainer.classList.add('visible');
+            }
+        }
+
+        if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
+            const firstSearchGroup = document.querySelector('.search-input-group');
+            const uploadedImageDiv = firstSearchGroup.querySelector('.uploaded-image');
+            const img = uploadedImageDiv.querySelector('img');
+            img.src = state.imageDataUrl;
+            uploadedImageDiv.style.display = 'block';
+        }
+
+        try {
+            let results;
+            
+            if (state.isImageTemporalStart && state.imageTemporalStartPath) {
+                const response = await fetch(state.imageTemporalStartPath);
+                const blob = await response.blob();
+                const imageFile = new File([blob], "restored_temporal_image.jpg", { type: blob.type });
+
+                const formData = new FormData();
+                formData.append("file", imageFile);
+                // formData.append("model_name", state.selectedModel); // Có thể thêm model nếu cần
+
+                const apiResponse = await fetch("/api/search/temporal/start_with_image", {
+                    method: "POST",
+                    body: formData,
+                });
+
+                if (!apiResponse.ok) throw new Error("Failed to restore image-based temporal search.");
+                
+                const resultData = await apiResponse.json();
+                temporalChainId = resultData.chain_id;
+                results = resultData.initial_results;
+                
+            } else if (state.searchMode === 'text-to-image') {
+                const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
+                const firstSearchGroup = document.querySelector('.search-input-group');
+                results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+
+            } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
+                const response = await fetch(state.imageDataUrl);
+                const blob = await response.blob();
+                const file = new File([blob], "restored_image.jpg", { type: blob.type });
+                results = await callImageToImageAPI(file, state.selectedModel);
+                
+            } else if (state.searchMode === 'text-to-text') {
+                const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
+                results = await callTextToTextAPI(firstQuery);
+
+            } else {
+                contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
+                return; 
+            }
+
             handleSearchResults(results, false);
-        } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
-            const response = await fetch(state.imageDataUrl);
-            const blob = await response.blob();
-            const file = new File([blob], "restored_image.jpg", { type: blob.type });
-            const results = await callImageToImageAPI(file, state.selectedModel);
-            handleSearchResults(results, false);
-        } else if (state.searchMode === 'text-to-text') {
-             const results = await callTextToTextAPI(firstQuery);
-             handleSearchResults(results, false);
-        } else {
-             contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
+
+        } catch (error) {
+            handleSearchError(error);
         }
-    } catch (error) {
-        handleSearchError(error);
     }
-}
+
+
+
 function clearQueueSelection() {
     document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
     selectedQueueFrameIds.clear();
@@ -3078,6 +3078,85 @@ function toggleFilter(filterType) {
         setTimeout(() => filterInput.focus(), 10);
     }
 }
+
+/**
+     * TẠO KHỐI UI MỚI ĐỂ HIỂN THỊ ẢNH ĐANG DÙNG ĐỂ TÌM KIẾM
+     * @param {string} imagePath - URL của ảnh
+     * @returns {HTMLElement} - Element của khối UI đã được tạo
+     */
+    function createImageTemporalSearchBlock(imagePath) {
+        const imageSearchBlock = document.createElement('div');
+        imageSearchBlock.className = 'image-temporal-search-block'; // Dùng class riêng để style
+        imageSearchBlock.innerHTML = `
+            <p class="search-block-label">Searching from image:</p>
+            <img src="${imagePath}" alt="Temporal Search Start Image">
+        `;
+        return imageSearchBlock;
+    }
+
+    /**
+     * HÀM ĐIỀU PHỐI CHÍNH: Bắt đầu chuỗi temporal mới từ hình ảnh.
+     * @param {string} imagePath - URL của ảnh
+     */
+    async function initiateImageTemporalSearch(imagePath) {
+        // 1. Reset giao diện và trạng thái cho một chuỗi mới
+        temporalChainId = null; // Rất quan trọng: Reset chain ID cũ
+        searchInputsContainer.innerHTML = ''; // Xóa sạch các ô tìm kiếm cũ
+        showLoadingIndicator(); // Hiển thị loading
+
+        try {
+            // 2. Tạo và hiển thị khối UI cho ảnh tìm kiếm
+            const imageBlock = createImageTemporalSearchBlock(imagePath);
+            searchInputsContainer.appendChild(imageBlock);
+
+            // 3. Chuyển đổi đường dẫn ảnh thành File object
+            const response = await fetch(imagePath);
+            const blob = await response.blob();
+            const imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
+
+            // 4. Gọi API backend mới
+            const formData = new FormData();
+            formData.append("file", imageFile);
+            // Bạn có thể thêm các tham số khác nếu cần, ví dụ model_name
+            // formData.append("model_name", currentSelectedModel);
+
+            const apiResponse = await fetch("/api/search/temporal/start_with_image", {
+                method: "POST",
+                body: formData,
+            });
+
+            if (!apiResponse.ok) {
+                throw new Error('API call to start_with_image failed.');
+            }
+
+            const resultsData = await apiResponse.json();
+
+            // 5. Cập nhật trạng thái và hiển thị kết quả
+            temporalChainId = resultsData.chain_id; // Lưu chain ID mới
+            handleSearchResults(resultsData.initial_results, false);
+
+            // 6. Tạo ô nhập văn bản mới và focus vào đó
+            const nextInput = createNewSearchInput();
+            setTimeout(() => {
+                nextInput.focus();
+                // Cuộn tới sidebar để người dùng thấy ô nhập mới
+                nextInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+
+            // 7. [HISTORY] Đẩy trạng thái mới vào lịch sử trình duyệt
+            if (!isRestoringState) {
+                const currentState = buildStateObject();
+                // Thêm thông tin đặc biệt để khôi phục
+                currentState.isImageTemporalStart = true;
+                currentState.imageTemporalStartPath = imagePath; 
+                const newUrl = `/?search_timestamp=${Date.now()}`;
+                window.history.pushState(currentState, '', newUrl);
+            }
+
+        } catch (error) {
+            handleSearchError(error);
+        }
+    }
 
 
 });
