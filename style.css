@@ -403,14 +403,16 @@ button:focus, input:focus, textarea:focus {
 }
 
 .image-item {
-    position: relative;
+    /* position: relative;  <-- Xóa bỏ thuộc tính này */
+    display: flex; /* <-- Sử dụng Flexbox để xếp ảnh và text theo chiều dọc */
+    flex-direction: column; /* <-- Xếp theo cột */
     border-radius: 12px;
     overflow: hidden;
     box-shadow: var(--shadow-soft);
     transition: var(--transition-smooth);
     cursor: pointer;
     border: 1px solid transparent;
-    background-color: var(--matcha-pale);
+    background-color: var(--matcha-pale); /* Nền cho cả khối */
     width: 100%;
 }
 .image-item:hover {
@@ -461,6 +463,9 @@ button:focus, input:focus, textarea:focus {
     display: block;
     object-fit: cover;
     transition: var(--transition-smooth);
+    /* Thêm vào để bo góc cho ảnh, trông sẽ đẹp hơn */
+    border-top-left-radius: 10px;
+    border-top-right-radius: 10px;
 }
 
 /* Selection Toolbar */
@@ -946,22 +951,16 @@ button:focus, input:focus, textarea:focus {
     max-height: 100px;
 }
 .frame-info {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    background: var(--matcha-pale);
+    background: var(--matcha-pale); /* Có thể giữ lại hoặc đổi màu khác */
     color: var(--matcha-brown);
     text-align: center;
-    padding: 3px 5px;
+    padding: 1px; /* Tăng padding một chút cho đẹp */
     font-size: 11px;
+    font-weight: 500; /* Làm chữ đậm hơn một chút */
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    opacity: 1; /* <--- Luôn hiển thị */
-    transform: translateY(0); /* <--- Ở vị trí mặc định */
-    transition: opacity 0.3s ease, transform 0.1s ease;
-    /* pointer-events: none; -- có thể bỏ dòng này */
+    border-top: 1px solid var(--matcha-light);
 }
 .modal-frame-info {
     color: var(--matcha-brown);
@@ -1793,4 +1792,26 @@ button:focus, input:focus, textarea:focus {
     background: var(--matcha-dark);
     transform: translateY(-1px);
     box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+
+.image-temporal-search-block {
+    padding: 10px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 12px;
+    margin-bottom: 15px;
+    background-color: var(--matcha-accent);
+}
+
+.image-temporal-search-block .search-block-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--matcha-dark);
+    margin-bottom: 8px;
+}
+
+.image-temporal-search-block img {
+    width: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+    box-shadow: var(--shadow-soft);
 }
