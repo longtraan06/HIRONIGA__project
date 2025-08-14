@@ -377,6 +377,18 @@ document.addEventListener('DOMContentLoaded', function() {
                                 clearQueueSelection();
                                 break;
                             
+                            case 'e':
+                                if (!submitAsKisBtn.disabled) {
+                                    submitAsKisBtn.click(); 
+                                }
+                                break; 
+
+                            case 'q':
+                                if (!submitAsQaBtn.disabled) {
+                                    submitAsQaBtn.click();
+                                }
+                                break;
+
                             case 'f': // Xem keyframe lân cận
                                 if (selectedCountInQueue === 1) {
                                     if (frameData.id && frameData.path) {
