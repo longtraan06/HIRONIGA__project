@@ -1435,8 +1435,7 @@ async function ensureDresPrerequisites() {
 
         // Auto-resize textarea
         textInput.addEventListener('input', function() {
-            this.style.height = 'auto';
-            this.style.height = Math.max(44, this.scrollHeight) + 'px';
+            autoResizeTextarea(this); // Gọi hàm mới, code gọn hơn
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             if (translationDisplay) {
                 translationDisplay.classList.remove('visible');
@@ -2926,7 +2925,8 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 ocr: { enabled: false, value: '' },
                 tag: { enabled: false, value: '' }
             },
-            imageDataUrl: null
+            imageDataUrl: null,
+            finalResults: allImages 
         };
         const searchInputGroups = document.querySelectorAll('.search-input-group');
         searchInputGroups.forEach((group, index) => {
@@ -2981,6 +2981,11 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             group.dataset.searchId = queryInfo.id;
         });
 
+        const allRestoredInputs = document.querySelectorAll('.search-inputs-container .search-input');
+        allRestoredInputs.forEach(input => {
+            autoResizeTextarea(input); 
+        });
+
         const firstGroup = document.querySelector('.search-input-group');
         if (firstGroup) {
             if (state.filters.ocr.enabled) {
@@ -3008,50 +3013,65 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         }
 
         try {
-            let results;
-            
-            if (state.isImageTemporalStart && state.imageTemporalStartPath) {
-                const response = await fetch(state.imageTemporalStartPath);
-                const blob = await response.blob();
-                const imageFile = new File([blob], "restored_temporal_image.jpg", { type: blob.type });
-
-                const formData = new FormData();
-                formData.append("file", imageFile);
-                // formData.append("model_name", state.selectedModel); // Có thể thêm model nếu cần
-
-                const apiResponse = await fetch("/api/search/temporal/start_with_image", {
-                    method: "POST",
-                    body: formData,
-                });
-
-                if (!apiResponse.ok) throw new Error("Failed to restore image-based temporal search.");
+            if (state.finalResults && Array.isArray(state.finalResults)) {
                 
-                const resultData = await apiResponse.json();
-                temporalChainId = resultData.chain_id;
-                results = resultData.initial_results;
-                
-            } else if (state.searchMode === 'text-to-image') {
-                const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
-                const firstSearchGroup = document.querySelector('.search-input-group');
-                results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+                console.log("Restoring results directly from history state.");
+                // Dùng isReranked=true nếu bạn muốn hiển thị lại tiêu đề "T Reranked"
+                // Dựa vào việc có nhiều hơn 1 query trong lịch sử.
+                const isRerankedResult = state.queries.length > 1;
+                handleSearchResults(state.finalResults, isRerankedResult);
 
-            } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
-                const response = await fetch(state.imageDataUrl);
-                const blob = await response.blob();
-                const file = new File([blob], "restored_image.jpg", { type: blob.type });
-                results = await callImageToImageAPI(file, state.selectedModel);
+            } 
+            // ƯU TIÊN 2: Nếu không có kết quả lưu sẵn (dành cho state cũ), thì mới chạy lại API.
+            else {
+                console.log("No results in history state, re-fetching...");
                 
-            } else if (state.searchMode === 'text-to-text') {
-                const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
-                results = await callTextToTextAPI(firstQuery);
+                // --- Giữ lại logic cũ của bạn để chạy lại API từ đầu ---
+                let results;
+                if (state.isImageTemporalStart && state.imageTemporalStartPath) {
+                    const response = await fetch(state.imageTemporalStartPath);
+                    const blob = await response.blob();
+                    const imageFile = new File([blob], "restored_temporal_image.jpg", { type: blob.type });
 
-            } else {
-                contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
-                return; 
+                    const formData = new FormData();
+                    formData.append("file", imageFile);
+
+                    const apiResponse = await fetch("/api/search/temporal/start_with_image", {
+                        method: "POST",
+                        body: formData,
+                    });
+
+                    if (!apiResponse.ok) throw new Error("Failed to restore image-based temporal search.");
+                    
+                    const resultData = await apiResponse.json();
+                    temporalChainId = resultData.chain_id;
+                    results = resultData.initial_results;
+                    
+                } else if (state.searchMode === 'text-to-image') {
+                    const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
+                    const firstSearchGroup = document.querySelector('.search-input-group');
+                    results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+
+                } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
+                    const response = await fetch(state.imageDataUrl);
+                    const blob = await response.blob();
+                    const file = new File([blob], "restored_image.jpg", { type: blob.type });
+                    results = await callImageToImageAPI(file, state.selectedModel);
+                    
+                } else if (state.searchMode === 'text-to-text') {
+                    const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
+                    results = await callTextToTextAPI(firstQuery);
+
+                } else {
+                    contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
+                    return; 
+                }
+                
+                // Chỉ hiển thị nếu có kết quả từ việc fetch lại
+                if (results) {
+                    handleSearchResults(results, false);
+                }
             }
-
-            handleSearchResults(results, false);
-
         } catch (error) {
             handleSearchError(error);
         }
@@ -3129,8 +3149,10 @@ function toggleFilter(filterType) {
             // 4. Gọi API backend mới
             const formData = new FormData();
             formData.append("file", imageFile);
-            // Bạn có thể thêm các tham số khác nếu cần, ví dụ model_name
-            // formData.append("model_name", currentSelectedModel);
+
+            if (currentSelectedModel && currentSelectedModel !== 'all') {
+                formData.append("model_name", currentSelectedModel);
+            }
 
             const apiResponse = await fetch("/api/search/temporal/start_with_image", {
                 method: "POST",
@@ -3168,6 +3190,15 @@ function toggleFilter(filterType) {
         } catch (error) {
             handleSearchError(error);
         }
+    }
+
+    function autoResizeTextarea(textareaElement) {
+        if (!textareaElement) return;
+        textareaElement.style.height = 'auto'; // Reset chiều cao để tính toán lại scrollHeight
+        // Lấy chiều cao tối thiểu từ CSS hoặc đặt một giá trị mặc định. 
+        // Trong code của bạn, bạn đã dùng 44px.
+        const minHeight = 44; 
+        textareaElement.style.height = Math.max(minHeight, textareaElement.scrollHeight) + 'px';
     }
 
 
