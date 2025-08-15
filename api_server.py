@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
-from milvus_indexing import MilvusManager
+from dynamic_temporal import MilvusManager
 import tempfile
 import os
 import re
