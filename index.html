@@ -15,6 +15,10 @@
             <!-- <h1>Header</h1> -->
             <div class="header-buttons">
                 <!-- Nút Text to Image -->
+                 <button id="historyBtn" class="header-btn" title="Search History">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-history"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+                </button>
+
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
@@ -49,7 +53,6 @@
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
                 </button>
-
                 <button id="vqaSubmitBtn" class="header-btn" title="VQA Submit (F10)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-send-icon lucide-send"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>
                 </button>
@@ -303,6 +306,13 @@
         </div>
         <div id="submitQueueFrames" class="submit-queue-frames">
             <!-- Các frame được chọn sẽ được thêm vào đây bằng JavaScript -->
+        </div>
+    </div>
+
+    <div id="historyMenu" class="history-menu">
+        <h3>Search History</h3>
+        <div id="historyListContainer" class="history-list-container">
+            <!-- Lịch sử tìm kiếm sẽ được chèn vào đây bằng JavaScript -->
         </div>
     </div>
 
