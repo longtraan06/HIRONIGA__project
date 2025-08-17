@@ -26,7 +26,7 @@ from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
 import aioredis
 import asyncio
-import threading
+
 
 VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
 
@@ -35,8 +35,8 @@ app = FastAPI()
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
-video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
+video_path_root = "/workspace/Datasets/HCMAI25/batch1/video"
 
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
@@ -66,7 +66,7 @@ milvus = MilvusManager(
                         model_paths=model_paths,
                         mode = 'AIC'
                     )
-milvus_lock = threading.Lock() 
+
 # clear cache method
 
 # Thêm xác thực cơ bản
@@ -377,23 +377,6 @@ class FrameSubmissionRequest(BaseModel):
     id: str
     answer: Optional[List[str]] = None
 
-class QueryItem(BaseModel):
-    id: str
-    text: str
-
-class FilterOptions(BaseModel):
-    ocr: Optional[str] = None
-    use_tag: Optional[bool] = False
-    tags_filter: Optional[List[str]] = None
-
-class TemporalExecuteRequest(BaseModel):
-    chain_id: Optional[str] = None
-    queries: List[QueryItem]
-    active_query_id: str
-    model_name: Optional[str] = None
-    filters: Optional[FilterOptions] = None
-
-
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
     try:
@@ -572,65 +555,68 @@ async def search_image(
     
     return process_milvus_results_for_frontend(results)
 
+
 @app.post("/api/search/temporal/start_with_image")
 async def temporal_search_start_with_image(
-    file: UploadFile = File(...),
-    model_name: Optional[str] = Form(None)
+    file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
+    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    model_name: Optional[str] = Form(None, description="Tên model để sử dụng")
 ):
     """
-    Nâng cấp: Bắt đầu một chuỗi temporal mới bằng hình ảnh và tạo ra một
-    trạng thái ban đầu tương thích hoàn toàn với hệ thống /execute mới.
+    Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
+    Trả về kết quả tìm kiếm ban đầu và một chain_id mới.
     """
     try:
+        # 1. Tạo một chain_id mới và duy nhất
         chain_id = str(uuid.uuid4())
-        image_query_id = str(uuid.uuid4()) # ID duy nhất cho bước tìm kiếm bằng ảnh này
+        
+        # 2. Đọc nội dung ảnh
         image_bytes = await file.read()
-
-        results, new_state = None, None
-        with milvus_lock:
-            # Thực hiện tìm kiếm ban đầu, yêu cầu Milvus tạo state mới
-            results = milvus.search(
-                query=image_bytes,
-                mode="image",
-                search_in="image",
-                start_temporal_chain=True,
-                model_name=model_name
+        
+        # 3. Thực hiện tìm kiếm ban đầu với cờ start_temporal_chain=True
+        initial_results = milvus.search(
+            query=image_bytes,
+            mode="image",
+            search_in="image",
+            start_temporal_chain=True,  # Điểm mấu chốt để khởi tạo trạng thái
+            top_k=min(top_k, 2000),
+            model_name=model_name
+        )
+        
+        # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
+        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        if not temporal_state:
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to initialize temporal chain state from image search."
             )
-            # Lấy state mới ra
-            new_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
-
-        if new_state is None:
-            raise HTTPException(status_code=500, detail="Failed to initialize temporal state from image.")
-        image_query_representation = {
-            "id": image_query_id,
-            "type": "image",
-            "text": f"Image Search ({file.filename})" # Mô tả để dễ debug
-        }
+            
+        pickled_state = pickle.dumps(temporal_state)
+        base64_state = base64.b64encode(pickled_state).decode('utf-8')
         
-        b64_new_state = base64.b64encode(pickle.dumps(new_state)).decode('utf-8')
-        
-        chain_data = {
-            "queries": [image_query_representation],
-            "intermediate_states": {
-                image_query_id: b64_new_state
-            },
+        temporal_chain_data = {
+            "state_format": "pickle_base64",
+            "state": base64_state,
             "last_update": time.time()
         }
-        redis_key = f"temporal_chain:{chain_id}"
-        redis_client.set(redis_key, json.dumps(chain_data), ex=TEMPORAL_CHAIN_TTL)
         
-        print(f"Started new IMAGE-BASED temporal chain with ID: {chain_id}")
+        redis_client.set(
+            f"temporal_chain:{chain_id}",
+            json.dumps(temporal_chain_data)
+        )
+        
+        print(f"Started new image-based temporal chain with ID: {chain_id}")
+        
+        # 5. Trả về kết quả và chain_id
         return {
             "chain_id": chain_id,
-            "image_query_id": image_query_id, # <<< RẤT QUAN TRỌNG
-            "initial_results": process_milvus_results_for_frontend(results)
+            "initial_results": process_milvus_results_for_frontend(initial_results)
         }
-
+        
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
-
 
 
 @app.get("/api/metadata/{video_id}")
@@ -689,171 +675,149 @@ async def get_video_info(video_id: str):
 import pickle
 import base64
 
-TEMPORAL_CHAIN_TTL = 3600 * 3
-
-@app.post("/api/search/temporal/execute")
-async def temporal_search_execute(req: TemporalExecuteRequest):
-    try:
-        chain_id = req.chain_id
-        if not chain_id:
-            chain_id = str(uuid.uuid4())
-            chain_data = {"queries": [], "intermediate_states": {}}
-            print(f"Bắt đầu chuỗi temporal mới: {chain_id}")
-        else:
-            chain_data_str = redis_client.get(f"temporal_chain:{chain_id}")
-            if chain_data_str:
-                chain_data = json.loads(chain_data_str)
-            else:
-                # Nếu không tìm thấy (ví dụ: đã hết hạn), tạo một chuỗi mới với cùng ID
-                print(f"Không tìm thấy chuỗi {chain_id} trong Redis, tạo chuỗi mới.")
-                chain_data = {"queries": [], "intermediate_states": {}}
-        try:
-            active_index = next(i for i, q in enumerate(req.queries) if q.id == req.active_query_id)
-        except StopIteration:
-            raise HTTPException(status_code=400, detail="active_query_id không tồn tại trong chuỗi queries.")
-
-        active_query = req.queries[active_index]
-        prior_state = None
-        if active_index > 0:
-            prior_query_id = req.queries[active_index - 1].id
-            prior_state_b64 = chain_data.get("intermediate_states", {}).get(prior_query_id)
-            if prior_state_b64:
-                pickled_state = base64.b64decode(prior_state_b64)
-                prior_state = pickle.loads(pickled_state)
-
-        ids_to_remove = [q['id'] for q in chain_data.get("queries", [])[active_index:]]
-        for q_id in ids_to_remove:
-            chain_data.get("intermediate_states", {}).pop(q_id, None)
-        
-        chain_data["queries"] = [q.dict() for q in req.queries[:active_index]]
-
-        results = None
-        new_state = None
-        filters = req.filters if req.filters else FilterOptions()
-
-        with milvus_lock:
-            milvus.temporal_state = prior_state
-            
-            print(f"Chain {chain_id}, Query {active_index}: '{active_query.text}'")
-            if active_index == 0:
-                results = milvus.search(
-                    query=active_query.text,
-                    mode="text",
-                    search_in="image",
-                    start_temporal_chain=True,
-                    model_name=req.model_name,
-                    use_tag=filters.use_tag,
-                    tags_filter=filters.tags_filter,
-                    ocr=filters.ocr
-                )
-            else:
-                # Tìm kiếm các bước tiếp theo, Milvus sẽ dùng state đã được "tiêm"
-                temporal_answer = milvus.temporal_search_sequence(
-                    query=active_query.text,
-                    mode="text",
-                    # Milvus sẽ tự động sử dụng self.temporal_state mà ta đã gán
-                    use_tag=filters.use_tag,
-                    tags_filter=filters.tags_filter,
-                    ocr=filters.ocr
-                )
-                results = temporal_answer.get("query_A_reranked", [])
-
-            # Lấy ra state MỚI mà Milvus vừa tính toán xong
-            new_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
-
-        if new_state is not None:
-            # Thêm query hiện tại vào lịch sử chuỗi
-            chain_data["queries"].append(active_query.dict())
-
-            # Serialize và lưu trạng thái trung gian mới
-            pickled_new_state = pickle.dumps(new_state)
-            b64_new_state = base64.b64encode(pickled_new_state).decode('utf-8')
-            chain_data["intermediate_states"][active_query.id] = b64_new_state
-        
-        # Cập nhật thời gian và lưu toàn bộ vào Redis với TTL
-        chain_data["last_update"] = time.time()
-        redis_key = f"temporal_chain:{chain_id}"
-        redis_client.set(redis_key, json.dumps(chain_data))
-        redis_client.expire(redis_key, TEMPORAL_CHAIN_TTL)
-        
-        return {
-            "chain_id": chain_id,
-            "results": process_milvus_results_for_frontend(results),
-            "is_reranked": active_index > 0
-        }
-
-    except Exception as e:
-        # Bắt tất cả các lỗi có thể xảy ra và trả về lỗi 500
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"An internal server error occurred: {str(e)}")
-
-
 @app.post("/api/search/temporal/start")
 async def temporal_search_start(req: TemporalStartRequest):
-    # 1. Tạo một queryId ngẫu nhiên cho query đầu tiên này
-    query_id = str(uuid.uuid4())
-    
-    # 2. Chuyển đổi request cũ thành định dạng request MỚI
-    execute_request = TemporalExecuteRequest(
-        chain_id=None, # Luôn là chuỗi mới
-        queries=[QueryItem(id=query_id, text=req.query)],
-        active_query_id=query_id,
-        model_name=req.model_name,
-        filters=FilterOptions(
-            ocr=req.ocr,
-            use_tag=req.use_tag,
-            tags_filter=req.tags_filter
+    try:
+        # 1. Tạo một ID duy nhất cho chuỗi tìm kiếm này
+        chain_id = str(uuid.uuid4())
+        
+        lower_query = req.query.lower() if req.query else ""
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+        lower_ocr = req.ocr.lower() if req.ocr else None
+        # 2. Thực hiện tìm kiếm đầu tiên (Query A) với tham số start_temporal_chain=True
+        initial_results = milvus.search(
+            query=lower_query,
+            mode="text",
+            search_in="image",
+            start_temporal_chain=True,
+            top_k=min(req.top_k, 2000),  # Giới hạn top_k
+            model_name=req.model_name,
+            use_tag=req.use_tag,    
+            top_k_tags=req.top_k_tags,
+            tags_filter=lower_tag,
+            ocr = lower_ocr
         )
-    )
+        
+        # 3. Lấy trạng thái temporal
+        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        if not temporal_state:
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to initialize temporal chain state"
+            )
+        
+        # 4. Lưu trạng thái sử dụng pickle để giữ nguyên cấu trúc dữ liệu
+        # Chuyển đổi thành binary và sau đó encode base64 để lưu vào Redis
+        pickled_state = pickle.dumps(temporal_state)
+        base64_state = base64.b64encode(pickled_state).decode('utf-8')
+        
+        temporal_chain_data = {
+            "state_format": "pickle_base64",  # Đánh dấu định dạng dữ liệu
+            "state": base64_state,
+            "last_update": time.time()
+        }
+        
+        redis_client.set(
+            f"temporal_chain:{chain_id}",
+            json.dumps(temporal_chain_data)
+        )
+        
+        print(f"Started new temporal chain with ID: {chain_id}")
+        
+        # 5. Trả về kết quả và chain_id cho client
+        return {
+            "chain_id": chain_id,
+            "initial_results": process_milvus_results_for_frontend(initial_results)
+        }
     
-    # 3. Gọi hàm logic MỚI
-    response = await temporal_search_execute(execute_request)
-    
-    # 4. Định dạng lại response để phù hợp với frontend CŨ
-    return {
-        "chain_id": response["chain_id"],
-        "initial_results": response["results"] # Trả về key "initial_results"
-    }
+    except Exception as e:
+        print(f"ERROR in temporal_search_start: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/search/temporal/continue")
 async def temporal_search_continue(req: TemporalContinueRequest):
-    # 1. Lấy lịch sử query của chuỗi hiện tại từ Redis
-    chain_data_str = redis_client.get(f"temporal_chain:{req.chain_id}")
-    if not chain_data_str:
-        raise HTTPException(status_code=404, detail="Temporal chain ID not found.")
-    
-    chain_data = json.loads(chain_data_str)
-    # Chuyển đổi list of dicts thành list of QueryItem objects
-    previous_queries = [QueryItem(**q) for q in chain_data.get("queries", [])]
+    try:
+        # 1. Kiểm tra xem chain_id có tồn tại trong Redis không
+        chain_data_str = redis_client.get(f"temporal_chain:{req.chain_id}")
+        
+        if not chain_data_str:
+            raise HTTPException(
+                status_code=404, 
+                detail="Temporal chain ID not found or expired."
+            )
+        
+        # Parse JSON để lấy metadata
+        chain_data = json.loads(chain_data_str)
+        
+        # 2. Khôi phục trạng thái temporal từ bộ nhớ lưu trữ
+        if chain_data.get("state_format") == "pickle_base64":
+            # Khôi phục từ pickle nếu dữ liệu được lưu dưới dạng pickle
+            base64_state = chain_data["state"]
+            pickled_state = base64.b64decode(base64_state)
+            saved_state = pickle.loads(pickled_state)
+        else:
+            # Backwards compatibility - nếu dữ liệu lưu theo cách cũ
+            saved_state = chain_data["state"]
+        
+        # 3. Cập nhật trạng thái temporal trong instance MilvusManager
+        with milvus._lock:  # Sử dụng lock để tránh race condition
+            milvus.temporal_state = saved_state
+        
+        lower_query = req.query.lower() if req.query else ""
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+        lower_ocr = req.ocr.lower() if req.ocr else None
 
-    # 2. Tạo queryId mới và thêm query hiện tại vào chuỗi
-    new_query_id = str(uuid.uuid4())
-    current_queries = previous_queries + [QueryItem(id=new_query_id, text=req.query)]
-    
-    # 3. Chuyển đổi thành định dạng request MỚI
-    execute_request = TemporalExecuteRequest(
-        chain_id=req.chain_id,
-        queries=current_queries,
-        active_query_id=new_query_id,
-        model_name=None, # Hàm continue cũ không có model_name
-        filters=FilterOptions(
-            ocr=req.ocr,
-            use_tag=req.use_tag,
-            tags_filter=req.tags_filter
+        # 4. Thực hiện temporal search sequence
+        temporal_answer = milvus.temporal_search_sequence(
+            query=lower_query,
+            mode="text",
+            top_k=min(req.top_k, 2000),
+            use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+            top_k_tags=req.top_k_tags,
+            tags_filter=lower_tag,
+            ocr = lower_ocr,
         )
-    )
+        
+        # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
+        with milvus._lock:
+            saved_state = milvus.temporal_state.copy()
+        
+        # 6. Cập nhật trạng thái và thời gian trong Redis
+        # Sử dụng pickle để lưu trạng thái
+        pickled_state = pickle.dumps(saved_state)
+        base64_state = base64.b64encode(pickled_state).decode('utf-8')
+        
+        temporal_chain_data = {
+            "state_format": "pickle_base64",
+            "state": base64_state,
+            "last_update": time.time()
+        }
+        
+        redis_client.set(
+            f"temporal_chain:{req.chain_id}",
+            json.dumps(temporal_chain_data)
+        )
+        
+        print(f"Continued temporal chain with ID: {req.chain_id}")
+        
+        # 7. Xử lý kết quả trả về
+        reranked_list = temporal_answer.get("query_A_reranked", [])
+        processed_reranked_list = process_milvus_results_for_frontend(reranked_list)
+        
+        # 8. Tạo response cuối cùng
+        current_query_results = process_milvus_results_for_frontend(
+            temporal_answer.get("current_query_results", [])
+        )
+        
+        return {
+            "query_idx": temporal_answer.get("query_idx"),
+            "current_query_results": current_query_results,
+            "query_A_reranked": processed_reranked_list
+        }
     
-    # 4. Gọi hàm logic MỚI
-    response = await temporal_search_execute(execute_request)
-
-    # 5. Định dạng lại response để phù hợp với frontend CŨ
-    # Frontend cũ mong đợi một key là "query_A_reranked"
-    return {
-        "query_idx": len(current_queries) - 1, # Giả lập query_idx
-        "current_query_results": [], # Có thể bỏ trống
-        "query_A_reranked": response["results"]
-    }
+    except Exception as e:
+        print(f"ERROR in temporal_search_continue: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 def process_milvus_results_for_frontend(results: list) -> list:
     processed_list = []
