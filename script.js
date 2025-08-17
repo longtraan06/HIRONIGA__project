@@ -1,6 +1,6 @@
 document.addEventListener('DOMContentLoaded', function() {
     let searchIdCounter = 1;
-    let temporalChainId = null;
+    let currentUserId = null;
     let currentSearchMode = 'text-to-image';
     let currentHeaderFocus = null;
     let isTranslationEnabled = false;
@@ -78,12 +78,38 @@ document.addEventListener('DOMContentLoaded', function() {
     const historyBtn = document.getElementById('historyBtn');
     const historyMenu = document.getElementById('historyMenu');
     const historyListContainer = document.getElementById('historyListContainer');
-
+    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
     let preparedAnswerData = null; // Biến tạm để lưu dữ liệu Answer
     initializeEventListeners();
 
+
+    function getOrCreateUserId() {
+        let userId = localStorage.getItem('aic_lunch_user_id');
+        if (!userId) {
+            // Tạo một ID đơn giản nhưng đủ duy nhất cho mục đích session
+            userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
+            localStorage.setItem('aic_lunch_user_id', userId);
+        }
+        return userId;
+    }
+
+    function setupUnloadHandler() {
+        window.addEventListener('unload', function() {
+            if (currentUserId) {
+                const formData = new FormData();
+                formData.append('user_id', currentUserId);
+                // Dùng sendBeacon để đảm bảo request được gửi đi ngay cả khi trang đang đóng
+                navigator.sendBeacon('/api/session/cleanup', formData);
+            }
+        });
+    }
+
     // Initialize
     function initializeEventListeners() {
+
+        currentUserId = getOrCreateUserId(); // <<< THÊM VÀO
+        setupUnloadHandler(); 
+
         const savedModel = localStorage.getItem('user_selected_model');
         if (savedModel) {
             currentSelectedModel = savedModel;
@@ -143,7 +169,7 @@ document.addEventListener('DOMContentLoaded', function() {
             toggleFilter('tag');
         });
 
-
+        clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
         // Đóng các menu thả xuống khi click ra ngoài
@@ -1279,12 +1305,6 @@ async function ensureDresPrerequisites() {
         // Cập nhật mode hiện tại
         currentSearchMode = mode;
         
-        // Reset temporal chain khi chuyển mode
-        if (temporalChainId) {
-            temporalChainId = null;
-            // Xóa các thanh tìm kiếm phụ nếu có
-            document.querySelectorAll('.search-input-group:not(:first-child)').forEach(group => group.remove());
-        }
         
         // Cập nhật giao diện tìm kiếm
         updateSearchMode();
@@ -1680,22 +1700,15 @@ async function ensureDresPrerequisites() {
                     // Tách riêng logic temporal search
                     const isFirstSearch = !searchGroup.previousElementSibling;
                     if (isFirstSearch) {
-                        searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions)
+                        searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions, searchGroup)
                         .then(response => {
-                                temporalChainId = response.chain_id; // Cập nhật chain_id
                                 handleSearchResults(response.initial_results, false);
                                 manageNextSearchInput();
                             });
-                    } else if (temporalChainId) {
-                        searchPromise = callTemporalSearchContinue(finalQuery, temporalChainId, filterOptions)
+                    } else {
+                        searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, filterOptions, searchGroup)
                         .then(response => {
                                 handleSearchResults(response.query_A_reranked, true);
-                                manageNextSearchInput();
-                            });
-                    } else {
-                        searchPromise = callTextToImageAPI(finalQuery, currentSelectedModel, filterOptions)
-                        .then(results => {
-                                handleSearchResults(results, false);
                                 manageNextSearchInput();
                             });
                     }
@@ -1747,35 +1760,35 @@ async function ensureDresPrerequisites() {
         }
     }
 
-    // Tách logic text-to-image để dễ quản lý
-    function handleTextToImageSearch(query, searchGroup) {
-        // Kiểm tra xem đây là thanh tìm kiếm đầu tiên hay không
-        const isFirstSearch = !searchGroup.previousElementSibling;
+    // // Tách logic text-to-image để dễ quản lý
+    // function handleTextToImageSearch(query, searchGroup) {
+    //     // Kiểm tra xem đây là thanh tìm kiếm đầu tiên hay không
+    //     const isFirstSearch = !searchGroup.previousElementSibling;
         
-        if (isFirstSearch) {
-            callTemporalSearchStart(query, currentSelectedModel, searchGroup).then(response => {
-                temporalChainId = response.chain_id;
-                handleSearchResults(response.initial_results, false);
+    //     if (isFirstSearch) {
+    //         callTemporalSearchStart(query, currentSelectedModel, searchGroup).then(response => {
+    //             temporalChainId = response.chain_id;
+    //             handleSearchResults(response.initial_results, false);
                 
-                // Tạo thanh tìm kiếm mới ở đây
-               manageNextSearchInput();
-            }).catch(handleSearchError);
-        } else if (temporalChainId) {
-            callTemporalSearchContinue(query, temporalChainId, searchGroup).then(response => {
-                handleSearchResults(response.query_A_reranked, true);
+    //             // Tạo thanh tìm kiếm mới ở đây
+    //            manageNextSearchInput();
+    //         }).catch(handleSearchError);
+    //     } else if (temporalChainId) {
+    //         callTemporalSearchContinue(query, temporalChainId, searchGroup).then(response => {
+    //             handleSearchResults(response.query_A_reranked, true);
                 
-                // Tạo thanh tìm kiếm mới ở đây
-                manageNextSearchInput();
-            }).catch(handleSearchError);
-        } else {
-            callTextToImageAPI(query, currentSelectedModel, searchGroup).then(results => {
-                handleSearchResults(results, false);
+    //             // Tạo thanh tìm kiếm mới ở đây
+    //             manageNextSearchInput();
+    //         }).catch(handleSearchError);
+    //     } else {
+    //         callTextToImageAPI(query, currentSelectedModel, searchGroup).then(results => {
+    //             handleSearchResults(results, false);
                 
-                // Tạo thanh tìm kiếm mới ở đây
-                manageNextSearchInput();
-            }).catch(handleSearchError);
-        }
-    }
+    //             // Tạo thanh tìm kiếm mới ở đây
+    //             manageNextSearchInput();
+    //         }).catch(handleSearchError);
+    //     }
+    // }
     
     function createAndFocusNewSearchInput() {
         setTimeout(() => {
@@ -1800,40 +1813,48 @@ async function ensureDresPrerequisites() {
     }
 
     function manageNextSearchInput() {
-        // Lấy ô tìm kiếm CUỐI CÙNG trên trang
-        const lastSearchInput = document.querySelector('.search-inputs-container .search-input:last-of-type');
-
-        // Kiểm tra xem ô cuối cùng có nội dung hay không.
-        // Hoặc, kiểm tra xem nó có đang được đi kèm với một bộ lọc đang hoạt động hay không.
-        const searchGroup = lastSearchInput ? lastSearchInput.closest('.search-input-group') : null;
-        let isFilterActiveOnLastInput = false;
-        if (searchGroup) {
+        // === Giai đoạn 1: Tìm kiếm một ô trống đã tồn tại ===
+        const allInputs = document.querySelectorAll('.search-inputs-container .search-input');
+        
+        let firstEmptyInput = null;
+        for (const input of allInputs) {
+            // Một ô được coi là "trống" nếu nó không có text VÀ không có filter nào đang áp dụng cho nó
+            const searchGroup = input.closest('.search-input-group');
             const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
             const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
-            isFilterActiveOnLastInput = (ocrFilterBtn.classList.contains('active') && ocrValue) || (tagFilterBtn.classList.contains('active') && tagValue);
+            
+            // Giả sử filter chỉ áp dụng cho ô tìm kiếm đầu tiên (theo logic toggleFilter của bạn)
+            const isFilterActiveOnThisInput = 
+                (ocrFilterBtn.classList.contains('active') && ocrValue) || 
+                (tagFilterBtn.classList.contains('active') && tagValue);
+
+            if (input.value.trim() === '' && !isFilterActiveOnThisInput) {
+                firstEmptyInput = input;
+                break; // Dừng lại ngay khi tìm thấy ô trống đầu tiên
+            }
         }
 
-
-        // Nếu ô cuối cùng không tồn tại, hoặc nó CÓ NỘI DUNG, hoặc nó ĐANG ĐI KÈM BỘ LỌC
-        // thì chúng ta cần tạo một ô mới.
-        if (!lastSearchInput || lastSearchInput.value.trim() !== '' || isFilterActiveOnLastInput) {
-            console.log('Tạo thanh tìm kiếm mới.');
-            const newInput = createNewSearchInput();
+        // Nếu tìm thấy một ô trống, focus vào đó và kết thúc hàm
+        if (firstEmptyInput) {
+            console.log('Found an existing empty input. Focusing on it.');
             setTimeout(() => {
-                newInput.focus();
-                newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                firstEmptyInput.focus();
+                firstEmptyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 50);
-        } 
-        // Ngược lại, nếu ô cuối cùng trống và không có bộ lọc nào, chỉ cần focus vào nó.
-        else {
-            console.log('Focus vào thanh tìm kiếm trống cuối cùng.');
-            setTimeout(() => {
-                lastSearchInput.focus();
-                lastSearchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }, 50);
+            return; // << Rất quan trọng: Kết thúc hàm tại đây
         }
+
+        // === Giai đoạn 2: Nếu không có ô trống nào, quyết định có nên tạo ô mới không ===
+        // Logic này chỉ chạy khi tất cả các ô hiện có đều đã được điền hoặc có filter.
+        // Đây là lúc logic gốc của bạn phát huy tác dụng.
+        
+        console.log('All existing inputs are in use. Creating a new one.');
+        const newInput = createNewSearchInput();
+        setTimeout(() => {
+            newInput.focus();
+            newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
     }
-
     // Thêm hàm gọi API text-to-text mới
     function callTextToTextAPI(query) {
         return fetch("/api/search/text", {
@@ -1917,8 +1938,14 @@ async function ensureDresPrerequisites() {
 
 
 
-    function callTemporalSearchStart(query, modelName, filterOptions) {
-        const body = { query: query };
+    function callTemporalSearchStart(query, modelName, filterOptions, searchGroup) {
+        const queryId = searchGroup.dataset.searchId;
+        const body = { 
+            query: query, 
+            user_id: currentUserId, 
+            query_id: queryId 
+        };
+
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             body.model_name = modelName;
         }
@@ -1940,10 +1967,12 @@ async function ensureDresPrerequisites() {
     }
 
     // Hàm này được gọi khi tìm kiếm query B, C...
-    function callTemporalSearchContinue(query, chainId, filterOptions) {
+    function callTemporalSearchContinue(query, chainId, filterOptions, searchGroup) {
+        const queryId = searchGroup.dataset.searchId;
         const body = { 
             query: query, 
-            chain_id: chainId 
+            chain_id: chainId, // chainId ở đây chính là currentUserId
+            query_id: queryId 
         };
 
         // >>> LOGIC MỚI <<<
@@ -2969,7 +2998,7 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             description: 'AIC_LUNCH_SEARCH', // Dùng để nhận dạng
             searchMode: currentSearchMode,
             selectedModel: currentSelectedModel,
-            temporalChainId: temporalChainId,
+            // temporalChainId: temporalChainId,
             queries: [],
             filters: {
                 ocr: { enabled: false, value: '' },
@@ -3182,7 +3211,7 @@ function toggleFilter(filterType) {
      */
     async function initiateImageTemporalSearch(imagePath) {
         // 1. Reset giao diện và trạng thái cho một chuỗi mới
-        temporalChainId = null; // Rất quan trọng: Reset chain ID cũ
+        
         searchInputsContainer.innerHTML = ''; // Xóa sạch các ô tìm kiếm cũ
         showLoadingIndicator(); // Hiển thị loading
 
@@ -3197,8 +3226,12 @@ function toggleFilter(filterType) {
             const imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
 
             // 4. Gọi API backend mới
+            const queryId = 'img-start-' + Date.now();
+
             const formData = new FormData();
             formData.append("file", imageFile);
+            formData.append("user_id", currentUserId); // <<< THÊM VÀO
+            formData.append("query_id", queryId); 
 
             if (currentSelectedModel && currentSelectedModel !== 'all') {
                 formData.append("model_name", currentSelectedModel);
@@ -3216,7 +3249,6 @@ function toggleFilter(filterType) {
             const resultsData = await apiResponse.json();
 
             // 5. Cập nhật trạng thái và hiển thị kết quả
-            temporalChainId = resultsData.chain_id; // Lưu chain ID mới
             handleSearchResults(resultsData.initial_results, false);
 
             // 6. Tạo ô nhập văn bản mới và focus vào đó
@@ -3282,14 +3314,18 @@ function renderSearchHistory() {
 
     if (history.length === 0) {
         historyListContainer.innerHTML = '<div class="history-empty">Chưa có lịch sử tìm kiếm.</div>';
+        clearHistoryBtn.style.display = 'none'; // Ẩn nút xóa khi không có gì
         return;
     }
+
+    // Nếu có lịch sử, đảm bảo nút xóa được hiện ra
+    clearHistoryBtn.style.display = 'flex'; 
 
     history.forEach(query => {
         const historyItem = document.createElement('div');
         historyItem.className = 'history-item';
         historyItem.textContent = query;
-        historyItem.dataset.query = query; // Lưu query vào data attribute để dễ lấy
+        historyItem.dataset.query = query;
         historyListContainer.appendChild(historyItem);
     });
 }
@@ -3342,42 +3378,32 @@ function toggleHistoryMenu(e) {
         return; // Dừng hàm tại đây
     }
 
-    // --- BẮT ĐẦU LOGIC MỚI ---
-
-    // 1. Cập nhật nội dung cho menu
+    // Cập nhật nội dung cho menu
     renderSearchHistory();
 
-    // 2. Lấy vị trí của nút "History"
+    // Lấy vị trí của nút "History" để xác định vị trí theo chiều dọc
     const btnRect = historyBtn.getBoundingClientRect();
-
-    // 3. Đặt vị trí theo chiều dọc (luôn cố định bên dưới nút)
     historyMenu.style.top = `${btnRect.bottom + 5}px`;
 
-    // 4. Đặt vị trí theo chiều ngang, neo vào cạnh trái của nút
-    // Đây là vị trí mặc định và lý tưởng nhất
-    historyMenu.style.left = `${btnRect.left}px`;
-    
-    // Xóa các thuộc tính định vị cũ có thể còn sót lại
-    historyMenu.style.right = ''; 
-    historyMenu.style.transform = '';
+    // **ĐỊNH VỊ THEO CHIỀU NGANG (GIỐNG HỆT SETTINGS)**
+    // Luôn luôn neo menu vào cạnh phải của màn hình
+    historyMenu.style.right = '20px'; // Cách cạnh phải màn hình 20px
+    historyMenu.style.left = '';      // Xóa thuộc tính 'left' để tránh xung đột
 
-    // 5. HIỂN THỊ MENU RA
+    // Hiển thị menu
     historyMenu.classList.add('visible');
-
-    // 6. KIỂM TRA VÀ SỬA LỖI TRÀN MÀN HÌNH (SAU KHI ĐÃ HIỂN THỊ)
-    // Dùng setTimeout để đảm bảo trình duyệt đã vẽ menu ra màn hình
-    setTimeout(() => {
-        const menuRect = historyMenu.getBoundingClientRect();
-        const viewportWidth = window.innerWidth;
-
-        // Nếu cạnh phải của menu vượt ra ngoài màn hình
-        if (menuRect.right > viewportWidth) {
-            // Thì thay đổi cách định vị: neo vào cạnh phải của màn hình
-            historyMenu.style.left = ''; // Bỏ định vị theo bên trái
-            historyMenu.style.right = '10px'; // Cách cạnh phải màn hình 10px
-        }
-    }, 0);
-
-    // --- KẾT THÚC LOGIC MỚI ---
 }
+
+function clearSearchHistory(e) {
+    e.stopPropagation(); // Ngăn menu đóng lại ngay khi click nút này
+
+    // Hiện hộp thoại xác nhận
+    if (confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử tìm kiếm không?')) {
+        localStorage.removeItem('searchHistory'); // Xóa dữ liệu trong localStorage
+        renderSearchHistory(); // Vẽ lại danh sách (lúc này sẽ trống)
+        showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
+    }
+}
+
+
 });
