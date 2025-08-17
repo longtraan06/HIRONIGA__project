@@ -75,6 +75,10 @@ document.addEventListener('DOMContentLoaded', function() {
     const qaInputModalCloseBtn = qaInputModal.querySelector('.close-btn');
     const qaInputModalOverlay = qaInputModal.querySelector('.modal-overlay');
 
+    const historyBtn = document.getElementById('historyBtn');
+    const historyMenu = document.getElementById('historyMenu');
+    const historyListContainer = document.getElementById('historyListContainer');
+
     let preparedAnswerData = null; // Biến tạm để lưu dữ liệu Answer
     initializeEventListeners();
 
@@ -137,6 +141,38 @@ document.addEventListener('DOMContentLoaded', function() {
 
         tagFilterBtn.addEventListener('click', function() {
             toggleFilter('tag');
+        });
+
+
+        historyBtn.addEventListener('click', toggleHistoryMenu);
+
+        // Đóng các menu thả xuống khi click ra ngoài
+        document.addEventListener('click', function(e) {
+            if (historyMenu.classList.contains('visible') && !historyMenu.contains(e.target) && !historyBtn.contains(e.target)) {
+                closeHistoryMenu();
+            }
+            // Bạn đã có sẵn logic này cho settingsMenu, đây là để đảm bảo nó vẫn hoạt động
+            if (settingsMenu.classList.contains('visible') && !settingsMenu.contains(e.target) && !settingsBtn.contains(e.target)) {
+                settingsMenu.classList.remove('visible');
+            }
+        });
+
+        // Xử lý việc click vào một mục lịch sử
+        historyListContainer.addEventListener('click', function(e) {
+            const historyItem = e.target.closest('.history-item');
+            if (historyItem) {
+                const query = historyItem.dataset.query;
+                
+                copyQueryToClipboard(query)
+                    .then(() => {
+                        showToastNotification(`Đã sao chép: "${query}"`, 'success');
+                        closeHistoryMenu();
+                    })
+                    .catch(err => {
+                        console.error('Lỗi khi sao chép: ', err);
+                        showToastNotification('Không thể sao chép!', 'error');
+                    });
+            }
         });
 
         submitQueueFramesContainer.addEventListener('contextmenu', e => {
@@ -1581,6 +1617,7 @@ async function ensureDresPrerequisites() {
     async function performSearch(query, type, searchGroup) {
         if (type === 'text') {
             // Lấy giá trị từ các ô lọc đang hoạt động
+            saveQueryToHistory(query);
             const ocrInput = searchGroup.querySelector('.ocr-input');
             const tagInput = searchGroup.querySelector('.tag-input');
 
@@ -1762,46 +1799,40 @@ async function ensureDresPrerequisites() {
         }, 200);
     }
 
-    /**
-     * Quản lý thanh tìm kiếm tiếp theo.
-     * Kiểm tra xem có thanh tìm kiếm nào trống không.
-     * Nếu có, focus vào nó. Nếu không, tạo một thanh mới.
-     */
-function manageNextSearchInput() {
-    // Lấy ô tìm kiếm CUỐI CÙNG trên trang
-    const lastSearchInput = document.querySelector('.search-inputs-container .search-input:last-of-type');
+    function manageNextSearchInput() {
+        // Lấy ô tìm kiếm CUỐI CÙNG trên trang
+        const lastSearchInput = document.querySelector('.search-inputs-container .search-input:last-of-type');
 
-    // Kiểm tra xem ô cuối cùng có nội dung hay không.
-    // Hoặc, kiểm tra xem nó có đang được đi kèm với một bộ lọc đang hoạt động hay không.
-    const searchGroup = lastSearchInput ? lastSearchInput.closest('.search-input-group') : null;
-    let isFilterActiveOnLastInput = false;
-    if (searchGroup) {
-        const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
-        const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
-        isFilterActiveOnLastInput = (ocrFilterBtn.classList.contains('active') && ocrValue) || (tagFilterBtn.classList.contains('active') && tagValue);
+        // Kiểm tra xem ô cuối cùng có nội dung hay không.
+        // Hoặc, kiểm tra xem nó có đang được đi kèm với một bộ lọc đang hoạt động hay không.
+        const searchGroup = lastSearchInput ? lastSearchInput.closest('.search-input-group') : null;
+        let isFilterActiveOnLastInput = false;
+        if (searchGroup) {
+            const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
+            const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
+            isFilterActiveOnLastInput = (ocrFilterBtn.classList.contains('active') && ocrValue) || (tagFilterBtn.classList.contains('active') && tagValue);
+        }
+
+
+        // Nếu ô cuối cùng không tồn tại, hoặc nó CÓ NỘI DUNG, hoặc nó ĐANG ĐI KÈM BỘ LỌC
+        // thì chúng ta cần tạo một ô mới.
+        if (!lastSearchInput || lastSearchInput.value.trim() !== '' || isFilterActiveOnLastInput) {
+            console.log('Tạo thanh tìm kiếm mới.');
+            const newInput = createNewSearchInput();
+            setTimeout(() => {
+                newInput.focus();
+                newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 50);
+        } 
+        // Ngược lại, nếu ô cuối cùng trống và không có bộ lọc nào, chỉ cần focus vào nó.
+        else {
+            console.log('Focus vào thanh tìm kiếm trống cuối cùng.');
+            setTimeout(() => {
+                lastSearchInput.focus();
+                lastSearchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 50);
+        }
     }
-
-
-    // Nếu ô cuối cùng không tồn tại, hoặc nó CÓ NỘI DUNG, hoặc nó ĐANG ĐI KÈM BỘ LỌC
-    // thì chúng ta cần tạo một ô mới.
-    if (!lastSearchInput || lastSearchInput.value.trim() !== '' || isFilterActiveOnLastInput) {
-        console.log('Tạo thanh tìm kiếm mới.');
-        const newInput = createNewSearchInput();
-        setTimeout(() => {
-            newInput.focus();
-            newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 50);
-    } 
-    // Ngược lại, nếu ô cuối cùng trống và không có bộ lọc nào, chỉ cần focus vào nó.
-    else {
-        console.log('Focus vào thanh tìm kiếm trống cuối cùng.');
-        setTimeout(() => {
-            lastSearchInput.focus();
-            lastSearchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }, 50);
-    }
-}
-
 
     // Thêm hàm gọi API text-to-text mới
     function callTextToTextAPI(query) {
@@ -3221,4 +3252,132 @@ function toggleFilter(filterType) {
     }
 
 
+
+    function saveQueryToHistory(query) {
+    if (!query || query.trim() === '') return;
+
+    const trimmedQuery = query.trim();
+    let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+
+    // Xóa các bản sao cũ của truy vấn này để đưa bản mới nhất lên đầu
+    history = history.filter(item => item !== trimmedQuery);
+
+    // Thêm truy vấn mới vào đầu danh sách
+    history.unshift(trimmedQuery);
+
+    // Giới hạn lịch sử ở 50 mục gần nhất
+    if (history.length > 50) {
+        history = history.slice(0, 50);
+    }
+
+    localStorage.setItem('searchHistory', JSON.stringify(history));
+}
+
+/**
+ * Hiển thị các truy vấn đã lưu vào trong menu.
+ */
+function renderSearchHistory() {
+    const history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+    historyListContainer.innerHTML = ''; // Xóa nội dung cũ
+
+    if (history.length === 0) {
+        historyListContainer.innerHTML = '<div class="history-empty">Chưa có lịch sử tìm kiếm.</div>';
+        return;
+    }
+
+    history.forEach(query => {
+        const historyItem = document.createElement('div');
+        historyItem.className = 'history-item';
+        historyItem.textContent = query;
+        historyItem.dataset.query = query; // Lưu query vào data attribute để dễ lấy
+        historyListContainer.appendChild(historyItem);
+    });
+}
+
+/**
+ * Sao chép văn bản vào clipboard, hoạt động trên cả HTTP và HTTPS.
+ * @param {string} text - Văn bản cần sao chép.
+ */
+function copyQueryToClipboard(text) {
+    if (navigator.clipboard && window.isSecureContext) {
+        return navigator.clipboard.writeText(text);
+    } else {
+        return new Promise((resolve, reject) => {
+            const textArea = document.createElement('textarea');
+            textArea.value = text;
+            textArea.style.position = 'fixed';
+            textArea.style.left = '-9999px';
+            document.body.appendChild(textArea);
+            textArea.focus();
+            textArea.select();
+            try {
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                resolve();
+            } catch (err) {
+                document.body.removeChild(textArea);
+                reject(err);
+            }
+        });
+    }
+}
+
+/**
+ * Đóng menu lịch sử tìm kiếm.
+ */
+function closeHistoryMenu() {
+    historyMenu.classList.remove('visible');
+}
+
+/**
+ * Mở hoặc đóng menu lịch sử tìm kiếm.
+ * @param {Event} e - Sự kiện click.
+ */
+function toggleHistoryMenu(e) {
+    e.stopPropagation(); // Ngăn sự kiện lan ra và đóng menu
+    settingsMenu.classList.remove('visible'); // Đóng các menu khác
+
+    if (historyMenu.classList.contains('visible')) {
+        closeHistoryMenu();
+        return; // Dừng hàm tại đây
+    }
+
+    // --- BẮT ĐẦU LOGIC MỚI ---
+
+    // 1. Cập nhật nội dung cho menu
+    renderSearchHistory();
+
+    // 2. Lấy vị trí của nút "History"
+    const btnRect = historyBtn.getBoundingClientRect();
+
+    // 3. Đặt vị trí theo chiều dọc (luôn cố định bên dưới nút)
+    historyMenu.style.top = `${btnRect.bottom + 5}px`;
+
+    // 4. Đặt vị trí theo chiều ngang, neo vào cạnh trái của nút
+    // Đây là vị trí mặc định và lý tưởng nhất
+    historyMenu.style.left = `${btnRect.left}px`;
+    
+    // Xóa các thuộc tính định vị cũ có thể còn sót lại
+    historyMenu.style.right = ''; 
+    historyMenu.style.transform = '';
+
+    // 5. HIỂN THỊ MENU RA
+    historyMenu.classList.add('visible');
+
+    // 6. KIỂM TRA VÀ SỬA LỖI TRÀN MÀN HÌNH (SAU KHI ĐÃ HIỂN THỊ)
+    // Dùng setTimeout để đảm bảo trình duyệt đã vẽ menu ra màn hình
+    setTimeout(() => {
+        const menuRect = historyMenu.getBoundingClientRect();
+        const viewportWidth = window.innerWidth;
+
+        // Nếu cạnh phải của menu vượt ra ngoài màn hình
+        if (menuRect.right > viewportWidth) {
+            // Thì thay đổi cách định vị: neo vào cạnh phải của màn hình
+            historyMenu.style.left = ''; // Bỏ định vị theo bên trái
+            historyMenu.style.right = '10px'; // Cách cạnh phải màn hình 10px
+        }
+    }, 0);
+
+    // --- KẾT THÚC LOGIC MỚI ---
+}
 });
