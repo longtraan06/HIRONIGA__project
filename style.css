@@ -1818,8 +1818,7 @@ button:focus, input:focus, textarea:focus {
 
 .history-menu {
     position: fixed; /* Định vị theo cửa sổ trình duyệt */
-    top: 50px;       /* Vị trí sẽ được JS cập nhật */
-    left: 10px;      /* Vị trí sẽ được JS cập nhật */
+    top: 50px;
     background: var(--matcha-pale);
     border: 1px solid var(--matcha-border);
     border-radius: 12px;
@@ -1890,4 +1889,44 @@ button:focus, input:focus, textarea:focus {
     padding: 30px 20px;
     color: var(--text-muted);
     font-style: italic;
+}
+
+.history-menu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 15px 12px 20px; /* Thêm padding cho header */
+    border-bottom: 1px solid var(--matcha-light);
+    flex-shrink: 0;
+}
+
+.history-menu .history-menu-header h3 {
+    padding: 0; /* Xóa padding cũ của h3 */
+    border-bottom: none; /* Xóa border cũ của h3 */
+    margin: 0;
+}
+
+.clear-history-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 5px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+}
+
+.clear-history-btn svg {
+    stroke: var(--text-muted); /* Màu icon mặc định */
+    transition: stroke 0.2s ease;
+}
+
+.clear-history-btn:hover {
+    background-color: var(--matcha-accent);
+}
+
+.clear-history-btn:hover svg {
+    stroke: #dc3545; /* Chuyển sang màu đỏ khi hover */
 }
