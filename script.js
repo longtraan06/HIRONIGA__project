@@ -280,11 +280,8 @@ document.addEventListener('DOMContentLoaded', function() {
             this.classList.toggle('active', isTranslationEnabled); // Cập nhật UI
         });
 
-        const firstSearchGroup = document.querySelector('.search-input-group');
-        if (firstSearchGroup) {                                              
-            firstSearchGroup.dataset.queryId = generateUUID();          
-        }                                                                    
-        setupSearchInput(firstSearchGroup); 
+        // Initial search input setup
+        setupSearchInput(document.querySelector('.search-input-group'));
         
         setupToolbarEvents();
 
@@ -1373,8 +1370,7 @@ async function ensureDresPrerequisites() {
         const newSearchGroup = document.createElement('div');
         newSearchGroup.className = 'search-input-group';
         newSearchGroup.setAttribute('data-search-id', searchIdCounter);
-        newSearchGroup.dataset.queryId = generateUUID();
-
+        
         // Cập nhật placeholder tùy theo mode hiện tại
         let placeholder = "Search";
         if (currentSearchMode === 'text-to-image') {
@@ -1583,16 +1579,22 @@ async function ensureDresPrerequisites() {
     }
     
     async function performSearch(query, type, searchGroup) {
+        if (type === 'text') {
+            // Lấy giá trị từ các ô lọc đang hoạt động
+            const ocrInput = searchGroup.querySelector('.ocr-input');
+            const tagInput = searchGroup.querySelector('.tag-input');
 
-        const activeQueryId = searchGroup.dataset.queryId; // <<< THÊM MỚI
+            // Chỉ lấy giá trị nếu nút filter tương ứng đang active
+            const ocrValue = ocrFilterBtn.classList.contains('active') && ocrInput ? ocrInput.value.trim() : '';
+            const tagValue = tagFilterBtn.classList.contains('active') && tagInput ? tagInput.value.trim() : '';
 
-        if (!activeQueryId) {
-            console.error("Lỗi: Không tìm thấy queryId cho ô tìm kiếm này.");
-            return;
-        }
-
-
-        if ((type === 'text' && !query.trim()) || (type === 'image' && !query)) {
+            // Chỉ dừng lại nếu TẤT CẢ các ô nhập liệu (cả search và filter) đều trống
+            if (!query.trim() && !ocrValue && !tagValue) {
+                showToastNotification("Please enter a search query or a filter value.", "error");
+                return; // Dừng hàm tại đây
+            }
+        } else if (type === 'image' && !query) {
+            // Giữ nguyên logic cũ cho tìm kiếm bằng hình ảnh
             return;
         }
 
@@ -1636,64 +1638,69 @@ async function ensureDresPrerequisites() {
             }
 
             let searchPromise;
-            if (type === 'text' && currentSearchMode === 'text-to-image') {
-                
-                const queriesInChain = collectQueryChain();
-
-                const requestBody = {
-                    chain_id: temporalChainId,  
-                    queries: queriesInChain,    
-                    active_query_id: activeQueryId,  
-                    model_name: currentSelectedModel,
-                    filters: filterOptions    
-                };
-                
-                console.log("Đang gửi yêu cầu Temporal Execute:", requestBody);
-
-                searchPromise = fetch("/api/search/temporal/execute", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(requestBody)
-                })
-                .then(res => {
-                    if (!res.ok) {
-                        return res.json().then(err => Promise.reject(err));
+            if (type === 'text') {
+                if (currentSearchMode === 'text-to-image') {
+                    // Tách riêng logic temporal search
+                    const isFirstSearch = !searchGroup.previousElementSibling;
+                    if (isFirstSearch) {
+                        searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions)
+                        .then(response => {
+                                temporalChainId = response.chain_id; // Cập nhật chain_id
+                                handleSearchResults(response.initial_results, false);
+                                manageNextSearchInput();
+                            });
+                    } else if (temporalChainId) {
+                        searchPromise = callTemporalSearchContinue(finalQuery, temporalChainId, filterOptions)
+                        .then(response => {
+                                handleSearchResults(response.query_A_reranked, true);
+                                manageNextSearchInput();
+                            });
+                    } else {
+                        searchPromise = callTextToImageAPI(finalQuery, currentSelectedModel, filterOptions)
+                        .then(results => {
+                                handleSearchResults(results, false);
+                                manageNextSearchInput();
+                            });
                     }
-                    return res.json();
-                })
-                .then(response => {
-                    console.log("Nhận được phản hồi từ Temporal Execute:", response);
-
-                    temporalChainId = response.chain_id;
-                    handleSearchResults(response.results, response.is_reranked);
-                    
-                    manageNextSearchInput();
-                });
-
+                } else if (currentSearchMode === 'text-to-text') {
+                    searchPromise = callTextToTextAPI(finalQuery)
+                        .then(results => {
+                            handleSearchResults(results, false);
+                            manageNextSearchInput();
+                        });
+                }
             } else if (type === 'image' && currentSearchMode === 'image-to-image') {
+                // *** BẮT ĐẦU THAY ĐỔI ***
                 let imageFilePromise;
 
                 if (typeof query === 'string') {
+                    // TRƯỜNG HỢP 1: Semantic search (query là một đường dẫn URL)
+                    // Chúng ta cần chuyển URL thành một đối tượng File
                     imageFilePromise = fetch(query)
                         .then(response => response.blob())
                         .then(blob => new File([blob], "semantic_search_image.jpg", { type: blob.type }));
                 } else {
+                    // TRƯỜNG HỢP 2: Tải ảnh lên (query đã là một đối tượng File)
                     imageFilePromise = Promise.resolve(query);
                 }
+
+                // `searchPromise` sẽ đợi cho đến khi có File object
                 searchPromise = imageFilePromise.then(imageFile => {
                     return callImageToImageAPI(imageFile, currentSelectedModel)
                         .then(results => handleSearchResults(results, false));
                 });
+                // *** KẾT THÚC THAY ĐỔI ***
             }
 
             await searchPromise;
 
+            // *** ĐOẠN CODE QUAN TRỌNG NHẤT ĐƯỢC THÊM VÀO ĐÂY ***
             if (!isRestoringState) {
                 const currentState = buildStateObject();
+                // URL này chỉ để tạo mục lịch sử mới, không cần đẹp
                 const newUrl = `/?search_timestamp=${Date.now()}`; 
                 window.history.pushState(currentState, '', newUrl);
             }
-
 
         } catch (error) {
             handleSearchError(error);
@@ -1760,36 +1767,40 @@ async function ensureDresPrerequisites() {
      * Kiểm tra xem có thanh tìm kiếm nào trống không.
      * Nếu có, focus vào nó. Nếu không, tạo một thanh mới.
      */
-    function manageNextSearchInput() {
-        // Tìm tất cả các textarea trong khu vực search
-        const allSearchInputs = document.querySelectorAll('.search-inputs-container .search-input');
-        let emptyInput = null;
+function manageNextSearchInput() {
+    // Lấy ô tìm kiếm CUỐI CÙNG trên trang
+    const lastSearchInput = document.querySelector('.search-inputs-container .search-input:last-of-type');
 
-        // Lặp qua để tìm cái đầu tiên bị trống
-        for (const input of allSearchInputs) {
-            if (input.value.trim() === '') {
-                emptyInput = input;
-                break; // Đã tìm thấy, dừng vòng lặp
-            }
-        }
-
-        if (emptyInput) {
-            // Nếu đã tồn tại một ô trống, chỉ cần focus vào nó
-            console.log('Phát hiện thanh tìm kiếm trống, sẽ focus vào nó.');
-            setTimeout(() => {
-                emptyInput.focus();
-                // Cuộn tới ô đó để người dùng nhìn thấy
-                emptyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            }, 50); 
-        } else {
-            // Nếu không có ô nào trống, tạo một ô mới
-            console.log('Không có thanh tìm kiếm trống, tạo thanh mới.');
-            const newInput = createNewSearchInput(); // Hàm này giờ sẽ trả về input mới
-            setTimeout(() => {
-                newInput.focus();
-            }, 50);
-        }
+    // Kiểm tra xem ô cuối cùng có nội dung hay không.
+    // Hoặc, kiểm tra xem nó có đang được đi kèm với một bộ lọc đang hoạt động hay không.
+    const searchGroup = lastSearchInput ? lastSearchInput.closest('.search-input-group') : null;
+    let isFilterActiveOnLastInput = false;
+    if (searchGroup) {
+        const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
+        const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
+        isFilterActiveOnLastInput = (ocrFilterBtn.classList.contains('active') && ocrValue) || (tagFilterBtn.classList.contains('active') && tagValue);
     }
+
+
+    // Nếu ô cuối cùng không tồn tại, hoặc nó CÓ NỘI DUNG, hoặc nó ĐANG ĐI KÈM BỘ LỌC
+    // thì chúng ta cần tạo một ô mới.
+    if (!lastSearchInput || lastSearchInput.value.trim() !== '' || isFilterActiveOnLastInput) {
+        console.log('Tạo thanh tìm kiếm mới.');
+        const newInput = createNewSearchInput();
+        setTimeout(() => {
+            newInput.focus();
+            newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
+    } 
+    // Ngược lại, nếu ô cuối cùng trống và không có bộ lọc nào, chỉ cần focus vào nó.
+    else {
+        console.log('Focus vào thanh tìm kiếm trống cuối cùng.');
+        setTimeout(() => {
+            lastSearchInput.focus();
+            lastSearchInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }, 50);
+    }
+}
 
 
     // Thêm hàm gọi API text-to-text mới
@@ -3119,10 +3130,14 @@ function toggleFilter(filterType) {
     }
 }
 
+/**
+     * TẠO KHỐI UI MỚI ĐỂ HIỂN THỊ ẢNH ĐANG DÙNG ĐỂ TÌM KIẾM
+     * @param {string} imagePath - URL của ảnh
+     * @returns {HTMLElement} - Element của khối UI đã được tạo
+     */
     function createImageTemporalSearchBlock(imagePath) {
         const imageSearchBlock = document.createElement('div');
         imageSearchBlock.className = 'image-temporal-search-block'; // Dùng class riêng để style
-        imageSearchBlock.dataset.imagePath = imagePath; 
         imageSearchBlock.innerHTML = `
             <p class="search-block-label">Searching from image:</p>
             <img src="${imagePath}" alt="Temporal Search Start Image">
@@ -3130,21 +3145,30 @@ function toggleFilter(filterType) {
         return imageSearchBlock;
     }
 
+    /**
+     * HÀM ĐIỀU PHỐI CHÍNH: Bắt đầu chuỗi temporal mới từ hình ảnh.
+     * @param {string} imagePath - URL của ảnh
+     */
     async function initiateImageTemporalSearch(imagePath) {
-        temporalChainId = null;
-        searchInputsContainer.innerHTML = '';
-        showLoadingIndicator();
+        // 1. Reset giao diện và trạng thái cho một chuỗi mới
+        temporalChainId = null; // Rất quan trọng: Reset chain ID cũ
+        searchInputsContainer.innerHTML = ''; // Xóa sạch các ô tìm kiếm cũ
+        showLoadingIndicator(); // Hiển thị loading
 
         try {
+            // 2. Tạo và hiển thị khối UI cho ảnh tìm kiếm
             const imageBlock = createImageTemporalSearchBlock(imagePath);
             searchInputsContainer.appendChild(imageBlock);
 
+            // 3. Chuyển đổi đường dẫn ảnh thành File object
             const response = await fetch(imagePath);
             const blob = await response.blob();
             const imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
 
+            // 4. Gọi API backend mới
             const formData = new FormData();
             formData.append("file", imageFile);
+
             if (currentSelectedModel && currentSelectedModel !== 'all') {
                 formData.append("model_name", currentSelectedModel);
             }
@@ -3154,26 +3178,34 @@ function toggleFilter(filterType) {
                 body: formData,
             });
 
-            if (!apiResponse.ok) throw new Error('API call to start_with_image failed.');
-            
+            if (!apiResponse.ok) {
+                throw new Error('API call to start_with_image failed.');
+            }
+
             const resultsData = await apiResponse.json();
 
-            // <<< THAY ĐỔI LỚN BẮT ĐẦU TỪ ĐÂY >>>
-            // 1. Cập nhật temporalChainId như cũ
-            temporalChainId = resultsData.chain_id; 
-            
-            // 2. Lấy image_query_id từ response và gán vào block UI
-            if (resultsData.image_query_id) {
-                imageBlock.dataset.queryId = resultsData.image_query_id;
-            }
-            // <<< KẾT THÚC THAY ĐỔI LỚN >>>
-
+            // 5. Cập nhật trạng thái và hiển thị kết quả
+            temporalChainId = resultsData.chain_id; // Lưu chain ID mới
             handleSearchResults(resultsData.initial_results, false);
-            
-            const nextInput = createNewSearchInput();
-            setTimeout(() => nextInput.focus(), 100);
 
-            // Logic lưu history giữ nguyên
+            // 6. Tạo ô nhập văn bản mới và focus vào đó
+            const nextInput = createNewSearchInput();
+            setTimeout(() => {
+                nextInput.focus();
+                // Cuộn tới sidebar để người dùng thấy ô nhập mới
+                nextInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
+
+            // 7. [HISTORY] Đẩy trạng thái mới vào lịch sử trình duyệt
+            if (!isRestoringState) {
+                const currentState = buildStateObject();
+                // Thêm thông tin đặc biệt để khôi phục
+                currentState.isImageTemporalStart = true;
+                currentState.imageTemporalStartPath = imagePath; 
+                const newUrl = `/?search_timestamp=${Date.now()}`;
+                window.history.pushState(currentState, '', newUrl);
+            }
+
         } catch (error) {
             handleSearchError(error);
         }
@@ -3188,35 +3220,5 @@ function toggleFilter(filterType) {
         textareaElement.style.height = Math.max(minHeight, textareaElement.scrollHeight) + 'px';
     }
 
-
-function collectQueryChain() {
-    const queries = [];
-    const imageBlock = document.querySelector('.image-temporal-search-block');
-    if (imageBlock && imageBlock.dataset.queryId && imageBlock.dataset.imagePath) {
-        queries.push({
-            id: imageBlock.dataset.queryId,
-            type: 'image',
-            text: `Image Search (${imageBlock.dataset.imagePath})`
-        });
-    }
-    const searchInputGroups = document.querySelectorAll('.search-inputs-container .search-input-group');
-    searchInputGroups.forEach(group => {
-        const queryId = group.dataset.queryId;
-        const textInput = group.querySelector('.search-input');
-        if (queryId && textInput) {
-            queries.push({
-                id: queryId,
-                type: 'text', // Thêm type để rõ ràng
-                text: textInput.value
-            });
-        }
-    });
-
-    return queries;
-}
-function generateUUID() {
-  return 'uuid-' + Math.random().toString(36).substring(2, 12) + 
-         Date.now().toString(36);
-}
 
 });
