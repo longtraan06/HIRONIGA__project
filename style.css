@@ -1815,3 +1815,79 @@ button:focus, input:focus, textarea:focus {
     object-fit: cover;
     box-shadow: var(--shadow-soft);
 }
+
+.history-menu {
+    position: fixed; /* Định vị theo cửa sổ trình duyệt */
+    top: 50px;       /* Vị trí sẽ được JS cập nhật */
+    left: 10px;      /* Vị trí sẽ được JS cập nhật */
+    background: var(--matcha-pale);
+    border: 1px solid var(--matcha-border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-medium);
+    z-index: 1001;
+    min-width: 300px;
+    max-width: 450px;
+    max-height: 400px; /* Giới hạn chiều cao để có thanh cuộn */
+    opacity: 0;
+    transform: translateY(-10px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    pointer-events: none; /* Không thể tương tác khi đang ẩn */
+    
+    display: flex;
+    flex-direction: column;
+}
+
+.history-menu.visible {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto; /* Cho phép tương tác khi hiện ra */
+}
+
+.history-menu h3 {
+    padding: 12px 20px;
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--matcha-dark);
+    border-bottom: 1px solid var(--matcha-light);
+    flex-shrink: 0; /* Ngăn tiêu đề bị co lại */
+    text-align: left;
+}
+
+.history-list-container {
+    padding: 10px;
+    overflow-y: auto; /* Thêm thanh cuộn khi danh sách dài */
+    scrollbar-width: thin;
+    scrollbar-color: var(--matcha-primary) transparent;
+}
+
+.history-list-container::-webkit-scrollbar {
+    width: 6px;
+}
+.history-list-container::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 3px;
+}
+
+.history-item {
+    background-color: transparent;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    font-size: 15px;
+    color: var(--matcha-dark);
+    word-break: break-word; /* Đảm bảo query dài sẽ xuống dòng */
+}
+
+.history-item:hover {
+    background-color: var(--matcha-accent);
+}
+
+.history-empty {
+    text-align: center;
+    padding: 30px 20px;
+    color: var(--text-muted);
+    font-style: italic;
+}
