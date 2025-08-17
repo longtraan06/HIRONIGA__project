@@ -348,6 +348,8 @@ class TemporalStartRequest(BaseModel):
     top_k_tags: Optional[int] = 5 
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    user_id: Optional[str] = None    # <<< THÊM VÀO
+    query_id: Optional[str] = None 
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -357,6 +359,8 @@ class TemporalContinueRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    query_id: Optional[str] = None 
+    user_id: Optional[str] = None
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -556,11 +560,29 @@ async def search_image(
     return process_milvus_results_for_frontend(results)
 
 
+@app.post("/api/session/cleanup")
+async def cleanup_session(user_id: str = Form(...)):
+    """
+    Endpoint to clear a user's temporal chain state.
+    Designed to be called with navigator.sendBeacon().
+    """
+    try:
+        if user_id:
+            print(f"Cleaning up temporal session for user: {user_id}")
+            milvus.clear_temporal_chain(user_id=user_id)
+        return {"success": True, "message": f"Session for {user_id} cleared."}
+    except Exception as e:
+        # Even if it fails, return success to not block the browser unloading.
+        print(f"ERROR during session cleanup for {user_id}: {e}")
+        return {"success": False, "error": str(e)}
+
 @app.post("/api/search/temporal/start_with_image")
 async def temporal_search_start_with_image(
     file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
     top_k: int = Form(2000, description="Số lượng kết quả trả về"),
-    model_name: Optional[str] = Form(None, description="Tên model để sử dụng")
+    model_name: Optional[str] = Form(None, description="Tên model để sử dụng"),
+    user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
+    query_id: str = Form(..., description="Query ID for this action") # <<< THÊM VÀO
 ):
     """
     Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
@@ -578,13 +600,15 @@ async def temporal_search_start_with_image(
             query=image_bytes,
             mode="image",
             search_in="image",
-            start_temporal_chain=True,  # Điểm mấu chốt để khởi tạo trạng thái
+            start_temporal_chain=True,
             top_k=min(top_k, 2000),
-            model_name=model_name
+            model_name=model_name,
+            user_id=user_id,      # <<< THÊM VÀO
+            query_id=query_id     # <<< THÊM VÀO
         )
         
         # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
-        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        temporal_state = milvus.get_user_temporal_state(user_id)
         if not temporal_state:
             raise HTTPException(
                 status_code=500, 
@@ -678,28 +702,34 @@ import base64
 @app.post("/api/search/temporal/start")
 async def temporal_search_start(req: TemporalStartRequest):
     try:
-        # 1. Tạo một ID duy nhất cho chuỗi tìm kiếm này
-        chain_id = str(uuid.uuid4())
+        # 1. Sử dụng user_id từ request làm chain_id
+        if not req.user_id: # <<< THÊM VÀO
+            raise HTTPException(status_code=400, detail="user_id is required to start a temporal chain.") # <<< THÊM VÀO
         
+        chain_id = req.user_id # <<< THAY ĐỔI
+
         lower_query = req.query.lower() if req.query else ""
         lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
         lower_ocr = req.ocr.lower() if req.ocr else None
-        # 2. Thực hiện tìm kiếm đầu tiên (Query A) với tham số start_temporal_chain=True
+
+        # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
         initial_results = milvus.search(
             query=lower_query,
             mode="text",
             search_in="image",
             start_temporal_chain=True,
-            top_k=min(req.top_k, 2000),  # Giới hạn top_k
+            top_k=min(req.top_k, 2000),
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
-            ocr = lower_ocr
+            ocr = lower_ocr,
+            user_id=req.user_id,    # <<< THÊM VÀO
+            query_id=req.query_id   # <<< THÊM VÀO
         )
         
         # 3. Lấy trạng thái temporal
-        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        temporal_state = milvus.get_user_temporal_state(req.user_id)
         if not temporal_state:
             raise HTTPException(
                 status_code=500, 
@@ -772,10 +802,12 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             query=lower_query,
             mode="text",
             top_k=min(req.top_k, 2000),
-            use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+            use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
             ocr = lower_ocr,
+            user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
+            query_id=req.query_id  # <<< THÊM VÀO
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
