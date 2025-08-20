@@ -607,7 +607,8 @@ button:focus, input:focus, textarea:focus {
 
 /* Tag Filtering */
 .tag-filter-container,
-.ocr-filter-container {
+.ocr-filter-container,
+.asr-filter-container {
     margin-top: 8px;
     max-height: 0;
     opacity: 0;
@@ -616,13 +617,15 @@ button:focus, input:focus, textarea:focus {
     pointer-events: none;
 }
 .tag-filter-container.visible,
-.ocr-filter-container.visible {
+.ocr-filter-container.visible,
+.asr-filter-container.visible {
     max-height: 100px;
     opacity: 1;
     pointer-events: auto;
 }
 .tag-input,
-.ocr-input {
+.ocr-input,
+.asr-input {
     width: 70%;
     padding: 8px 12px;
     font-size: 13px;
@@ -635,12 +638,14 @@ button:focus, input:focus, textarea:focus {
     margin-left: 15%;
 }
 .tag-input::placeholder,
-.ocr-input::placeholder {
+.ocr-input::placeholder,
+.asr-input::placeholder {
     color: var(--text-muted);
     font-style: italic;
 }
 .tag-input:focus,
-.ocr-input:focus {
+.ocr-input:focus,
+.asr-input:focus {
     outline: none;
     border-color: var(--matcha-primary);
     box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
@@ -1929,4 +1934,42 @@ button:focus, input:focus, textarea:focus {
 
 .clear-history-btn:hover svg {
     stroke: #dc3545; /* Chuyển sang màu đỏ khi hover */
+}
+.autocorrect-suggestion-display {
+    color: #007bff; /* Màu xanh dương để phân biệt với màu dịch */
+    font-size: 13px;
+    font-style: italic;
+    padding: 8px 12px;
+    background-color: #e7f3ff; /* Nền xanh nhạt */
+    border-radius: 8px;
+    margin-top: 5px; /* Thêm khoảng cách với ô search */
+    border-left: 3px solid #007bff;
+    cursor: pointer; /* Cho người dùng biết có thể click vào */
+    
+    /* Các thuộc tính để làm hiệu ứng ẩn/hiện */
+    opacity: 0;
+    max-height: 0;
+    overflow: hidden;
+    transition: all 0.4s ease-in-out;
+}
+
+.autocorrect-suggestion-display.visible {
+    opacity: 1;
+    max-height: 100px;
+    margin-top: 8px; /* Hiện khoảng cách khi visible */
+}
+
+.autocorrect-suggestion-display strong {
+    font-weight: 600; /* Làm đậm phần text gợi ý */
+}
+
+.autocorrect-suggestion-display .key-hint {
+    background-color: #d1e7ff;
+    border: 1px solid #a6cfff;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 11px;
+    font-family: 'Courier New', Courier, monospace;
+    margin-left: 8px;
+    color: #0056b3;
 }
