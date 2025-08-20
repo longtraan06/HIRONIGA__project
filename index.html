@@ -9,44 +9,26 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-    <!-- Header -->
     <header class="header">
         <div class="header-content">
-            <!-- <h1>Header</h1> -->
             <div class="header-buttons">
-                <!-- Nút Text to Image -->
-                 
-
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
-                
-                <!-- Nút Image to Image -->
                 <button id="imageToImageBtn" class="header-btn" title="Search Image" data-mode="image-to-image">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                        <circle cx="8.5" cy="8.5" r="1.5"/>
-                        <polyline points="21,15 16,10 5,21"/>
-                    </svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21,15 16,10 5,21"/></svg>
                 </button>
                 <button id="ocrFilterBtn" class="header-btn" title="Enable/Disable OCR Filter (F1)">
-                <!-- Bạn có thể dùng một icon khác phù hợp hơn cho OCR, ví dụ icon scan text -->
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-scan-text"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/><path d="M7 9h10"/><path d="M7 15h4"/></svg>
                 </button>
-
                 <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F5)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags"><path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z"/><path d="M6 9.01V9"/><path d="m15 5 6.3 6.3a2.69 2.69 0 0 1 0 3.79L18.02 18"/><path d="m13.5 15.5 5-5"/></svg>
-                </button>            
+                </button>  
+                 <button id="asrFilterBtn" class="header-btn" title="Enable/Disable ASR Filter (F4)">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mic"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
+                </button>         
                 <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-languages-icon lucide-languages"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>
-                </button>
-                <button id="queryExpansionBtn" class="header-btn" title="Enable/Disable Query Expansion (F4)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-code">
-                        <path d="m9.5 7.5-1 1L10 10l-1.5 1.5 1 1L11 11l1.5 1.5 1-1L12 10l1.5-1.5-1-1L11 9Z"/>
-                        <path d="M15.5 14.5c.9-.9.9-2.5 0-3.4l-3-3c-.9-.9-2.5-.9-3.4 0"/>
-                        <path d="m21 21-4.3-4.3"/>
-                        <circle cx="11" cy="11" r="8"/>
-                    </svg>
                 </button>
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
@@ -60,34 +42,21 @@
                 <button id="settingsBtn" class="header-btn" title="Settings (F9)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings-icon lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
                 </button>
-
-                
-
-
             </div>
         </div>
     </header>
-
-    <!-- Main container -->
     <div class="main-container">
-        <!-- Sidebar bên trái -->
         <aside class="sidebar">
             <div class="search-container">
                 <h3>SEARCH</h3>
-                
-                <!-- Search mode buttons (hidden by default) -->
                 <div class="search-mode-buttons" id="searchModeButtons" style="display: none;">
-
                     <button class="mode-btn active" data-mode="text-to-image">
                         <i class="fas fa-font"></i>
                     </button>
                     <button class="mode-btn" data-mode="image-to-image">
                         <i class="fas fa-image"></i>
                     </button>
-
                 </div>
-                
-                <!-- Search inputs container -->
                 <div class="search-inputs-container" id="searchInputsContainer">
                     <div class="search-input-group" data-search-id="1">
                         <div class="search-box">
@@ -98,14 +67,16 @@
                                 data-mode="text-to-image"
                             ></textarea>
                             <div class="translated-query-display"></div>
-                            
+                             <div class="autocorrect-suggestion-display"></div>
                              <div class="tag-filter-container">
                                 <input type="text" class="tag-input" placeholder="Enter tags">
                             </div> 
                             <div class="ocr-filter-container">
                                 <input type="text" class="ocr-input" placeholder="Enter OCR">
                             </div>
-                            <!-- Image upload area (hidden by default) -->
+                            <div class="asr-filter-container">
+                                <input type="text" class="asr-input" placeholder="Enter ASR">
+                            </div>
                             <div class="image-upload-area" style="display: none;">
                                 <input type="file" class="image-input" accept="image/*" style="display: none;">
                                 <div class="upload-zone">
@@ -124,24 +95,16 @@
                         </div>
                     </div>
                 </div>
-                
-                <!-- <div class="search-info">
-                    <p class="search-placeholder">Press Enter or Tab to create new search bar</p>
-                </div> -->
             </div>
         </aside>
-
-        <!-- Main content area -->
         <main class="main-content">
             <div class="content-area" id="contentArea">
                 <div class="content-placeholder">
                     <h2>RESULTS</h2>
-                    <!-- <p>Kết quả tìm kiếm sẽ hiển thị ở đây dưới dạng lưới ảnh (6 ảnh/hàng)</p> -->
                 </div>
             </div>
         </main>
     </div>
-    <!-- keyframe lan can popup-->
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
@@ -150,7 +113,6 @@
             <div class="thumbnail-strip" id="thumbnailStrip"></div>
         </div>
     </div>
-    <!-- video player -->
     <div id="videoModal" class="video-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
@@ -161,7 +123,6 @@
             </video>
         </div>
     </div>
-    <!-- Toolbar hiển thị khi có frame được chọn -->
     <div id="selectionToolbar" class="selection-toolbar">
         <div class="selection-info">
             <span class="selection-count">0</span>
@@ -176,17 +137,12 @@
             </button>
         </div>
     </div>
-
     <div id="shortcutsModal" class="shortcuts-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
             <button class="close-btn">×</button>
             <h3>Normal Shortcut</h3>
             <div class="shortcuts-list">
-                <!-- 
-                    BẠN CÓ THỂ TỰ THÊM CÁC PHÍM TẮT CỦA MÌNH VÀO ĐÂY
-                    Dưới đây là một vài ví dụ mẫu theo cấu trúc.
-                -->
                 <div class="shortcut-item">
                     <span class="shortcut-description">Switch Search Mode</span>
                     <span class="shortcut-key">Tab</span>
@@ -287,7 +243,6 @@
     <div id="submitQueue" class="submit-queue">
         <div class="submit-queue-header">
             <button id="toggleQueueBtn" class="queue-toggle-btn" title="Minimize/Expand Queue">
-                <!-- Icon sẽ được thay đổi bằng JS, mặc định là thu nhỏ -->
                 <i class="fas fa-chevron-down"></i>
             </button>
             <div class="queue-actions">
@@ -305,7 +260,6 @@
             <h3>Submit Queue</h3>
         </div>
         <div id="submitQueueFrames" class="submit-queue-frames">
-            <!-- Các frame được chọn sẽ được thêm vào đây bằng JavaScript -->
         </div>
     </div>
 
@@ -317,7 +271,6 @@
             </button>
         </div>
         <div id="historyListContainer" class="history-list-container">
-            <!-- Lịch sử tìm kiếm sẽ được chèn vào đây -->
         </div>
     </div>
 
@@ -351,7 +304,6 @@
                 </div>
                 <div class="form-group">
                     <label>Answer (Auto-generated from selected frames)</label>
-                    <!-- Dùng thẻ <pre> để hiển thị JSON đẹp hơn và có thể cuộn -->
                     <pre id="frameVqaAnswerDisplay"></pre>
                 </div>
             </form>
