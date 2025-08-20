@@ -50,7 +50,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const clearQueueBtn = document.getElementById('clearQueueBtn');
     const queueCountSpan = document.getElementById('queueCount');
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
-
+    const asrFilterBtn = document.getElementById('asrFilterBtn');
     const vqaSubmitBtn = document.getElementById('vqaSubmitBtn');
     const vqaModal = document.getElementById('vqaModal');
     const vqaForm = document.getElementById('vqaForm');
@@ -169,6 +169,10 @@ document.addEventListener('DOMContentLoaded', function() {
             toggleFilter('tag');
         });
 
+        asrFilterBtn.addEventListener('click', function() {
+            toggleFilter('asr');
+        });
+
         clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
@@ -254,37 +258,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         document.addEventListener('keydown', function(e) {
-
-            // Logic chuyển đổi chế độ tìm kiếm bằng phím Tab
-            if (e.key === 'Tab') {
-                const activeElement = document.activeElement;
-
-                // Nếu không, chúng ta sẽ chuyển đổi chế độ
-                e.preventDefault(); // Ngăn hành vi mặc định của Tab (di chuyển tiêu điểm)
-
-                const searchModes = ['text-to-image', 'image-to-image'];
-                
-                // Tìm vị trí của chế độ hiện tại
-                const currentIndex = searchModes.indexOf(currentSearchMode);
-                
-                // Xác định vị trí của chế độ tiếp theo, quay vòng lại nếu cần
-                const nextIndex = (currentIndex + 1) % searchModes.length;
-                
-                const nextMode = searchModes[nextIndex];
-                
-                // Gọi hàm switchSearchMode đã có sẵn
-                switchSearchMode(nextMode);
-                
-                // UX Bonus: Sau khi chuyển mode, tự động focus vào ô tìm kiếm chính
-                setTimeout(() => {
-                    const firstSearchInput = document.querySelector('.search-input');
-                    if (firstSearchInput && firstSearchInput.style.display !== 'none') {
-                        firstSearchInput.focus();
-                    }
-                }, 50); // Đợi một chút để DOM cập nhật
-            }
-
-            if (e.key === 'F3') {
+            if (e.key === 'F4') {
                 e.preventDefault();
                 if (translateBtn) translateBtn.click();
             } 
@@ -295,6 +269,10 @@ document.addEventListener('DOMContentLoaded', function() {
             else if (e.key === 'F1') {
                 e.preventDefault();
                 toggleFilter('ocr');
+            }
+            else if (e.key === 'F3') { 
+                e.preventDefault();
+                toggleFilter('asr');
             }
             else if (e.key === 'F9') {
                 e.preventDefault();
@@ -574,14 +552,6 @@ document.addEventListener('DOMContentLoaded', function() {
                         throw new Error(result.detail || 'Failed to submit.');
                     }
                 }
-                // const result = await response.json();
-
-                // if (response.ok && result.success) {
-                //     showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
-                // } else {
-                //     throw new Error(result.detail || 'Failed to submit.');
-                // }
-
             } catch (error) {
                 console.error('Submission Error:', error);
                 showToastNotification(`Error: ${error.message}`, 'error', 2000);
@@ -1340,6 +1310,7 @@ async function ensureDresPrerequisites() {
                                 data-mode="${mode}"
                             ></textarea>
                             <div class="translated-query-display"></div>
+                            <div class="autocorrect-suggestion-display"></div>
                             <div class="image-upload-area" style="display: none;">
                                 <input type="file" class="image-input" accept="image/*" style="display: none;">
                                 <div class="upload-zone">
@@ -1444,11 +1415,15 @@ async function ensureDresPrerequisites() {
                     data-mode="${currentSearchMode}"
                 ></textarea>
                 <div class="translated-query-display"></div>
+                <div class="autocorrect-suggestion-display"></div>
                  <div class="tag-filter-container">
                     <input type="text" class="tag-input" placeholder="Enter tags">
                 </div>  
                 <div class="ocr-filter-container">
                     <input type="text" class="ocr-input" placeholder="Enter OCR">
+                </div>
+                <div class="asr-filter-container">
+                    <input type="text" class="asr-input" placeholder="Enter ASR">
                 </div>
                 <div class="image-upload-area" style="display: none;">
                     <input type="file" class="image-input" accept="image/*" style="display: none;">
@@ -1487,7 +1462,7 @@ async function ensureDresPrerequisites() {
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const tagInput = searchGroup.querySelector('.tag-input');
-
+        const asrInput = searchGroup.querySelector('.asr-input');
 
         // Auto-resize textarea
         textInput.addEventListener('input', function() {
@@ -1496,6 +1471,28 @@ async function ensureDresPrerequisites() {
             if (translationDisplay) {
                 translationDisplay.classList.remove('visible');
             }
+
+            const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+            if (suggestionDisplay) {
+            suggestionDisplay.addEventListener('click', function() {
+                if (this.classList.contains('visible') && this.dataset.suggestion) {
+                    const correctedText = this.dataset.suggestion;
+                    
+                    // Cần lấy lại textInput ở đây vì nó nằm ngoài scope của event listener này
+                    const textInput = searchGroup.querySelector('.search-input');
+                    
+                    textInput.value = correctedText + ' ';
+                    
+                    this.classList.remove('visible');
+                    this.dataset.suggestion = '';
+        
+                    autoResizeTextarea(textInput);
+                    textInput.focus(); // Focus lại vào ô search
+                    textInput.selectionStart = textInput.selectionEnd = textInput.value.length;
+                }
+            });
+        }
+
         });
         
         if (ocrInput) {
@@ -1517,15 +1514,79 @@ async function ensureDresPrerequisites() {
                 }
             });
         }
-
-        // THÊM VÀO: Xử lý phím Escape trong ô tìm kiếm
+        if (asrInput) {
+            asrInput.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault(); // Ngăn hành vi mặc định
+                    textInput.focus(); // Chuyển focus trở lại ô tìm kiếm chính
+                }
+            });
+        }
         textInput.addEventListener('keydown', function(e) {
             if (e.key === 'Escape') {
                 e.preventDefault();
                 this.blur(); // Thoát khỏi ô tìm kiếm
             }
         });
-        
+
+        textInput.addEventListener('keyup', async function(e) {
+            // Chỉ kích hoạt khi người dùng nhấn phím cách
+            if (e.key === ' ') {
+                const currentText = this.value;
+                const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+
+                const suggestion = await getAutocorrectSuggestion(currentText);
+
+                // Chỉ hiển thị nếu có gợi ý VÀ gợi ý đó khác với văn bản gốc
+                if (suggestion && suggestion.trim() !== currentText.trim()) {
+                    suggestionDisplay.innerHTML = `Gợi ý: <strong>${suggestion}</strong> <span class="key-hint">Nhấn Tab</span>`;
+                    suggestionDisplay.dataset.suggestion = suggestion; // Lưu lại gợi ý để dùng với phím Tab
+                    suggestionDisplay.classList.add('visible');
+                } else {
+                    suggestionDisplay.classList.remove('visible');
+                    suggestionDisplay.dataset.suggestion = '';
+                }
+            }
+        });
+
+        textInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Tab') {
+                const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+                
+                if (suggestionDisplay.classList.contains('visible') && suggestionDisplay.dataset.suggestion) {
+                    e.preventDefault(); 
+                    const correctedText = suggestionDisplay.dataset.suggestion;
+                    this.value = correctedText + ' '; 
+                    suggestionDisplay.classList.remove('visible');
+                    suggestionDisplay.dataset.suggestion = '';
+                    autoResizeTextarea(this);
+                    this.selectionStart = this.selectionEnd = this.value.length;
+                }
+            }
+
+            // Xử lý phím Escape trong ô tìm kiếm (giữ nguyên)
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this.blur();
+            }
+        });
+
+        // Thêm sự kiện click vào ô gợi ý để chấp nhận (UX bonus)
+        const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+        suggestionDisplay.addEventListener('click', function() {
+            if (this.classList.contains('visible') && this.dataset.suggestion) {
+                const correctedText = this.dataset.suggestion;
+                textInput.value = correctedText + ' ';
+                
+                this.classList.remove('visible');
+                this.dataset.suggestion = '';
+
+                autoResizeTextarea(textInput);
+                textInput.focus(); // Focus lại vào ô search
+                textInput.selectionStart = textInput.selectionEnd = textInput.value.length;
+            }
+        });
+
         // Enter key search
         textInput.addEventListener('keypress', function(e) {
             if (e.key === 'Enter' && !e.shiftKey) {
@@ -1640,13 +1701,13 @@ async function ensureDresPrerequisites() {
             saveQueryToHistory(query);
             const ocrInput = searchGroup.querySelector('.ocr-input');
             const tagInput = searchGroup.querySelector('.tag-input');
-
+            const asrInput = searchGroup.querySelector('.asr-input');
             // Chỉ lấy giá trị nếu nút filter tương ứng đang active
             const ocrValue = ocrFilterBtn.classList.contains('active') && ocrInput ? ocrInput.value.trim() : '';
             const tagValue = tagFilterBtn.classList.contains('active') && tagInput ? tagInput.value.trim() : '';
-
+            const asrValue = asrFilterBtn.classList.contains('active') && asrInput ? asrInput.value.trim() : '';
             // Chỉ dừng lại nếu TẤT CẢ các ô nhập liệu (cả search và filter) đều trống
-            if (!query.trim() && !ocrValue && !tagValue) {
+            if (!query.trim() && !ocrValue && !tagValue && !asrValue) {
                 showToastNotification("Please enter a search query or a filter value.", "error");
                 return; // Dừng hàm tại đây
             }
@@ -1673,9 +1734,16 @@ async function ensureDresPrerequisites() {
             const tagInput = searchGroup.querySelector('.tag-input');
             if (tagInput && tagInput.value.trim() !== '') {
                 const tags = tagInput.value.split(',').map(tag => tag.trim()).filter(tag => tag);
+
                 if (tags.length > 0) {
                     filterOptions.use_tag = true;
                     filterOptions.tags_filter = tags;
+                }
+            }
+            const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
+            if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
+                if (asrInput && asrInput.value.trim() !== '') {
+                    filterOptions.asr = asrInput.value.trim(); // Thêm tham số asr
                 }
             }
         }
@@ -1759,58 +1827,7 @@ async function ensureDresPrerequisites() {
             resetOcrFiltering();
         }
     }
-
-    // // Tách logic text-to-image để dễ quản lý
-    // function handleTextToImageSearch(query, searchGroup) {
-    //     // Kiểm tra xem đây là thanh tìm kiếm đầu tiên hay không
-    //     const isFirstSearch = !searchGroup.previousElementSibling;
-        
-    //     if (isFirstSearch) {
-    //         callTemporalSearchStart(query, currentSelectedModel, searchGroup).then(response => {
-    //             temporalChainId = response.chain_id;
-    //             handleSearchResults(response.initial_results, false);
-                
-    //             // Tạo thanh tìm kiếm mới ở đây
-    //            manageNextSearchInput();
-    //         }).catch(handleSearchError);
-    //     } else if (temporalChainId) {
-    //         callTemporalSearchContinue(query, temporalChainId, searchGroup).then(response => {
-    //             handleSearchResults(response.query_A_reranked, true);
-                
-    //             // Tạo thanh tìm kiếm mới ở đây
-    //             manageNextSearchInput();
-    //         }).catch(handleSearchError);
-    //     } else {
-    //         callTextToImageAPI(query, currentSelectedModel, searchGroup).then(results => {
-    //             handleSearchResults(results, false);
-                
-    //             // Tạo thanh tìm kiếm mới ở đây
-    //             manageNextSearchInput();
-    //         }).catch(handleSearchError);
-    //     }
-    // }
     
-    function createAndFocusNewSearchInput() {
-        setTimeout(() => {
-            createNewSearchInput();
-            
-            setTimeout(() => {
-                // Focus vào thanh tìm kiếm mới nhất
-                const newInput = document.querySelector('.search-input-group:last-child .search-input');
-                if (newInput) {
-                    // Thử nhiều cách để focus
-                    newInput.focus();
-                    // Đảm bảo element nhận focus thực sự
-                    newInput.focus({preventScroll: false});
-                    // Di chuyển con trỏ đến cuối text nếu có
-                    if (newInput.value) {
-                        newInput.selectionStart = newInput.selectionEnd = newInput.value.length;
-                    }
-                    console.log('Focus applied to new input');
-                }
-            }, 50);
-        }, 200);
-    }
 
     function manageNextSearchInput() {
         // === Giai đoạn 1: Tìm kiếm một ô trống đã tồn tại ===
@@ -1822,12 +1839,12 @@ async function ensureDresPrerequisites() {
             const searchGroup = input.closest('.search-input-group');
             const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
             const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
-            
+            const asrValue = searchGroup.querySelector('.asr-input')?.value.trim();
             // Giả sử filter chỉ áp dụng cho ô tìm kiếm đầu tiên (theo logic toggleFilter của bạn)
             const isFilterActiveOnThisInput = 
                 (ocrFilterBtn.classList.contains('active') && ocrValue) || 
-                (tagFilterBtn.classList.contains('active') && tagValue);
-
+                (tagFilterBtn.classList.contains('active') && tagValue)||
+                (asrFilterBtn.classList.contains('active') && asrValue);
             if (input.value.trim() === '' && !isFilterActiveOnThisInput) {
                 firstEmptyInput = input;
                 break; // Dừng lại ngay khi tìm thấy ô trống đầu tiên
@@ -1958,6 +1975,10 @@ async function ensureDresPrerequisites() {
             body.ocr = filterOptions.ocr;
         }
 
+        if (filterOptions.asr) {
+            body.asr = filterOptions.asr;
+        }
+
         return fetch("/api/search/temporal/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1982,6 +2003,9 @@ async function ensureDresPrerequisites() {
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
+        }
+        if (filterOptions.asr) {
+            body.asr = filterOptions.asr;
         }
         // >>> KẾT THÚC LOGIC MỚI <<<
 
@@ -2009,6 +2033,9 @@ async function ensureDresPrerequisites() {
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
+        }
+        if (filterOptions.asr) {
+            body.asr = filterOptions.asr;
         }
         // >>> KẾT THÚC LOGIC MỚI <<<
 
@@ -2849,26 +2876,19 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                 }
             }
             
-            // Phím Delete: Có thể thêm hành động xóa frame đã chọn nếu cần
             if (e.key === 'Delete') {
                 // Thực hiện hành động xóa nếu cần
                 // frameSelectionManager.deleteSelectedFrames();
             }
         });
-        
-        // Lắng nghe sự kiện click bên ngoài để hỗ trợ bỏ chọn
         document.addEventListener('click', function(e) {
             // Kiểm tra xem click có nằm ngoài frame và toolbar không
             const isClickOutside = !e.target.closest('.image-item') && 
                                 !e.target.closest('.selection-toolbar');
-            
-            // Nếu click ngoài và không nhấn Ctrl (để không ảnh hưởng đến chọn nhiều)
             if (isClickOutside && !e.ctrlKey) {
                 frameSelectionManager.clearAllSelections();
             }
         });
-        
-        // Lắng nghe sự kiện thay đổi kích thước cửa sổ để điều chỉnh vị trí toolbar
         window.addEventListener('resize', function() {
             // Cập nhật vị trí toolbar nếu cần
             adjustToolbarPosition();
@@ -2881,8 +2901,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             activeElement.blur();
         }
     }
-
-    // Hàm điều chỉnh vị trí toolbar
     function adjustToolbarPosition() {
         const toolbar = document.getElementById('selectionToolbar');
         if (toolbar && toolbar.style.display !== 'none') {
@@ -2902,11 +2920,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             }
         }
     }
-
-    /**
-     * Vẽ lại toàn bộ giao diện của submit queue dựa trên dữ liệu từ server. (V2)
-     * @param {Array} queueItems - Mảng các frame trong queue, đã được sắp xếp.
-     */
     function renderFullQueue(queueItems) {
         // queueItems.reverse();
         // Cập nhật Map cục bộ để dễ truy xuất
@@ -3049,7 +3062,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         }
 
         state.queries.forEach((queryInfo, index) => {
-            // Bỏ qua việc tạo ô text cho truy vấn đầu tiên nếu nó là ảnh
             if (state.isImageTemporalStart && index === 0) {
                 return;
             }
@@ -3095,8 +3107,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             if (state.finalResults && Array.isArray(state.finalResults)) {
                 
                 console.log("Restoring results directly from history state.");
-                // Dùng isReranked=true nếu bạn muốn hiển thị lại tiêu đề "T Reranked"
-                // Dựa vào việc có nhiều hơn 1 query trong lịch sử.
                 const isRerankedResult = state.queries.length > 1;
                 handleSearchResults(state.finalResults, isRerankedResult);
 
@@ -3190,11 +3200,6 @@ function toggleFilter(filterType) {
     }
 }
 
-/**
-     * TẠO KHỐI UI MỚI ĐỂ HIỂN THỊ ẢNH ĐANG DÙNG ĐỂ TÌM KIẾM
-     * @param {string} imagePath - URL của ảnh
-     * @returns {HTMLElement} - Element của khối UI đã được tạo
-     */
     function createImageTemporalSearchBlock(imagePath) {
         const imageSearchBlock = document.createElement('div');
         imageSearchBlock.className = 'image-temporal-search-block'; // Dùng class riêng để style
@@ -3205,27 +3210,16 @@ function toggleFilter(filterType) {
         return imageSearchBlock;
     }
 
-    /**
-     * HÀM ĐIỀU PHỐI CHÍNH: Bắt đầu chuỗi temporal mới từ hình ảnh.
-     * @param {string} imagePath - URL của ảnh
-     */
     async function initiateImageTemporalSearch(imagePath) {
-        // 1. Reset giao diện và trạng thái cho một chuỗi mới
-        
         searchInputsContainer.innerHTML = ''; // Xóa sạch các ô tìm kiếm cũ
         showLoadingIndicator(); // Hiển thị loading
 
         try {
-            // 2. Tạo và hiển thị khối UI cho ảnh tìm kiếm
             const imageBlock = createImageTemporalSearchBlock(imagePath);
             searchInputsContainer.appendChild(imageBlock);
-
-            // 3. Chuyển đổi đường dẫn ảnh thành File object
             const response = await fetch(imagePath);
             const blob = await response.blob();
             const imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
-
-            // 4. Gọi API backend mới
             const queryId = 'img-start-' + Date.now();
 
             const formData = new FormData();
@@ -3247,19 +3241,12 @@ function toggleFilter(filterType) {
             }
 
             const resultsData = await apiResponse.json();
-
-            // 5. Cập nhật trạng thái và hiển thị kết quả
             handleSearchResults(resultsData.initial_results, false);
-
-            // 6. Tạo ô nhập văn bản mới và focus vào đó
             const nextInput = createNewSearchInput();
             setTimeout(() => {
                 nextInput.focus();
-                // Cuộn tới sidebar để người dùng thấy ô nhập mới
                 nextInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 100);
-
-            // 7. [HISTORY] Đẩy trạng thái mới vào lịch sử trình duyệt
             if (!isRestoringState) {
                 const currentState = buildStateObject();
                 // Thêm thông tin đặc biệt để khôi phục
@@ -3276,28 +3263,18 @@ function toggleFilter(filterType) {
 
     function autoResizeTextarea(textareaElement) {
         if (!textareaElement) return;
-        textareaElement.style.height = 'auto'; // Reset chiều cao để tính toán lại scrollHeight
-        // Lấy chiều cao tối thiểu từ CSS hoặc đặt một giá trị mặc định. 
-        // Trong code của bạn, bạn đã dùng 44px.
+        textareaElement.style.height = 'auto';
         const minHeight = 44; 
         textareaElement.style.height = Math.max(minHeight, textareaElement.scrollHeight) + 'px';
     }
-
-
-
     function saveQueryToHistory(query) {
     if (!query || query.trim() === '') return;
 
     const trimmedQuery = query.trim();
     let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
-
-    // Xóa các bản sao cũ của truy vấn này để đưa bản mới nhất lên đầu
     history = history.filter(item => item !== trimmedQuery);
 
-    // Thêm truy vấn mới vào đầu danh sách
     history.unshift(trimmedQuery);
-
-    // Giới hạn lịch sử ở 50 mục gần nhất
     if (history.length > 50) {
         history = history.slice(0, 50);
     }
@@ -3305,9 +3282,6 @@ function toggleFilter(filterType) {
     localStorage.setItem('searchHistory', JSON.stringify(history));
 }
 
-/**
- * Hiển thị các truy vấn đã lưu vào trong menu.
- */
 function renderSearchHistory() {
     const history = JSON.parse(localStorage.getItem('searchHistory')) || [];
     historyListContainer.innerHTML = ''; // Xóa nội dung cũ
@@ -3317,8 +3291,6 @@ function renderSearchHistory() {
         clearHistoryBtn.style.display = 'none'; // Ẩn nút xóa khi không có gì
         return;
     }
-
-    // Nếu có lịch sử, đảm bảo nút xóa được hiện ra
     clearHistoryBtn.style.display = 'flex'; 
 
     history.forEach(query => {
@@ -3330,10 +3302,6 @@ function renderSearchHistory() {
     });
 }
 
-/**
- * Sao chép văn bản vào clipboard, hoạt động trên cả HTTP và HTTPS.
- * @param {string} text - Văn bản cần sao chép.
- */
 function copyQueryToClipboard(text) {
     if (navigator.clipboard && window.isSecureContext) {
         return navigator.clipboard.writeText(text);
@@ -3358,52 +3326,59 @@ function copyQueryToClipboard(text) {
     }
 }
 
-/**
- * Đóng menu lịch sử tìm kiếm.
- */
 function closeHistoryMenu() {
     historyMenu.classList.remove('visible');
 }
 
-/**
- * Mở hoặc đóng menu lịch sử tìm kiếm.
- * @param {Event} e - Sự kiện click.
- */
 function toggleHistoryMenu(e) {
     e.stopPropagation(); // Ngăn sự kiện lan ra và đóng menu
     settingsMenu.classList.remove('visible'); // Đóng các menu khác
 
     if (historyMenu.classList.contains('visible')) {
         closeHistoryMenu();
-        return; // Dừng hàm tại đây
+        return; 
     }
-
-    // Cập nhật nội dung cho menu
     renderSearchHistory();
-
-    // Lấy vị trí của nút "History" để xác định vị trí theo chiều dọc
     const btnRect = historyBtn.getBoundingClientRect();
     historyMenu.style.top = `${btnRect.bottom + 5}px`;
-
-    // **ĐỊNH VỊ THEO CHIỀU NGANG (GIỐNG HỆT SETTINGS)**
-    // Luôn luôn neo menu vào cạnh phải của màn hình
-    historyMenu.style.right = '20px'; // Cách cạnh phải màn hình 20px
-    historyMenu.style.left = '';      // Xóa thuộc tính 'left' để tránh xung đột
-
-    // Hiển thị menu
+    historyMenu.style.right = '20px';
+    historyMenu.style.left = ''; 
     historyMenu.classList.add('visible');
 }
 
 function clearSearchHistory(e) {
-    e.stopPropagation(); // Ngăn menu đóng lại ngay khi click nút này
-
-    // Hiện hộp thoại xác nhận
+    e.stopPropagation(); 
     if (confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử tìm kiếm không?')) {
         localStorage.removeItem('searchHistory'); // Xóa dữ liệu trong localStorage
         renderSearchHistory(); // Vẽ lại danh sách (lúc này sẽ trống)
         showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
     }
 }
+async function getAutocorrectSuggestion(text) {
+    if (!text || text.trim() === '') {
+        return null;
+    }
 
+    try {
+        const response = await fetch('http://192.168.20.170:9090/correct', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ text: text }),
+        });
+
+        if (!response.ok) {
+            console.error('Autocorrect API error:', response.statusText);
+            return null;
+        }
+
+        const result = await response.json();
+        return result.corrected_text; 
+    } catch (error) {
+        console.error('Failed to fetch autocorrect suggestion:', error);
+        return null;
+    }
+}
 
 });
