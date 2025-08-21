@@ -89,6 +89,11 @@ button:focus, input:focus, textarea:focus {
     box-shadow: 0 2px 15px rgba(0, 0, 0, 0.15);
     position: relative;
     z-index: 1000;
+    transition: height 0.1s ease-in-out;
+}
+
+.header.header-expanded {
+    height: 10vh; /* Chiều cao khi thanh preview hiện ra */
 }
 
 .header-content {
@@ -115,6 +120,11 @@ button:focus, input:focus, textarea:focus {
     background-position: center;
     scrollbar-width: thin;
     color: #EED3B1;
+    transition: height 0.1s ease-in-out;
+}
+
+.header.header-expanded + .main-container {
+    height: 90vh;
 }
 
 /* Sidebar - chiếm 1/5 chiều ngang */
@@ -2102,4 +2112,110 @@ button:focus, input:focus, textarea:focus {
     background: #4CAF50;
     border-radius: 50%;
     cursor: pointer;
+}
+
+.keyframe-preview-bar {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 65%; /* Tăng nhẹ chiều rộng */
+    max-width: 1000px;
+    height: calc(100% - 10px); /* Chiếm gần hết chiều cao header */
+    background-color: rgba(0, 0, 0, 0.25);
+    border-radius: 8px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    display: none;
+    align-items: center;
+    padding: 4px; /* Giảm padding */
+    box-sizing: border-box;
+    backdrop-filter: blur(8px);
+}
+.keyframe-preview-bar.visible {
+    display: flex;
+    animation: fadeInDown 0.3s ease-out;
+}
+
+.preview-content {
+    flex-grow: 1;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+.preview-placeholder {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: rgba(255, 255, 255, 0.7);
+    font-style: italic;
+    font-size: 14px;
+    white-space: nowrap;
+}
+
+.preview-thumbnails {
+    display: flex;
+    height: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    gap: 4px; /* Giảm khoảng cách */
+    padding: 0 2px;
+    scrollbar-width: none; /* Ẩn thanh cuộn trên Firefox */
+}
+
+/* Ẩn thanh cuộn trên Chrome, Safari, Edge */
+.preview-thumbnails::-webkit-scrollbar {
+    display: none;
+}
+
+.preview-thumbnails img {
+    height: 100%;
+    display: block;
+    border-radius: 4px; /* Giảm bo góc */
+    border: 2px solid transparent;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    object-fit: cover; /* Đảm bảo ảnh lấp đầy khung */
+}
+
+.preview-thumbnails img:hover {
+    transform: scale(1.05);
+    border-color: rgba(255, 255, 255, 0.5);
+}
+
+.preview-thumbnails img.highlighted {
+    border-color: #0099ff;
+    transform: scale(1.1);
+    box-shadow: 0 0 10px rgba(0, 208, 255, 0.7);
+}
+
+.close-preview-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    margin-left: 8px; /* Giảm margin */
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 22px;
+    text-align: center;
+    flex-shrink: 0;
+    transition: background-color 0.2s ease;
+}
+
+.close-preview-btn:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translate(-50%, -10px);
+    }
+    to {
+        opacity: 1;
+        transform: translate(-50%, 0);
+    }
 }
