@@ -433,6 +433,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
                             case 'f': // Xem keyframe lân cận
                                 if (selectedCountInQueue === 1) {
+                                    if (frameData.isFromVideo) {
+                                        showToastNotification('Cannot view neighboring frames for a captured image.', 'error');
+                                        return; 
+                                    }
+
                                     if (frameData.id && frameData.path) {
                                         openImageModal(frameData.id, frameData.path, frameData);
                                     } else {
@@ -2591,59 +2596,179 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         return (minutes * 60) + seconds;
     }
 
-    function openVideoModal(videoName, timestamp) {
-        const modal = document.getElementById('videoModal');
-        const player = document.getElementById('videoPlayer');
-        const closeBtn = document.getElementById('closeVideoModalBtn');
+function openVideoModal(videoName, timestamp) {
+    const modal = document.getElementById('videoModal');
+    const player = document.getElementById('videoPlayer');
+    const closeBtn = document.getElementById('closeVideoModalBtn');
+    const captureCanvas = document.getElementById('frameCaptureCanvas');
 
-        if (!videoName || !timestamp) {
-            alert("Thiếu thông tin video hoặc timestamp.");
-            return;
-        }
+    // Lấy các phần tử điều khiển mới (sẽ không còn lỗi null sau khi cập nhật HTML)
+    const playPauseBtn = document.getElementById('playPauseBtn');
+    const playIcon = playPauseBtn.querySelector('i');
+    const seekBackwardBtn = document.getElementById('seekBackwardBtn');
+    const seekForwardBtn = document.getElementById('seekForwardBtn');
+    const seekSlider = document.getElementById('videoSeekSlider');
+    const currentTimeDisplay = document.getElementById('currentTimeDisplay');
+    const durationDisplay = document.getElementById('durationDisplay');
 
-        // Xây dựng đường dẫn đến video. Giả định video có đuôi .mp4
-        const videoSrc = `/videos/${videoName}.mp4`; 
-        const startTime = parseTimestamp(timestamp);
+    // Cấu hình
+    const SKIP_TIME = 0.5; // Tua 5 giây
+    const FAST_FORWARD_RATE = 2.5;
 
-        // Gán nguồn cho player
-        player.src = videoSrc;
-        
-        // Hàm này sẽ được gọi khi metadata của video đã sẵn sàng
-        const setVideoTimeAndPlay = () => {
-            // Kiểm tra để đảm bảo startTime hợp lệ và nằm trong thời lượng video
-            if (isFinite(startTime) && startTime < player.duration) {
-                player.currentTime = startTime;
-            }
-            player.play();
-        };
+    let isSeeking = false; // Cờ để ngăn slider cập nhật khi người dùng đang kéo
+    let rewindInterval = null;
 
-        // Lắng nghe sự kiện 'loadedmetadata' một lần duy nhất
-        player.addEventListener('loadedmetadata', setVideoTimeAndPlay, { once: true });
-        
-        // Hàm đóng modal và dọn dẹp
-        const closeModal = () => {
-            player.pause();
-            player.removeAttribute('src'); // Hiệu quả hơn để dừng tải
-            player.load(); // Reset player
-            player.removeEventListener('loadedmetadata', setVideoTimeAndPlay);
-            modal.style.display = 'none';
-            document.removeEventListener('keydown', escHandler);
-        };
-        
-        // Hàm xử lý phím Escape
-        const escHandler = (e) => {
-            if (e.key === 'Escape') closeModal();
-        };
-
-        // Gán sự kiện đóng modal
-        modal.querySelector('.modal-overlay').onclick = closeModal;
-        closeBtn.onclick = closeModal;
-        document.addEventListener('keydown', escHandler);
-
-        // Hiển thị modal
-        modal.style.display = 'flex';
+    if (!videoName || !timestamp) {
+        showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
+        return;
     }
 
+    // --- CÁC HÀM HELPER VÀ CẬP NHẬT UI ---
+    const formatTime = (timeInSeconds) => {
+        const minutes = Math.floor(timeInSeconds / 60);
+        const seconds = Math.floor(timeInSeconds % 60);
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    };
+
+    const togglePlayPause = () => player.paused ? player.play() : player.pause();
+    const updatePlayButton = () => {
+        playIcon.classList.toggle('fa-play', player.paused);
+        playIcon.classList.toggle('fa-pause', !player.paused);
+    };
+
+    const updateSlider = () => {
+        if (!isSeeking && player.duration) {
+            seekSlider.value = player.currentTime;
+            currentTimeDisplay.textContent = formatTime(player.currentTime);
+        }
+    };
+
+    // --- CÁC BỘ LẮNG NGHE SỰ KIỆN ---
+    const onLoadedMetadata = () => {
+        if (player.duration) {
+            seekSlider.max = player.duration;
+            durationDisplay.textContent = formatTime(player.duration);
+        }
+        const startTime = parseTimestamp(timestamp);
+        if (isFinite(startTime) && startTime < player.duration) {
+            player.currentTime = startTime;
+        }
+        player.play().catch(e => console.error("Lỗi tự động phát video:", e));
+    };
+
+    // LOGIC TUA VIDEO ĐÃ ĐƯỢC CẢI TIẾN
+    const handleKeyDown = (e) => {
+        if (e.key === 'Escape') { closeModal(); return; }
+        if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
+
+        const activeElement = document.activeElement;
+        if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
+
+        switch (e.key) {
+            case ' ': e.preventDefault(); togglePlayPause(); break;
+            case 'ArrowRight':
+                e.preventDefault();
+                if (e.repeat) { // Nhấn giữ
+                    player.playbackRate = FAST_FORWARD_RATE;
+                }
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                if (e.repeat && !rewindInterval) { // Nhấn giữ
+                    rewindInterval = setInterval(() => {
+                        player.currentTime = Math.max(0, player.currentTime - 0.2);
+                    }, 100);
+                }
+                break;
+        }
+    };
+
+    const handleKeyUp = (e) => {
+        switch (e.key) {
+            case 'ArrowRight':
+                e.preventDefault();
+                if (!e.repeat) { // Chỉ tua 1 lần khi nhả phím (nếu không phải là đang tua nhanh)
+                    if (player.playbackRate === 1.0) player.currentTime += SKIP_TIME;
+                }
+                player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường
+                break;
+            case 'ArrowLeft':
+                e.preventDefault();
+                if (rewindInterval) {
+                    clearInterval(rewindInterval);
+                    rewindInterval = null;
+                } else { // Tua 1 lần
+                    player.currentTime -= SKIP_TIME;
+                }
+                break;
+        }
+    };
+
+    const captureFrameAndAddToQueue = async () => {
+        player.pause();
+        try {
+            const currentTime = player.currentTime;
+            const fps = await getFpsForVideo(videoName);
+            const frameNumber = Math.round(currentTime * fps);
+            
+            captureCanvas.width = player.videoWidth;
+            captureCanvas.height = player.videoHeight;
+            const context = captureCanvas.getContext('2d');
+            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
+            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
+            const minutes = Math.floor(currentTime / 60);
+            const seconds = (currentTime % 60).toFixed(3);
+            const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+            
+            const newFrameData = {
+                videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
+                timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
+                score: 0, temporal_score: 0, videoPath: `/videos/${videoName}.mp4`, fps, isFromVideo: true
+            };
+
+            sendWebSocketMessage('add_frames', { frames: [newFrameData] });
+            showToastNotification(`Đã chụp và thêm frame ${newFrameData.frameIdentifier} vào queue!`, 'success');
+            closeModal();
+        } catch (error) {
+            console.error("Lỗi khi chụp frame:", error);
+            showToastNotification("Không thể chụp frame.", "error");
+            player.play();
+        }
+    };
+
+    // --- HÀM ĐÓNG VÀ DỌN DẸP ---
+    const closeModal = () => {
+        player.pause();
+        document.removeEventListener('keydown', handleKeyDown);
+        document.removeEventListener('keyup', handleKeyUp);
+        if (rewindInterval) clearInterval(rewindInterval);
+        player.removeAttribute('src');
+        player.load();
+        modal.style.display = 'none';
+    };
+
+    // --- KHỞI TẠO VÀ GÁN SỰ KIỆN ---
+    player.addEventListener('loadedmetadata', onLoadedMetadata);
+    player.addEventListener('timeupdate', updateSlider);
+    player.addEventListener('play', updatePlayButton);
+    player.addEventListener('pause', updatePlayButton);
+
+    playPauseBtn.onclick = togglePlayPause;
+    seekBackwardBtn.onclick = () => player.currentTime -= SKIP_TIME;
+    seekForwardBtn.onclick = () => player.currentTime += SKIP_TIME;
+    seekSlider.onmousedown = () => isSeeking = true;
+    seekSlider.onmouseup = () => isSeeking = false;
+    seekSlider.oninput = () => player.currentTime = seekSlider.value;
+    
+    modal.querySelector('.modal-overlay').onclick = closeModal;
+    closeBtn.onclick = closeModal;
+    document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keyup', handleKeyUp);
+
+    player.src = `/videos/${videoName}.mp4`;
+    modal.style.display = 'flex';
+}
     const frameSelectionManager = {
         selectedFrames: new Map(), // Map lưu tất cả frame đã chọn: key = frameId, value = frameData
         
@@ -2822,7 +2947,7 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
                             showToastNotification('Cannot start search: image path is missing.', 'error');
                         }
                     } else {
-                        showToastNotification('Please select exactly one frame to start a new temporal search.', 'error');
+                        // showToastNotification('Please select exactly one frame to start a new temporal search.', 'error');
                     }
                 }
             }
@@ -2962,10 +3087,11 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
             const userColor = frameData.user_color || '#888888';
             const hasVotesClass = frameData.vote_count > 0 ? 'has-votes' : '';
             const isSelectedClass = frameData.frameIdentifier === currentSelectedId ? 'selected' : '';
+            const isFromVideoClass = frameData.isFromVideo ? 'from-video' : '';
 
             // Tạo thẻ cha
             const frameElement = document.createElement('div');
-            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass}`;
+            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass}`;
             frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.style.borderColor = userColor;
 
@@ -3229,21 +3355,33 @@ function toggleFilter(filterType) {
     }
 
     async function initiateImageTemporalSearch(imagePath) {
-        searchInputsContainer.innerHTML = ''; // Xóa sạch các ô tìm kiếm cũ
-        showLoadingIndicator(); // Hiển thị loading
+        searchInputsContainer.innerHTML = '';
+        showLoadingIndicator();
 
         try {
             const imageBlock = createImageTemporalSearchBlock(imagePath);
             searchInputsContainer.appendChild(imageBlock);
-            const response = await fetch(imagePath);
-            const blob = await response.blob();
-            const imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
-            const queryId = 'img-start-' + Date.now();
 
+            // --- LOGIC MỚI ĐỂ XỬ LÝ CẢ URL VÀ DATA URL ---
+            let imageFile;
+            if (imagePath.startsWith('data:')) {
+                // Chuyển đổi Data URL thành File object
+                const response = await fetch(imagePath);
+                const blob = await response.blob();
+                imageFile = new File([blob], "captured_frame.jpg", { type: blob.type });
+            } else {
+                // Giữ nguyên logic cũ cho URL thông thường
+                const response = await fetch(imagePath);
+                const blob = await response.blob();
+                imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
+            }
+            // --- KẾT THÚC LOGIC MỚI ---
+
+            const queryId = 'img-start-' + Date.now();
             const formData = new FormData();
             formData.append("file", imageFile);
-            formData.append("user_id", currentUserId); // <<< THÊM VÀO
-            formData.append("query_id", queryId); 
+            formData.append("user_id", currentUserId);
+            formData.append("query_id", queryId);
 
             if (currentSelectedModel && currentSelectedModel !== 'all') {
                 formData.append("model_name", currentSelectedModel);
@@ -3265,11 +3403,11 @@ function toggleFilter(filterType) {
                 nextInput.focus();
                 nextInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }, 100);
+
             if (!isRestoringState) {
                 const currentState = buildStateObject();
-                // Thêm thông tin đặc biệt để khôi phục
                 currentState.isImageTemporalStart = true;
-                currentState.imageTemporalStartPath = imagePath; 
+                currentState.imageTemporalStartPath = imagePath;
                 const newUrl = `/?search_timestamp=${Date.now()}`;
                 window.history.pushState(currentState, '', newUrl);
             }
@@ -3399,51 +3537,48 @@ async function getAutocorrectSuggestion(text) {
     }
 }
 
-async function getFpsForVideo(videoName, frame_id_ori) {
+async function getFpsForVideo(videoName) {
     let videoMetadata;
 
-    // 1. Kiểm tra xem metadata của video đã được cache chưa
+    // 1. Kiểm tra cache (giữ nguyên logic này vì nó hiệu quả)
     if (metadataCache.has(videoName)) {
         videoMetadata = metadataCache.get(videoName);
     } else {
-        // 2. Nếu chưa, gọi API để lấy và cache lại
+        // 2. Fetch metadata nếu chưa có trong cache
         try {
             const response = await fetch(`/api/metadata/${videoName}`);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const fullMetadata = await response.json();
             
-            // Cấu trúc JSON có một key cấp cao nhất là tên video, ví dụ: "L25_V027"
-            // Chúng ta cần lấy đối tượng bên trong key đó.
             videoMetadata = fullMetadata[videoName];
             
             if (!videoMetadata) {
                 console.error(`Không tìm thấy metadata cho key '${videoName}' trong file JSON.`);
-                return 25; // Fallback
+                return 25; // Trả về giá trị mặc định nếu không có dữ liệu
             }
             
-            metadataCache.set(videoName, videoMetadata); // Cache lại phần dữ liệu của video
-        } catch (error) {
+            metadataCache.set(videoName, videoMetadata); // Cache lại để dùng sau
+        } catch (error)
+        {
             console.error(`Lỗi khi fetch hoặc parse metadata cho ${videoName}:`, error);
             return 25; // Trả về giá trị mặc định khi có lỗi
         }
     }
 
-    // 3. Tìm frame tương ứng trong metadata đã có
-    // Ta cần tìm key của frame (ví dụ "frame_001") dựa trên frame_id_ori (ví dụ 10)
-    const frameKey = Object.keys(videoMetadata).find(key => 
-        videoMetadata[key] && videoMetadata[key].id === frame_id_ori
-    );
-
-    if (frameKey && videoMetadata[frameKey] && videoMetadata[frameKey].fps) {
-        return videoMetadata[frameKey].fps;
-    } else {
-        console.warn(`Không tìm thấy FPS cho frame có id_ori=${frame_id_ori} trong video ${videoName}. Sử dụng giá trị đầu tiên.`);
-        // Fallback an toàn: nếu không tìm thấy frame, thử lấy fps của frame đầu tiên
+    // 3. Lấy FPS trực tiếp từ frame đầu tiên
+    try {
+        // Lấy key của đối tượng đầu tiên trong metadata
         const firstFrameKey = Object.keys(videoMetadata)[0];
+        
         if (firstFrameKey && videoMetadata[firstFrameKey] && videoMetadata[firstFrameKey].fps) {
             return videoMetadata[firstFrameKey].fps;
+        } else {
+            console.warn(`Không tìm thấy FPS trong frame đầu tiên của video ${videoName}. Sử dụng giá trị mặc định 25`);
+            return 25; // Fallback nếu frame đầu tiên không có thông tin fps
         }
-        return 25; // Fallback cuối cùng
+    } catch (error) {
+        console.error(`Lỗi khi xử lý metadata cho ${videoName}:`, error);
+        return 25; // Fallback cho các lỗi khác (ví dụ metadata trống)
     }
 }
 
