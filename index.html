@@ -117,10 +117,40 @@
         <div class="modal-overlay"></div>
         <div class="modal-content">
             <button class="close-btn" id="closeVideoModalBtn">×</button>
-            <video id="videoPlayer" class="video-player" controls autoplay muted>
-                <source src="" type="video/mp4">
-                Trình duyệt của bạn không hỗ trợ thẻ video.
-            </video>
+            <div class="video-container">
+                <!-- Xóa thuộc tính 'controls' -->
+                <video id="videoPlayer" class="video-player" autoplay muted>
+                    <source src="" type="video/mp4">
+                    Trình duyệt của bạn không hỗ trợ thẻ video.
+                </video>
+            </div>
+            
+            <!-- === KHU VỰC ĐIỀU KHIỂN TÙY CHỈNH MỚI === -->
+            <div class="video-custom-controls">
+                <div class="controls-top-row">
+                    <input type="range" id="videoSeekSlider" class="video-seek-slider" value="0" step="0.1">
+                </div>
+                <div class="controls-bottom-row">
+                    <div class="controls-left">
+                        <button id="playPauseBtn" class="control-btn" title="Play/Pause (Space)">
+                            <i class="fas fa-play"></i>
+                        </button>
+                        <button id="seekBackwardBtn" class="control-btn" title="Seek Backward (←)">
+                            <i class="fas fa-backward"></i>
+                        </button>
+                        <button id="seekForwardBtn" class="control-btn" title="Seek Forward (→)">
+                            <i class="fas fa-forward"></i>
+                        </button>
+                        <div class="time-display">
+                            <span id="currentTimeDisplay">00:00</span> / <span id="durationDisplay">00:00</span>
+                        </div>
+                    </div>
+                    <div class="controls-right">
+                        <!-- Thêm điều khiển âm lượng nếu muốn trong tương lai -->
+                    </div>
+                </div>
+            </div>
+            <!-- === KẾT THÚC KHU VỰC ĐIỀU KHIỂN === -->
         </div>
     </div>
     <div id="selectionToolbar" class="selection-toolbar">
@@ -197,6 +227,10 @@
                     <span class="shortcut-description">Submit Queue When In Neighboring keyframe</span>
                     <span class="shortcut-key">A</span>
                 </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Submit Queue When Watching Video</span>
+                    <span class="shortcut-key">Enter</span>
+                </div>
             </div>
             <h3>Submit Queue</h3>
             <div class="shortcuts-list">
@@ -211,10 +245,6 @@
                 <div class="shortcut-item">
                     <span class="shortcut-description">Submit As QA</span>
                     <span class="shortcut-key">Q</span>
-                </div>
-                <div class="shortcut-item">
-                    <span class="shortcut-description">Submit</span>
-                    <span class="shortcut-key">Enter</span>
                 </div>
             </div>
             <h3>Form Submit</h3>
@@ -325,6 +355,6 @@
             </form>
         </div>
     </div>
-
+    <canvas id="frameCaptureCanvas" style="display: none;"></canvas>
 </body>
 </html>
