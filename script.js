@@ -10,7 +10,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
     const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
-    const DEFAULT_DRES_SESSION_ID = 'tfGPKdKa2Qf2mfrsNK_oMFWYorZkz-0r'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'W3bboltdf9YxpnDh53znaS6Ml1doZvXq'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
 
     let isRestoringState = false;
 
@@ -24,6 +24,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let ws = null;
     let userColors = {}; // Lưu màu của tất cả user
 
+    let metadataCache = new Map();
 
     const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
@@ -882,7 +883,9 @@ async function ensureDresPrerequisites() {
                 if (framesToSubmit.length === 1) {
                     // Trường hợp 1 frame
                     const frame = framesToSubmit[0];
-                    const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / DRES_FPS) * 1000);
+                    const fps = await getFpsForVideo(frame.videoName);
+                    console.log("fps", fps);
+                    const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
                     console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
                     answers = [{ mediaItemName: frame.videoName, start: timeMs, end: timeMs }];
                 } else {
@@ -891,6 +894,7 @@ async function ensureDresPrerequisites() {
                     if (!framesToSubmit.every(f => f.videoName === firstVideoName)) {
                         throw new Error("Please select frames from the same video for KIS submission.");
                     }
+                    const fps = await getFpsForVideo(framesToSubmit[0].videoName);
                     const frameIds = framesToSubmit.map(f => parseInt(f.frame_id_ori, 10));
                     const minTimeMs = Math.round((Math.min(...frameIds) / DRES_FPS) * 1000);
                     const maxTimeMs = Math.round((Math.max(...frameIds) / DRES_FPS) * 1000);
@@ -2342,7 +2346,6 @@ function showToastNotification(message, type = 'success', duration = 2000) {
         toast.addEventListener('transitionend', () => toast.remove());
     }, duration);
 }
-
 async function openImageModal(clickedFrameNumber, clickedPath, image) {
     const modal = document.getElementById('imageModal');
     const mainPreview = document.getElementById('mainPreviewImage');
@@ -2352,23 +2355,15 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
     let currentModalFrameData = null;
     let currentFrameNumber = -1; // Đặt một giá trị khởi tạo không hợp lệ
 
-    // --- LOGIC GỠ LỖI: Kiểm tra xem có listener nào đang tồn tại không ---
-    // Bạn có thể thêm một biến cờ toàn cục để kiểm tra, ví dụ:
-    // if (window.isModalOpen) {
-    //     console.error("Lỗi logic: openImageModal được gọi trong khi modal đã mở.");
-    //     return; 
-    // }
-    // window.isModalOpen = true;
-
     // --- Tải dữ liệu cần thiết ---
     const pathParts = clickedPath.split('/');
-    const videoId = pathParts[pathParts.length - 2]; 
+    const videoId = pathParts[pathParts.length - 2];
     if (!videoId) {
         console.error("Không thể trích xuất videoId từ đường dẫn:", clickedPath);
         showToastNotification("Lỗi: Đường dẫn ảnh không hợp lệ.", "error");
         return;
     }
-    
+
     let videoInfo = videoInfoCache[videoId];
     let videoMetadata = null;
 
@@ -2394,45 +2389,65 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         return;
     }
 
-    if (!videoInfo) {
-        showToastNotification("Lỗi nghiêm trọng: Không có thông tin video để hiển thị.", "error");
+    if (!videoInfo || !videoMetadata) {
+        showToastNotification("Lỗi: Dữ liệu không đầy đủ để hiển thị.", "error");
         return;
     }
 
     const { frame_filenames, folder_url_path } = videoInfo;
     const folderUrlPath = folder_url_path || `/frames/${videoId}`;
+
+    // --- BƯỚC CHUẨN BỊ DỮ LIỆU: KẾT HỢP VÀ SẮP XẾP ---
+
+    // 1. Kết hợp `frame_filenames` và `videoMetadata` thành một cấu trúc duy nhất
+    const combinedFrames = frame_filenames.map(filename => {
+        const frameIdFromFilename = filename.split('.')[0];
+        const metadata = videoMetadata[videoId]?.[frameIdFromFilename];
+
+        if (!metadata) {
+            return null; // Bỏ qua nếu không có metadata tương ứng
+        }
+        
+        return {
+            filename: filename,
+            frameNum: parseInt(filename.split('_')[1].split('.')[0]), // Giữ lại số frame gốc để tìm
+            frame_id_ori: metadata.id // Đây là khóa để sắp xếp
+        };
+    }).filter(Boolean); // Lọc ra các phần tử null (nếu có)
+
+    // 2. Sắp xếp mảng đã kết hợp dựa trên `frame_id_ori`
+    const sortedFrames = combinedFrames.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
     
     // --- Các hàm xử lý nội bộ của Modal ---
 
     function updateMainPreview(frameNum) {
-        // Ngăn việc cập nhật không cần thiết nếu frame không thay đổi
         if (frameNum === currentFrameNumber) return;
-
-        const frameName = frame_filenames.find(name => parseInt(name.split('_')[1].split('.')[0]) === frameNum);
-        if (!frameName) return;
-
-        mainPreview.src = `${folderUrlPath}/${frameName}`;
-        currentFrameNumber = frameNum;
         
-        const frameIdFromFilename = frameName.split('.')[0];
-        if (videoMetadata && videoMetadata[videoId] && videoMetadata[videoId][frameIdFromFilename]) {
-            console.log("video ID", videoId, frameIdFromFilename);
+        // Tìm trong mảng đã sắp xếp
+        const frameData = sortedFrames.find(frame => frame.frameNum === frameNum);
+        if (!frameData) return;
+
+        mainPreview.src = `${folderUrlPath}/${frameData.filename}`;
+        currentFrameNumber = frameNum;
+
+        const frameIdFromFilename = frameData.filename.split('.')[0];
+        if (videoMetadata[videoId]?.[frameIdFromFilename]) {
             const metadataForFrame = videoMetadata[videoId][frameIdFromFilename];
             currentModalFrameData = {
                 path: mainPreview.src,
                 videoName: videoId,
                 timestamp: metadataForFrame.timestamp,
                 frameIdentifier: `${videoId}_${metadataForFrame.id}`,
-                frame_id_ori: metadataForFrame.id ,
-                id: frameNum,
+                frame_id_ori: metadataForFrame.id,
+                id: frameNum, // 'id' ở đây vẫn là frame number gốc từ filename
                 score: 0,
                 temporal_score: 0,
                 videoPath: `/videos/${videoId}.mp4`
             };
             modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
         } else {
-             currentModalFrameData = null;
-             modalFrameInfo.textContent = "Metadata not found";
+            currentModalFrameData = null;
+            modalFrameInfo.textContent = "Metadata not found";
         }
 
         // Cập nhật giao diện thumbnail
@@ -2448,20 +2463,23 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
 
     // --- Các bộ lắng nghe sự kiện (Event Listeners) ---
 
-    // Chỉ được định nghĩa MỘT LẦN khi modal mở
     const wheelHandler = (e) => {
         e.preventDefault();
-        const allVisibleThumbs = thumbnailStrip.querySelectorAll('img');
-        if (allVisibleThumbs.length === 0) return;
+        if (sortedFrames.length === 0) return;
 
-        const minVisibleFrame = parseInt(allVisibleThumbs[0].dataset.frameNumber);
-        const maxVisibleFrame = parseInt(allVisibleThumbs[allVisibleThumbs.length - 1].dataset.frameNumber);
+        const currentIndex = sortedFrames.findIndex(f => f.frameNum === currentFrameNumber);
+        if (currentIndex === -1) return;
         
-        let newFrame = currentFrameNumber;
-        if (e.deltaY > 0 && currentFrameNumber < maxVisibleFrame) newFrame++;
-        else if (e.deltaY < 0 && currentFrameNumber > minVisibleFrame) newFrame--;
+        let nextIndex = currentIndex;
+        if (e.deltaY > 0 && currentIndex < sortedFrames.length - 1) { // Lăn xuống
+            nextIndex = currentIndex + 1;
+        } else if (e.deltaY < 0 && currentIndex > 0) { // Lăn lên
+            nextIndex = currentIndex - 1;
+        }
         
-        updateMainPreview(newFrame);
+        if (nextIndex !== currentIndex) {
+            updateMainPreview(sortedFrames[nextIndex].frameNum);
+        }
     };
 
     const keydownHandler = (e) => {
@@ -2473,11 +2491,12 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         }
 
         if (key === 'arrowright' || key === 'arrowleft') {
+            // Giả lập sự kiện lăn chuột để tái sử dụng logic
             wheelHandler({ preventDefault: () => {}, deltaY: key === 'arrowright' ? 1 : -1 });
             return;
         }
         
-        e.preventDefault(); // Ngăn hành vi mặc định cho 'a' và 's'
+        e.preventDefault(); // Ngăn hành vi mặc định cho các phím tắt bên dưới
 
         if (key === 'd') {
             if (currentModalFrameData) {
@@ -2491,7 +2510,6 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
         else if (key === 's') {
             if (currentModalFrameData && currentModalFrameData.path) {
                 const imagePath = currentModalFrameData.path;
-                // Đóng modal và gọi hàm điều phối mới
                 closeModal(() => {
                     initiateImageTemporalSearch(imagePath);
                 });
@@ -2510,17 +2528,10 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
 
     // --- Hàm đóng và dọn dẹp Modal ---
     function closeModal(onClosedCallback = null) {
-        // Gỡ bỏ tất cả listener đã đăng ký
         modal.removeEventListener('wheel', wheelHandler);
         document.removeEventListener('keydown', keydownHandler);
         thumbnailStrip.removeEventListener('click', clickThumbnailHandler);
-
-        // Ẩn modal
         modal.style.display = 'none';
-
-        // window.isModalOpen = false; // Reset cờ trạng thái
-
-        // Thực thi callback nếu có
         if (typeof onClosedCallback === 'function') {
             setTimeout(onClosedCallback, 50); 
         }
@@ -2528,37 +2539,42 @@ async function openImageModal(clickedFrameNumber, clickedPath, image) {
     
     // --- Khởi tạo và hiển thị Modal ---
 
-    // 1. Dọn dẹp thumbnail cũ và tạo mới
     thumbnailStrip.innerHTML = '';
-    const currentIndexInList = frame_filenames.findIndex(name => parseInt(name.split('_')[1].split('.')[0]) === clickedFrameNumber);
-    if (currentIndexInList === -1) return;
-
-    const start = Math.max(0, currentIndexInList - 50);
-    const end = Math.min(frame_filenames.length, currentIndexInList + 51);
     
+    // Tìm index của frame được click trong mảng đã sắp xếp
+    const currentIndexInList = sortedFrames.findIndex(frame => frame.frameNum === clickedFrameNumber);
+    if (currentIndexInList === -1) {
+        console.error("Frame được click không tìm thấy trong danh sách đã xử lý.");
+        return;
+    }
+
+    // Tạo "cửa sổ" 101 frame (50 trước, 50 sau) từ mảng đã sắp xếp
+    const start = Math.max(0, currentIndexInList - 50);
+    const end = Math.min(sortedFrames.length, currentIndexInList + 51);
+    
+    // Lặp qua mảng đã sắp xếp để tạo thumbnail
     for (let i = start; i < end; i++) {
-        const frameName = frame_filenames[i];
-        const frameNumber = parseInt(frameName.split('_')[1].split('.')[0]);
+        const frameData = sortedFrames[i];
         const thumb = document.createElement('img');
-        thumb.src = `${folderUrlPath}/${frameName}`;
-        thumb.dataset.frameNumber = frameNumber;
-        if (frameNumber === clickedFrameNumber) {
+        thumb.src = `${folderUrlPath}/${frameData.filename}`;
+        thumb.dataset.frameNumber = frameData.frameNum;
+        if (frameData.frameNum === clickedFrameNumber) {
             thumb.classList.add('active-frame');
         }
         thumbnailStrip.appendChild(thumb);
     }
 
-    // 2. Đăng ký các listener
+    // Đăng ký các listener
     modal.addEventListener('wheel', wheelHandler, { passive: false });
     document.addEventListener('keydown', keydownHandler);
     thumbnailStrip.addEventListener('click', clickThumbnailHandler);
     modal.querySelector('.modal-overlay').onclick = () => closeModal();
 
-    // 3. Cập nhật ảnh chính và hiển thị modal
+    // Cập nhật ảnh chính và hiển thị modal
     updateMainPreview(clickedFrameNumber);
     modal.style.display = 'flex';
     
-    // 4. Cuộn tới thumbnail đang được chọn
+    // Cuộn tới thumbnail đang được chọn
     setTimeout(() => {
         const activeThumb = thumbnailStrip.querySelector('.active-frame');
         if (activeThumb) activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
@@ -3378,6 +3394,45 @@ async function getAutocorrectSuggestion(text) {
     } catch (error) {
         console.error('Failed to fetch autocorrect suggestion:', error);
         return null;
+    }
+}
+
+async function getFpsForVideo(videoName) {
+    // 1. Kiểm tra trong cache trước
+    if (metadataCache.has(videoName)) {
+        return metadataCache.get(videoName).fps || 25;
+    }
+
+    // 2. Nếu không có, gọi API
+    try {
+        const response = await fetch(`/api/metadata/${videoName}`);
+        if (!response.ok) {
+            console.error(`Không thể lấy metadata cho video: ${videoName}`);
+            return 25; // Trả về giá trị mặc định nếu lỗi
+        }
+        const metadata = await response.json();
+        
+        // 3. Lưu vào cache để dùng cho lần sau
+        metadataCache.set(videoName, metadata);
+        
+        // Giả sử metadata trả về có dạng { ..., "L1_12345": { "fps": 30.0, ... } }
+        // Chúng ta cần tìm fps từ một frame bất kỳ bên trong.
+        const firstFrameKey = Object.keys(metadata)[0];
+        if (firstFrameKey && metadata[firstFrameKey] && metadata[firstFrameKey].fps) {
+             const fps = metadata[firstFrameKey].fps;
+             // Lưu lại fps chính xác cho lần sau
+             metadataCache.set(videoName, { fps: fps });
+             return fps;
+        }
+        
+        // Nếu cấu trúc khác, bạn cần điều chỉnh cho phù hợp.
+        // Ví dụ nếu metadata có key fps ở cấp cao nhất: return metadata.fps || 25;
+
+        return 25; // Fallback
+
+    } catch (error) {
+        console.error(`Lỗi khi fetch metadata cho ${videoName}:`, error);
+        return 25; // Trả về giá trị mặc định khi có lỗi mạng
     }
 }
 
