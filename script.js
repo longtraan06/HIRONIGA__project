@@ -216,7 +216,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
             check_timestamp =  frameData.timestamp;
             if (check_timestamp === undefined) {
-                const totalSeconds = frameData.frame_id_ori / DRES_FPS;
+                const fps = getFpsForVideo(frameData.videoName, parseInt(frameData.frame_id_ori, 10));
+                const totalSeconds = frameData.frame_id_ori / fps;
                 const minutes = Math.floor(totalSeconds / 60);
                 const seconds = (totalSeconds % 60).toFixed(3);
 
@@ -907,7 +908,8 @@ async function ensureDresPrerequisites() {
             } else if (submissionType === 'QA') {
                 if (framesToSubmit.length !== 1) throw new Error("QA submission only supports a single frame.");
                 const frame = framesToSubmit[0];
-                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / DRES_FPS) * 1000);
+                const fps = await getFpsForFrame(frame.videoName, parseInt(frame.frame_id_ori, 10));
+                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
                 console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
                 const finalText = `${qaText}-${frame.videoName}-${timeMs}`;
                 console.log("Final text for QA submission:", finalText);
@@ -3397,42 +3399,51 @@ async function getAutocorrectSuggestion(text) {
     }
 }
 
-async function getFpsForVideo(videoName) {
-    // 1. Kiểm tra trong cache trước
+async function getFpsForVideo(videoName, frame_id_ori) {
+    let videoMetadata;
+
+    // 1. Kiểm tra xem metadata của video đã được cache chưa
     if (metadataCache.has(videoName)) {
-        return metadataCache.get(videoName).fps || 25;
+        videoMetadata = metadataCache.get(videoName);
+    } else {
+        // 2. Nếu chưa, gọi API để lấy và cache lại
+        try {
+            const response = await fetch(`/api/metadata/${videoName}`);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const fullMetadata = await response.json();
+            
+            // Cấu trúc JSON có một key cấp cao nhất là tên video, ví dụ: "L25_V027"
+            // Chúng ta cần lấy đối tượng bên trong key đó.
+            videoMetadata = fullMetadata[videoName];
+            
+            if (!videoMetadata) {
+                console.error(`Không tìm thấy metadata cho key '${videoName}' trong file JSON.`);
+                return 25; // Fallback
+            }
+            
+            metadataCache.set(videoName, videoMetadata); // Cache lại phần dữ liệu của video
+        } catch (error) {
+            console.error(`Lỗi khi fetch hoặc parse metadata cho ${videoName}:`, error);
+            return 25; // Trả về giá trị mặc định khi có lỗi
+        }
     }
 
-    // 2. Nếu không có, gọi API
-    try {
-        const response = await fetch(`/api/metadata/${videoName}`);
-        if (!response.ok) {
-            console.error(`Không thể lấy metadata cho video: ${videoName}`);
-            return 25; // Trả về giá trị mặc định nếu lỗi
-        }
-        const metadata = await response.json();
-        
-        // 3. Lưu vào cache để dùng cho lần sau
-        metadataCache.set(videoName, metadata);
-        
-        // Giả sử metadata trả về có dạng { ..., "L1_12345": { "fps": 30.0, ... } }
-        // Chúng ta cần tìm fps từ một frame bất kỳ bên trong.
-        const firstFrameKey = Object.keys(metadata)[0];
-        if (firstFrameKey && metadata[firstFrameKey] && metadata[firstFrameKey].fps) {
-             const fps = metadata[firstFrameKey].fps;
-             // Lưu lại fps chính xác cho lần sau
-             metadataCache.set(videoName, { fps: fps });
-             return fps;
-        }
-        
-        // Nếu cấu trúc khác, bạn cần điều chỉnh cho phù hợp.
-        // Ví dụ nếu metadata có key fps ở cấp cao nhất: return metadata.fps || 25;
+    // 3. Tìm frame tương ứng trong metadata đã có
+    // Ta cần tìm key của frame (ví dụ "frame_001") dựa trên frame_id_ori (ví dụ 10)
+    const frameKey = Object.keys(videoMetadata).find(key => 
+        videoMetadata[key] && videoMetadata[key].id === frame_id_ori
+    );
 
-        return 25; // Fallback
-
-    } catch (error) {
-        console.error(`Lỗi khi fetch metadata cho ${videoName}:`, error);
-        return 25; // Trả về giá trị mặc định khi có lỗi mạng
+    if (frameKey && videoMetadata[frameKey] && videoMetadata[frameKey].fps) {
+        return videoMetadata[frameKey].fps;
+    } else {
+        console.warn(`Không tìm thấy FPS cho frame có id_ori=${frame_id_ori} trong video ${videoName}. Sử dụng giá trị đầu tiên.`);
+        // Fallback an toàn: nếu không tìm thấy frame, thử lấy fps của frame đầu tiên
+        const firstFrameKey = Object.keys(videoMetadata)[0];
+        if (firstFrameKey && videoMetadata[firstFrameKey] && videoMetadata[firstFrameKey].fps) {
+            return videoMetadata[firstFrameKey].fps;
+        }
+        return 25; // Fallback cuối cùng
     }
 }
 
