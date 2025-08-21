@@ -993,13 +993,13 @@ button:focus, input:focus, textarea:focus {
     position: absolute;
     /* top: 3vh;
     right: 1vh; */
-    background: white;
+    background: rgb(0, 0, 0);
     color: black;
     border: none;
     border-radius: 50%;
-    width: 40px;
-    height: 40px;
-    font-size: 22px;
+    width: 1px;
+    height: 1px;
+    font-size: 1px;
     font-weight: bold;
     cursor: pointer;
     display: flex;
@@ -1011,7 +1011,7 @@ button:focus, input:focus, textarea:focus {
     transition: var(--transition-smooth);
 }
 .close-btn:hover {
-    background: #f8f8f8;
+    background: #000000;
     transform: scale(1.1);
 }
 .modal-content {
@@ -1972,4 +1972,134 @@ button:focus, input:focus, textarea:focus {
     font-family: 'Courier New', Courier, monospace;
     margin-left: 8px;
     color: #0056b3;
+}
+
+.queue-frame-item.from-video {
+    border: 3px solid #E53935 !important; /* A bright, noticeable red */
+    /* box-shadow: 0 0 10px rgba(229, 57, 53, 0.8); */
+}
+
+.queue-frame-item.from-video .queue-frame-image-container::after {
+    content: "LIVE";
+    position: absolute;
+    bottom: 4px;
+    left: 4px;
+    background-color: #E53935;
+    color: white;
+    padding: 1px 4px;
+    border-radius: 3px;
+    font-size: 9px;
+    font-weight: bold;
+    pointer-events: none;
+}
+
+.video-modal .modal-content {
+    background-color: #2a2a2e; /* Nền tối hơn */
+    border-radius: 12px;
+    border: 1px solid #444;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    width: 80%;
+    max-width: 1200px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+}
+
+.video-modal .video-container {
+    width: 100%;
+    background-color: #000;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.video-modal .video-player {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* Hide native controls */
+.video-player::-webkit-media-controls {
+    display:none !important;
+}
+.video-player::-webkit-media-controls-enclosure {
+    display:none !important;
+}
+.video-player::-webkit-media-controls-panel {
+    display:none !important;
+}
+
+/* Custom Controls Container */
+.video-custom-controls {
+    margin-top: 15px;
+    padding: 10px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 8px;
+}
+
+.controls-bottom-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 8px;
+}
+
+.controls-left, .controls-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.control-btn {
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    font-size: 18px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.control-btn:hover {
+    color: #4CAF50; /* Green accent */
+}
+
+.time-display {
+    color: #ccc;
+    font-size: 14px;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+/* Custom Seek Slider */
+.video-seek-slider {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 8px;
+    background: #444;
+    outline: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: height 0.2s;
+}
+
+.video-seek-slider:hover {
+    height: 10px; /* Make it slightly bigger on hover */
+}
+
+.video-seek-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    background: #4CAF50;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.video-seek-slider::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    background: #4CAF50;
+    border-radius: 50%;
+    cursor: pointer;
 }
