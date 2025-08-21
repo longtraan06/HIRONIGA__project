@@ -26,6 +26,8 @@ from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
 import aioredis
 import asyncio
+import pickle
+import base64
 
 
 VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
@@ -696,8 +698,58 @@ async def get_video_info(video_id: str):
         print(f"Error processing directory {video_id}: {e}")
         raise HTTPException(status_code=500, detail="Error on server")
 
-import pickle
-import base64
+@lru_cache(maxsize=128)
+def _load_and_sort_metadata(video_id: str):
+    """Hàm helper để đọc, chuyển đổi và sắp xếp metadata cho một video."""
+    metadata_path = f"{keysframe_path_root}/{video_id}/metadata.json"
+    if not os.path.exists(metadata_path):
+        return None
+
+    with open(metadata_path, 'r') as f:
+        metadata_file_content = json.load(f)
+    
+    # Metadata có thể nằm trong một key trùng tên với video_id
+    video_metadata = metadata_file_content.get(video_id, metadata_file_content)
+
+    # Chuyển đổi từ dict của dicts sang list của dicts và thêm 'filename'
+    frames_list = []
+    for frame_key, frame_data in video_metadata.items():
+        # Đảm bảo frame_data là một dict và có 'id'
+        if isinstance(frame_data, dict) and 'id' in frame_data:
+            frame_data['filename'] = f"{frame_key}.webp"
+            frame_data['frame_id_ori'] = frame_data['id']
+            frames_list.append(frame_data)
+
+    # Sắp xếp danh sách dựa trên frame ID gốc
+    frames_list.sort(key=lambda x: x['frame_id_ori'])
+    return frames_list
+
+@app.get("/api/keyframes/neighbors/{video_id}/{frame_id_ori}")
+async def get_neighboring_keyframes(video_id: str, frame_id_ori: int, range: int = 20):
+    """
+    Lấy các keyframe lân cận của một frame cụ thể.
+    `range` là số lượng frame lấy về phía trước và phía sau.
+    """
+    sorted_frames = _load_and_sort_metadata(video_id)
+    if sorted_frames is None:
+        raise HTTPException(status_code=404, detail=f"Metadata for video {video_id} not found.")
+
+    # Tìm index của frame được yêu cầu trong danh sách đã sắp xếp
+    try:
+        target_index = next(i for i, frame in enumerate(sorted_frames) if frame['frame_id_ori'] == frame_id_ori)
+    except StopIteration:
+        raise HTTPException(status_code=404, detail=f"Frame ID {frame_id_ori} not found in video {video_id}.")
+
+    # Tính toán khoảng bắt đầu và kết thúc để cắt danh sách
+    start_index = max(0, target_index - range)
+    end_index = min(len(sorted_frames), target_index + range + 1)
+    
+    # Cắt và trả về danh sách các frame lân cận
+    neighboring_frames = sorted_frames[start_index:end_index]
+    
+    return neighboring_frames
+
+
 
 @app.post("/api/search/temporal/start")
 async def temporal_search_start(req: TemporalStartRequest):
