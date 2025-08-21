@@ -11,6 +11,19 @@
 <body>
     <header class="header">
         <div class="header-content">
+
+            <div id="keyframePreviewBar" class="keyframe-preview-bar">
+                <div class="preview-content">
+                    <div id="previewThumbnails" class="preview-thumbnails">
+                        <!-- Thumbnails sẽ được thêm vào đây bằng JavaScript -->
+                    </div>
+                    <div id="previewPlaceholder" class="preview-placeholder">
+                        Click vào một frame để xem các keyframe lân cận
+                    </div>
+                </div>
+                <button id="closePreviewBarBtn" class="close-preview-btn" title="Đóng thanh preview">&times;</button>
+            </div>
+
             <div class="header-buttons">
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
