@@ -64,7 +64,7 @@ milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths,
-                        mode = 'AIC'
+                        mode = 'ACM'
                     )
 
 # clear cache method
@@ -877,7 +877,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         
         frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
         frame_identifier = f"{video_name}_{frame_id_ori}"
-
+        fps_value = metadata.get("fps", 1)
         processed_list.append({
             "frame_id_ori": frame_id_ori,  # Thêm frame_id_ori
             "id": frame_id,
@@ -887,7 +887,8 @@ def process_milvus_results_for_frontend(results: list) -> list:
             "timestamp": metadata.get("timestamp", "00:00.000"),
             "score": res.get("score", res.get("sim_score", 0)),
             "temporal_score": res.get("temporal_score", 0),
-            "frameIdentifier": frame_identifier
+            "frameIdentifier": frame_identifier,
+            "fps": fps_value
         })
     return processed_list
 
