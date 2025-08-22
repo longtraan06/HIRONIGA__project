@@ -362,27 +362,58 @@ document.addEventListener('DOMContentLoaded', function() {
             const activeElement = document.activeElement;
             const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
-            if (e.key === 'Enter' && !isTyping && frameSelectionManager.getSelectionCount() > 0) {
+
+
+
+            //submit form
+
+
+
+
+
+
+            // if (e.key === 'Enter' && !isTyping && frameSelectionManager.getSelectionCount() > 0) {
     
-                // Ngăn chặn các hành vi mặc định khác của phím Enter
-                e.preventDefault();
+            //     // Ngăn chặn các hành vi mặc định khác của phím Enter
+            //     e.preventDefault();
 
-                // Lấy thông tin các frame đã chọn
-                const selectedFrames = frameSelectionManager.getAllSelectedFrames();
+            //     // Lấy thông tin các frame đã chọn
+            //     const selectedFrames = frameSelectionManager.getAllSelectedFrames();
                 
-                // *** THAY ĐỔI QUAN TRỌNG: Chỉ lấy 'frameIdentifier' từ mỗi frame ***
-                const allFrameIdentifiers = selectedFrames.map(frame => frame.data.frameIdentifier);
+            //     // *** THAY ĐỔI QUAN TRỌNG: Chỉ lấy 'frameIdentifier' từ mỗi frame ***
+            //     const allFrameIdentifiers = selectedFrames.map(frame => frame.data.frameIdentifier);
 
-                let answerData;
-                answerData = allFrameIdentifiers;
+            //     let answerData;
+            //     answerData = allFrameIdentifiers;
 
-                // Mở modal mới và truyền dữ liệu đã được đơn giản hóa vào
-                openFrameVqaModal(answerData);
+            //     // Mở modal mới và truyền dữ liệu đã được đơn giản hóa vào
+            //     openFrameVqaModal(answerData);
 
-                // Bỏ chọn tất cả các frame sau khi mở modal
-                frameSelectionManager.clearAllSelections();
-                return; // Dừng lại để không chạy các logic khác của phím Enter
-            }
+            //     // Bỏ chọn tất cả các frame sau khi mở modal
+            //     frameSelectionManager.clearAllSelections();
+            //     return; // Dừng lại để không chạy các logic khác của phím Enter
+            // }
+
+
+
+
+
+
+
+
+            
+
+
+
+
+
+
+
+
+
+
+
+
 
                 const selectedCountInQueue = selectedQueueFrameIds.size;
                 if (selectedCountInQueue > 0 && !isTyping) {
@@ -2379,7 +2410,7 @@ async function openImageModal(clickedFrameData) {
 
     try {
         const [metadataResponse, videoInfoResponse] = await Promise.all([
-            fetch(`/api/metadata/${videoId}`),
+            fetch(`/api/metadata/${videoId}?t=${Date.now()}`),
             videoInfo ? Promise.resolve(null) : fetch(`/api/video_info/${videoId}`)
         ]);
 
@@ -2413,23 +2444,30 @@ async function openImageModal(clickedFrameData) {
 
     // --- BƯỚC 3: CHUẨN BỊ VÀ SẮP XẾP DỮ LIỆU FRAME ---
     const metadataForVideo = videoMetadata[videoId] || videoMetadata;
-    const sortedFrames = frame_filenames.map(filename => {
-        const frameKey = filename.split('.')[0];
-        const metadata = metadataForVideo[frameKey];
-        if (!metadata) return null;
-        
-        return {
-            ...metadata,
-            filename: filename,
-            frameNum: parseInt(filename.split('_')[1].split('.')[0]),
-            frame_id_ori: metadata.id,
-            timestamp: metadata['time-stamp'] || metadata.timestamp // Đảm bảo luôn lấy được timestamp
-        };
-    }).filter(Boolean).sort((a, b) => a.frame_id_ori - b.frame_id_ori);
+    console.log("metadata_video:", metadataForVideo);
+
+    // Tạo mảng từ metadataForVideo (object -> array)
+    const sortedFrames = Object.entries(metadataForVideo)
+        .map(([frameKey, metadata]) => {
+            // frameKey ví dụ: "frame_001"
+            const filename = `${frameKey}.webp`;  // hoặc giữ nguyên nếu tên file khác
+            const frameNum = parseInt(frameKey.split('_')[1], 10);
+
+            return {
+                ...metadata,
+                filename,
+                frameNum,
+                frame_id_ori: metadata.id,
+                timestamp: metadata['time-stamp'] || metadata.timestamp
+            };
+        })
+        .filter(Boolean) // loại bỏ null/undefined nếu có
+        .sort((a, b) => a.frame_id_ori - b.frame_id_ori); // sort theo id gốc
 
     // --- BƯỚC 4: TÌM FRAME MỤC TIÊU BẰNG ID GỐC ---
     const currentIndexInList = sortedFrames.findIndex(frame => frame.frame_id_ori === targetFrameIdOri);
-
+    
+    console.log("index list", sortedFrames);
     if (currentIndexInList === -1) {
         console.error("Frame được click không tìm thấy trong danh sách đã xử lý.", { targetFrameIdOri, videoId });
         showToastNotification("Lỗi: Không tìm thấy frame trong metadata.", "error");
@@ -2568,7 +2606,7 @@ function openVideoModal(videoName, timestamp) {
     const closeBtn = document.getElementById('closeVideoModalBtn');
     const captureCanvas = document.getElementById('frameCaptureCanvas');
 
-    // Lấy các phần tử điều khiển mới (sẽ không còn lỗi null sau khi cập nhật HTML)
+    // Lấy các phần tử điều khiển (sẽ không còn lỗi null sau khi cập nhật HTML)
     const playPauseBtn = document.getElementById('playPauseBtn');
     const playIcon = playPauseBtn.querySelector('i');
     const seekBackwardBtn = document.getElementById('seekBackwardBtn');
@@ -2576,12 +2614,17 @@ function openVideoModal(videoName, timestamp) {
     const seekSlider = document.getElementById('videoSeekSlider');
     const currentTimeDisplay = document.getElementById('currentTimeDisplay');
     const durationDisplay = document.getElementById('durationDisplay');
+    
+    // Lấy các phần tử âm thanh
+    const muteBtn = document.getElementById('muteBtn');
+    const volumeIcon = muteBtn.querySelector('i');
+    const volumeSlider = document.getElementById('volumeSlider');
 
-    // Cấu hình
-    const SKIP_TIME = 0.5; // Tua 5 giây
+    // Cấu hình (sử dụng SKIP_TIME = 0.5 của bạn)
+    const SKIP_TIME = 0.5;
     const FAST_FORWARD_RATE = 2.5;
 
-    let isSeeking = false; // Cờ để ngăn slider cập nhật khi người dùng đang kéo
+    let isSeeking = false;
     let rewindInterval = null;
 
     if (!videoName || !timestamp) {
@@ -2597,6 +2640,7 @@ function openVideoModal(videoName, timestamp) {
     };
 
     const togglePlayPause = () => player.paused ? player.play() : player.pause();
+    
     const updatePlayButton = () => {
         playIcon.classList.toggle('fa-play', player.paused);
         playIcon.classList.toggle('fa-pause', !player.paused);
@@ -2606,6 +2650,28 @@ function openVideoModal(videoName, timestamp) {
         if (!isSeeking && player.duration) {
             seekSlider.value = player.currentTime;
             currentTimeDisplay.textContent = formatTime(player.currentTime);
+        }
+    };
+
+    // --- LOGIC ÂM THANH ---
+    const toggleMute = () => {
+        player.muted = !player.muted;
+    };
+
+    const updateVolumeUI = () => {
+        if (player.muted || player.volume === 0) {
+            volumeIcon.className = 'fas fa-volume-xmark';
+            volumeSlider.value = 0;
+        } else {
+            volumeIcon.className = 'fas fa-volume-up';
+            volumeSlider.value = player.volume;
+        }
+    };
+
+    const handleVolumeChange = () => {
+        player.volume = volumeSlider.value;
+        if (player.volume > 0) {
+            player.muted = false;
         }
     };
 
@@ -2619,28 +2685,29 @@ function openVideoModal(videoName, timestamp) {
         if (isFinite(startTime) && startTime < player.duration) {
             player.currentTime = startTime;
         }
+        updateVolumeUI(); // Cập nhật UI âm thanh ban đầu
         player.play().catch(e => console.error("Lỗi tự động phát video:", e));
     };
-
-    // LOGIC TUA VIDEO ĐÃ ĐƯỢC CẢI TIẾN
+    
     const handleKeyDown = (e) => {
         if (e.key === 'Escape') { closeModal(); return; }
         if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
 
         const activeElement = document.activeElement;
         if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
+        
+        const key = e.key.toLowerCase();
 
-        switch (e.key) {
+        switch (key) {
             case ' ': e.preventDefault(); togglePlayPause(); break;
-            case 'ArrowRight':
+            case 'm': e.preventDefault(); toggleMute(); break;
+            case 'arrowright':
                 e.preventDefault();
-                if (e.repeat) { // Nhấn giữ
-                    player.playbackRate = FAST_FORWARD_RATE;
-                }
+                if (e.repeat) { player.playbackRate = FAST_FORWARD_RATE; }
                 break;
-            case 'ArrowLeft':
+            case 'arrowleft':
                 e.preventDefault();
-                if (e.repeat && !rewindInterval) { // Nhấn giữ
+                if (e.repeat && !rewindInterval) {
                     rewindInterval = setInterval(() => {
                         player.currentTime = Math.max(0, player.currentTime - 0.2);
                     }, 100);
@@ -2653,24 +2720,24 @@ function openVideoModal(videoName, timestamp) {
         switch (e.key) {
             case 'ArrowRight':
                 e.preventDefault();
-                if (!e.repeat) { // Chỉ tua 1 lần khi nhả phím (nếu không phải là đang tua nhanh)
-                    if (player.playbackRate === 1.0) player.currentTime += SKIP_TIME;
+                if (!e.repeat && player.playbackRate === 1.0) {
+                    player.currentTime += SKIP_TIME;
                 }
-                player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường
+                player.playbackRate = 1.0;
                 break;
             case 'ArrowLeft':
                 e.preventDefault();
                 if (rewindInterval) {
                     clearInterval(rewindInterval);
                     rewindInterval = null;
-                } else { // Tua 1 lần
+                } else {
                     player.currentTime -= SKIP_TIME;
                 }
                 break;
         }
     };
 
-    const captureFrameAndAddToQueue = async () => {
+    const captureFrameAndAddToQueue = async () => { /* Giữ nguyên hàm này */
         player.pause();
         try {
             const currentTime = player.currentTime;
@@ -2702,8 +2769,7 @@ function openVideoModal(videoName, timestamp) {
             player.play();
         }
     };
-
-    // --- HÀM ĐÓNG VÀ DỌN DẸP ---
+    
     const closeModal = () => {
         player.pause();
         document.removeEventListener('keydown', handleKeyDown);
@@ -2719,15 +2785,20 @@ function openVideoModal(videoName, timestamp) {
     player.addEventListener('timeupdate', updateSlider);
     player.addEventListener('play', updatePlayButton);
     player.addEventListener('pause', updatePlayButton);
+    player.addEventListener('volumechange', updateVolumeUI);
 
     playPauseBtn.onclick = togglePlayPause;
     seekBackwardBtn.onclick = () => player.currentTime -= SKIP_TIME;
     seekForwardBtn.onclick = () => player.currentTime += SKIP_TIME;
-    seekSlider.onmousedown = () => isSeeking = true;
-    seekSlider.onmouseup = () => isSeeking = false;
-    seekSlider.oninput = () => player.currentTime = seekSlider.value;
     
-    modal.querySelector('.modal-overlay').onclick = closeModal;
+    seekSlider.addEventListener('input', () => player.currentTime = seekSlider.value);
+    seekSlider.addEventListener('mousedown', () => isSeeking = true);
+    seekSlider.addEventListener('mouseup', () => isSeeking = false);
+    
+    muteBtn.onclick = toggleMute;
+    volumeSlider.addEventListener('input', handleVolumeChange);
+    
+    // modal.querySelector('.modal-overlay').onclick = closeModal;
     closeBtn.onclick = closeModal;
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keyup', handleKeyUp);
@@ -3659,7 +3730,7 @@ async function showKeyframePreview(frameData) {
         
         if (highlightedThumb) {
             highlightedThumb.classList.add('highlighted');
-            highlightedThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            highlightedThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
         }
 
     } catch (error) {
