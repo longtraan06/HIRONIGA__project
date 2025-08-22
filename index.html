@@ -159,7 +159,10 @@
                         </div>
                     </div>
                     <div class="controls-right">
-                        <!-- Thêm điều khiển âm lượng nếu muốn trong tương lai -->
+                       <button id="muteBtn" class="control-btn" title="Mute/Unmute (M)">
+                            <i class="fas fa-volume-xmark"></i> <!-- Bắt đầu với icon tắt tiếng -->
+                        </button>
+                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1">
                     </div>
                 </div>
             </div>
