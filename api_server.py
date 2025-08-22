@@ -37,14 +37,13 @@ app = FastAPI()
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
+keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/AIC25_Data/output2"
 video_path_root = "/workspace/Datasets/HCMAI25/batch1/video"
 
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
 # keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
 # video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
-
 """
 Available models:
 "google/siglip2-large-patch16-512"
@@ -56,9 +55,9 @@ Available models:
 model_paths=[
     # "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
-    "google/siglip2-so400m-patch16-512",
+    # "google/siglip2-so400m-patch16-512",
     # "google/siglip2-so400m-patch16-naflex",
-    "google/siglip2-giant-opt-patch16-384",
+    # "google/siglip2-giant-opt-patch16-384",
     # "google/siglip2-so400m-patch16-384"
 ]
 
@@ -66,7 +65,7 @@ milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths,
-                        mode = 'ACM'
+                        mode = 'AIC'
                     )
 
 # clear cache method
@@ -664,10 +663,10 @@ async def get_frame_metadata(video_id: str):
     return FileResponse(
         metadata_path,
         media_type="application/json",
-        headers={
-            # Bạn có thể cache file này để tăng tốc độ
-            "Cache-Control": "public, max-age=3600",
-        }
+        # headers={
+        #     # Bạn có thể cache file này để tăng tốc độ
+        #     "Cache-Control": "public, max-age=3600",
+        # }
     )
 
 @app.get("/api/video_info/{video_id}")
