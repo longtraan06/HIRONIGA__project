@@ -25,6 +25,10 @@
             </div>
 
             <div class="header-buttons">
+                <button id="toggleLayoutBtn" class="header-btn" title="Chuyển sang layout Gom nhóm (Tab)">
+                    <!-- Icon ban đầu là icon của layout Gom nhóm, vì mặc định là layout Lưới -->
+                    <i class="fas fa-list"></i>
+                </button>
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
@@ -119,12 +123,12 @@
         </main>
     </div>
     <div id="imageModal" class="image-modal" style="display: none;">
-        <div class="modal-overlay"></div>
         <div class="modal-content">
             <div id="modalFrameInfo" class="modal-frame-info"></div>
             <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
             <div class="thumbnail-strip" id="thumbnailStrip"></div>
         </div>
+        <div class="modal-overlay"></div>
     </div>
     <div id="videoModal" class="video-modal" style="display: none;">
         <div class="modal-overlay"></div>
