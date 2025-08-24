@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional
-from dynamic_temporal import MilvusManager
+from milvus_indexing import MilvusManager
 import tempfile
 import os
 import re
@@ -37,8 +37,8 @@ app = FastAPI()
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/AIC25_Data/output2"
-video_path_root = "/workspace/Datasets/HCMAI25/batch1/video"
+keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
+video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
 
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
@@ -65,7 +65,8 @@ milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths,
-                        mode = 'AIC'
+                        mode = 'ACM',
+                        # prefix='batch1'
                     )
 
 # clear cache method
@@ -343,7 +344,7 @@ def get_color_for_user(username: str) -> str:
 # Models
 class TemporalStartRequest(BaseModel):
     query: str
-    top_k: int = 2000
+    top_k: int = 1000
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
@@ -355,7 +356,7 @@ class TemporalStartRequest(BaseModel):
 class TemporalContinueRequest(BaseModel):
     query: str
     chain_id: str
-    top_k: int = 2000
+    top_k: int = 1000
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
@@ -365,7 +366,7 @@ class TemporalContinueRequest(BaseModel):
 
 class TextSearchRequest(BaseModel):
     query: str
-    top_k: int = 2000
+    top_k: int = 1000
     search_in: str = "image"
     start_temporal_chain: bool = False
     model_name: Optional[str] = None
@@ -520,7 +521,7 @@ async def search_text(req: TextSearchRequest):
         query=query_lower,
         mode="text",
         search_in=req.search_in,
-        top_k=min(req.top_k, 2000),  # Giới hạn top_k tối đa
+        top_k=min(req.top_k, 1000),  # Giới hạn top_k tối đa
         start_temporal_chain=False,
         model_name=req.model_name,
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
@@ -533,7 +534,7 @@ async def search_text(req: TextSearchRequest):
 @app.post("/api/search/image")
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
-    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
     model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
     use_tag: bool = Form(False, description="Enable tag filtering"), 
     top_k_tags: int = Form(5, description="Top K tags to use"),
@@ -551,7 +552,7 @@ async def search_image(
         query=image_bytes,
         mode="image",
         search_in="image",
-        top_k=min(top_k, 2000),  # Giới hạn top_k
+        top_k=min(top_k, 1000),  # Giới hạn top_k
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags
@@ -580,7 +581,7 @@ async def cleanup_session(user_id: str = Form(...)):
 @app.post("/api/search/temporal/start_with_image")
 async def temporal_search_start_with_image(
     file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
-    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
     model_name: Optional[str] = Form(None, description="Tên model để sử dụng"),
     user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
     query_id: str = Form(..., description="Query ID for this action") # <<< THÊM VÀO
@@ -602,7 +603,7 @@ async def temporal_search_start_with_image(
             mode="image",
             search_in="image",
             start_temporal_chain=True,
-            top_k=min(top_k, 2000),
+            top_k=min(top_k, 1000),
             model_name=model_name,
             user_id=user_id,      # <<< THÊM VÀO
             query_id=query_id     # <<< THÊM VÀO
@@ -724,29 +725,39 @@ def _load_and_sort_metadata(video_id: str):
     return frames_list
 
 @app.get("/api/keyframes/neighbors/{video_id}/{frame_id_ori}")
-async def get_neighboring_keyframes(video_id: str, frame_id_ori: int, range: int = 20):
+async def get_neighboring_keyframes(
+    video_id: str, 
+    frame_id_ori: int, 
+    look_behind: int = 50, # Mặc định cho openImageModal
+    look_ahead: int = 50   # Mặc định cho openImageModal
+):
     """
-    Lấy các keyframe lân cận của một frame cụ thể.
-    `range` là số lượng frame lấy về phía trước và phía sau.
+    Lấy các keyframe lân cận của một frame cụ thể với phạm vi tùy chỉnh.
     """
     sorted_frames = _load_and_sort_metadata(video_id)
     if sorted_frames is None:
         raise HTTPException(status_code=404, detail=f"Metadata for video {video_id} not found.")
 
-    # Tìm index của frame được yêu cầu trong danh sách đã sắp xếp
     try:
         target_index = next(i for i, frame in enumerate(sorted_frames) if frame['frame_id_ori'] == frame_id_ori)
     except StopIteration:
         raise HTTPException(status_code=404, detail=f"Frame ID {frame_id_ori} not found in video {video_id}.")
 
-    # Tính toán khoảng bắt đầu và kết thúc để cắt danh sách
-    start_index = max(0, target_index - range)
-    end_index = min(len(sorted_frames), target_index + range + 1)
+    # >>> LOGIC MỚI: Tính toán khoảng dựa trên look_behind và look_ahead <<<
+    start_index = max(0, target_index - look_behind)
+    end_index = min(len(sorted_frames), target_index + look_ahead + 1)
     
-    # Cắt và trả về danh sách các frame lân cận
     neighboring_frames = sorted_frames[start_index:end_index]
     
-    return neighboring_frames
+    # Chuẩn hóa tên thuộc tính trước khi trả về
+    normalized_frames = []
+    for frame in neighboring_frames:
+        new_frame = frame.copy()
+        if 'time-stamp' in new_frame:
+            new_frame['timestamp'] = new_frame.pop('time-stamp')
+        normalized_frames.append(new_frame)
+    
+    return normalized_frames
 
 
 
@@ -769,7 +780,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             mode="text",
             search_in="image",
             start_temporal_chain=True,
-            top_k=min(req.top_k, 2000),
+            top_k=min(req.top_k, 1000),
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
@@ -852,7 +863,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         temporal_answer = milvus.temporal_search_sequence(
             query=lower_query,
             mode="text",
-            top_k=min(req.top_k, 2000),
+            top_k=min(req.top_k, 1000),
             use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
