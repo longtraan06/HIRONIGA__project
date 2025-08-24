@@ -13,6 +13,15 @@ document.addEventListener('DOMContentLoaded', function() {
     const DEFAULT_DRES_SESSION_ID = 'W3bboltdf9YxpnDh53znaS6Ml1doZvXq'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
+    let currentLayout = 'grid';
+    // Biến cho layout Nhóm (Grouped)
+    let allGroupedData = [];
+    let displayedGroupsCount = 0;
+    const GROUPS_PER_BATCH = 5; 
+
+    // Thêm một tham chiếu đến main-content để dùng cho IntersectionObserver
+    const mainContent = document.querySelector('.main-content');
+
 
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
@@ -45,7 +54,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const shortcutsModal = document.getElementById('shortcutsModal');
     const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
     const shortcutsOverlay = shortcutsModal.querySelector('.modal-overlay');
-
+    const toggleLayoutBtn = document.getElementById('toggleLayoutBtn');
     const submitQueueContainer = document.getElementById('submitQueue');
     const submitQueueFramesContainer = document.getElementById('submitQueueFrames');
     const clearQueueBtn = document.getElementById('clearQueueBtn');
@@ -145,6 +154,10 @@ document.addEventListener('DOMContentLoaded', function() {
         textToImageBtn.addEventListener('click', function() {
             switchSearchMode('text-to-image');
         });
+
+        if (toggleLayoutBtn) {
+            toggleLayoutBtn.addEventListener('click', toggleLayout);
+        }
 
         imageToImageBtn.addEventListener('click', function() {
             switchSearchMode('image-to-image');
@@ -267,6 +280,17 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         document.addEventListener('keydown', function(e) {
+
+            if (e.key === 'Tab') {
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+
+                if (!isTyping) {
+                    e.preventDefault(); // Ngăn hành vi mặc định của Tab
+                    toggleLayout();     // Gọi hàm chuyển layout chung
+                }
+            }
+
             if (e.key === 'F4') {
                 e.preventDefault();
                 if (translateBtn) translateBtn.click();
@@ -508,7 +532,7 @@ document.addEventListener('DOMContentLoaded', function() {
                                     updateSubmitButtonStates();
 
                                     // Cuộn tới frame mới
-                                    allFrames[nextIndex].scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+                                    allFrames[nextIndex].scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
                                 }
                                 break;
                         }
@@ -696,7 +720,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 previewThumbnails.scrollLeft += event.deltaY;
             }
         });
-
+        updateLayoutButton();
         setTimeout(function() {
             // Đã mặc định là text-to-image rồi, không cần kích hoạt nữa
             
@@ -1923,7 +1947,7 @@ async function ensureDresPrerequisites() {
             console.log('Found an existing empty input. Focusing on it.');
             setTimeout(() => {
                 firstEmptyInput.focus();
-                firstEmptyInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                firstEmptyInput.scrollIntoView({ behavior: 'auto', block: 'center' });
             }, 50);
             return; // << Rất quan trọng: Kết thúc hàm tại đây
         }
@@ -1936,7 +1960,7 @@ async function ensureDresPrerequisites() {
         const newInput = createNewSearchInput();
         setTimeout(() => {
             newInput.focus();
-            newInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            newInput.scrollIntoView({ behavior: 'auto', block: 'center' });
         }, 50);
     }
     // Thêm hàm gọi API text-to-text mới
@@ -2123,60 +2147,46 @@ async function ensureDresPrerequisites() {
             throw err;
         });
     }
-
 function handleSearchResults(images, isReranked = false) {
+    // 1. Dọn dẹp trạng thái cũ
+    if (window.currentInfiniteScrollObserver) {
+        window.currentInfiniteScrollObserver.disconnect();
+    }
+    
     if (!images || images.length === 0) {
         contentArea.innerHTML = `<div class="content-placeholder"><h2>Không tìm thấy kết quả</h2><p>Vui lòng thử lại.</p></div>`;
         return;
     }
 
-    // Lưu lại tất cả ảnh và reset các biến
     allImages = images;
-    displayedImagesCount = 0;
+    frameSelectionManager.clearAllSelections();
+    contentArea.innerHTML = '';
+    isLoading = false;
     hasReachedEnd = false;
 
-    // Tạo tiêu đề nếu đây là kết quả reranked
-    let headerHtml = '';
-    if (isReranked) {
-        headerHtml = `<h3 class="reranked-results-header">T Reranked</h3>`;
-    }
-    contentArea.innerHTML = headerHtml;
-
-    // --- BẮT ĐẦU PHẦN THAY ĐỔI QUAN TRỌNG ---
-
-    // 1. Tạo container chính cho layout masonry
-    const masonryContainer = document.createElement('div');
-    masonryContainer.className = 'masonry-container';
-    masonryContainer.id = 'masonryContainer'; // Đặt ID để dễ truy xuất
-
-    // 2. Tạo ra các cột (ví dụ: 6 cột)
-    const numberOfColumns = 6;
-    for (let i = 0; i < numberOfColumns; i++) {
-        const column = document.createElement('div');
-        column.className = 'masonry-column';
-        masonryContainer.appendChild(column);
-    }
-    contentArea.appendChild(masonryContainer);
-
-    // --- KẾT THÚC PHẦN THAY ĐỔI QUAN TRỌNG ---
-
-
-    // Thêm indicator loading ở cuối
+    // 2. Tạo và thêm phần tử "loading". Nó sẽ được quản lý bởi các hàm con.
     const loadingMore = document.createElement('div');
     loadingMore.className = 'loading-more';
     loadingMore.id = 'loadingMore';
     loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
     loadingMore.style.display = 'none';
-    contentArea.appendChild(loadingMore);
+    contentArea.appendChild(loadingMore); // Thêm vào cuối cùng của contentArea đang trống
 
-    // Xóa tất cả các frame đã chọn khi hiển thị kết quả mới
-    frameSelectionManager.clearAllSelections();
+    // 3. Phân nhánh logic dựa trên layout hiện tại
+    if (currentLayout === 'grid') {
+        displayedImagesCount = 0;
+        renderGridLayout(isReranked); // Tạo cấu trúc cột rỗng, sẽ được chèn VÀO TRƯỚC "loadingMore"
+        
+        setupInfiniteScrollForGrid();
+        loadMoreImages();
 
-    // Tải batch ảnh đầu tiên
-    loadMoreImages();
-
-    // Thiết lập Intersection Observer để detect khi scroll đến cuối
-    setupInfiniteScroll();
+    } else {
+        allGroupedData = groupResultsByVideo(allImages);
+        displayedGroupsCount = 0;
+        
+        setupInfiniteScrollForGroups();
+        loadMoreGroups();
+    }
 }
 
 function resetOcrFiltering() {
@@ -2194,21 +2204,16 @@ function loadMoreImages() {
 
     isLoading = true;
     const loadingMore = document.getElementById('loadingMore');
+    
     if (loadingMore) loadingMore.style.display = 'flex';
 
-    // --- BẮT ĐẦU PHẦN THAY ĐỔI QUAN TRỌNG ---
-    
-    // Lấy tất cả các cột từ DOM
+    // Tìm các cột masonry đã tồn tại
     const columns = document.querySelectorAll('.masonry-column');
     if (columns.length === 0) {
-        // Dừng lại nếu chưa có cột nào được tạo
         isLoading = false;
         if (loadingMore) loadingMore.style.display = 'none';
         return;
     }
-    const numberOfColumns = columns.length;
-
-    // --- KẾT THÚC PHẦN THAY ĐỔI QUAN TRỌNG ---
 
     const startIndex = displayedImagesCount;
     const endIndex = Math.min(startIndex + IMAGES_PER_BATCH, allImages.length);
@@ -2223,71 +2228,9 @@ function loadMoreImages() {
     setTimeout(() => {
         for (let i = startIndex; i < endIndex; i++) {
             const image = allImages[i];
-
-            // Tạo phần tử ảnh (logic này giữ nguyên)
-            const imageItem = document.createElement('div');
-            imageItem.className = 'image-item';
-            const uniqueFrameId = image.frameIdentifier; // Sử dụng định danh duy nhất
-            imageItem.setAttribute('data-frame-id', uniqueFrameId); // Gán định danh duy nhất
-            imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
-            const scoreInfo = image.temporal_score
-                ? `T-Score: ${image.temporal_score.toFixed(4)}`
-                : `${image.score ? image.score.toFixed(4) : 'N/A'}`;
-            imageItem.innerHTML = `
-                <img src="${image.path}" alt="${scoreInfo}" loading="lazy">
-                <div class="frame-info">${image.frameIdentifier}</div>
-            `;
-            
-            // Xử lý sự kiện chuột - giữ nguyên code của bạn
-            imageItem.addEventListener('mousedown', function(event) {
-                // Chuột phải: Mở video
-                blurActiveInput(); 
-
-                if (event.button === 2) {
-                    event.preventDefault();
-                    openVideoModal(image.videoName, image.timestamp);
-                }
-                // Chuột trái: Chọn frame
-                else if (event.button === 0) {
-                    event.preventDefault();
-                    showKeyframePreview(image); 
-                    // Nếu nhấn Ctrl, cho phép chọn nhiều frame
-                    if (event.ctrlKey) {
-                            frameSelectionManager.toggleSelection(uniqueFrameId, { // Sử dụng định danh mới ở đây
-                            id: image.id,
-                            path: image.path,
-                            element: imageItem,
-                            data: image
-                        });
-                    }
-                    // Không nhấn Ctrl, chỉ chọn một frame
-                    else {
-                        frameSelectionManager.clearAllSelections();
-                        frameSelectionManager.selectFrame(uniqueFrameId, { // Và ở đây
-                            id: image.id,
-                            path: image.path,
-                            element: imageItem,
-                            data: image
-                        });
-                    }
-                }
-                // Chuột giữa: Mở modal keyframe lân cận
-                else if (event.button === 1) {
-                    event.preventDefault();
-                    openImageModal(image);
-                }
-            });
-            
-            // Ngăn menu ngữ cảnh mặc định
-            imageItem.addEventListener('contextmenu', e => e.preventDefault());
-            
-             // --- BẮT ĐẦU PHẦN THAY ĐỔI QUAN TRỌNG ---
-            
-            // Logic "chia bài": Xác định xem ảnh này sẽ vào cột nào
-            const columnIndex = i % numberOfColumns;
-            columns[columnIndex].appendChild(imageItem); // Thêm ảnh vào cột tương ứng
-            
-            // --- KẾT THÚC PHẦN THAY ĐỔI QUAN TRỌNG ---
+            const imageItem = createImageItemElement(image);
+            const columnIndex = i % columns.length;
+            columns[columnIndex].appendChild(imageItem);
         }
 
         displayedImagesCount = endIndex;
@@ -2504,7 +2447,7 @@ async function openImageModal(clickedFrameData) {
         const newCurrent = thumbnailStrip.querySelector(`[data-frame-number='${frameNum}']`);
         if (newCurrent) {
             newCurrent.classList.add('current-frame');
-            newCurrent.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+            newCurrent.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
         }
     }
 
@@ -2587,7 +2530,7 @@ async function openImageModal(clickedFrameData) {
     
     setTimeout(() => {
         const activeThumb = thumbnailStrip.querySelector('.active-frame');
-        if (activeThumb) activeThumb.scrollIntoView({ behavior: 'smooth', inline: 'center', block: 'nearest' });
+        if (activeThumb) activeThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
     }, 50);
 }
 
@@ -2621,7 +2564,7 @@ function openVideoModal(videoName, timestamp) {
     const volumeSlider = document.getElementById('volumeSlider');
 
     // Cấu hình (sử dụng SKIP_TIME = 0.5 của bạn)
-    const SKIP_TIME = 0.5;
+    const SKIP_TIME = 1;
     const FAST_FORWARD_RATE = 2.5;
 
     let isSeeking = false;
@@ -2798,7 +2741,7 @@ function openVideoModal(videoName, timestamp) {
     muteBtn.onclick = toggleMute;
     volumeSlider.addEventListener('input', handleVolumeChange);
     
-    // modal.querySelector('.modal-overlay').onclick = closeModal;
+    modal.querySelector('.modal-overlay').onclick = closeModal;
     closeBtn.onclick = closeModal;
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keyup', handleKeyUp);
@@ -2956,9 +2899,12 @@ function openVideoModal(videoName, timestamp) {
         
         // Thiết lập phím tắt
         document.addEventListener('keydown', function(e) {
+
+
+
             // Phím F: Mở modal keyframe nếu chỉ có 1 frame được chọn
             if (e.key === 'f' || e.key === 'F') {
-                e.preventDefault(); // Di chuyển preventDefault ra ngoài để áp dụng cho cả 2 trường hợp
+                // e.preventDefault(); // Di chuyển preventDefault ra ngoài để áp dụng cho cả 2 trường hợp
                 
                 if (currentlyHoveredPreviewFrameData) {
                     openImageModal(currentlyHoveredPreviewFrameData); // Truyền cả đối tượng
@@ -3459,7 +3405,7 @@ function toggleFilter(filterType) {
             const nextInput = createNewSearchInput();
             setTimeout(() => {
                 nextInput.focus();
-                nextInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                nextInput.scrollIntoView({ behavior: 'auto', block: 'center' });
             }, 100);
 
             if (!isRestoringState) {
@@ -3641,11 +3587,13 @@ async function getFpsForVideo(videoName) {
 }
 
 async function showKeyframePreview(frameData) {
+    // Bước 1: Kiểm tra dữ liệu đầu vào
     if (!frameData || !frameData.videoName || typeof frameData.frame_id_ori === 'undefined') {
         console.error("Dữ liệu frame không đủ để hiển thị preview.", frameData);
         return;
     }
 
+    // Bước 2: Hiển thị giao diện và trạng thái loading
     header.classList.add('header-expanded');
     keyframePreviewBar.classList.add('visible');
     previewThumbnails.innerHTML = '';
@@ -3653,8 +3601,12 @@ async function showKeyframePreview(frameData) {
     previewPlaceholder.style.display = 'block';
 
     try {
-        const response = await fetch(`/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}`);
-        if (!response.ok) throw new Error(`Lỗi API: ${response.statusText}`);
+        // Bước 3: Gọi API để lấy frame được click và 20 frame tiếp theo
+        const response = await fetch(`/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=0&look_ahead=20`);
+        
+        if (!response.ok) {
+            throw new Error(`Lỗi API: ${response.statusText}`);
+        }
         const neighbors = await response.json();
 
         if (neighbors.length === 0) {
@@ -3664,79 +3616,323 @@ async function showKeyframePreview(frameData) {
         
         previewPlaceholder.style.display = 'none';
         const folderUrlPath = `/frames/${frameData.videoName}`;
-        let highlightedThumb = null;
         const imageLoadPromises = [];
 
+        // Bước 4: Tạo các thumbnail, gắn dữ liệu và sự kiện
         neighbors.forEach(neighborData => {
             const thumb = document.createElement('img');
             
-            // Tạo đối tượng dữ liệu hoàn chỉnh
+            // Gắn một đối tượng dữ liệu hoàn chỉnh vào mỗi thumbnail
             const fullFrameData = {
                 ...neighborData,
                 videoName: frameData.videoName,
                 path: `${folderUrlPath}/${neighborData.filename}`,
                 frameIdentifier: `${frameData.videoName}_${neighborData.frame_id_ori}`,
-                timestamp: neighborData['time-stamp'] 
+                timestamp: neighborData.timestamp // Backend đã chuẩn hóa tên này
             };
             thumb.frameData = fullFrameData;
             
-            thumb.addEventListener('mouseenter', () => {
-                currentlyHoveredPreviewFrameData = thumb.frameData;
-            });
+            // Sự kiện để theo dõi frame mục tiêu cho phím tắt
+            thumb.addEventListener('mouseenter', () => { currentlyHoveredPreviewFrameData = thumb.frameData; });
+            thumb.addEventListener('mouseleave', () => { currentlyHoveredPreviewFrameData = null; });
 
-            thumb.addEventListener('mouseleave', () => {
-                currentlyHoveredPreviewFrameData = null;
-            });
-
-            // Sự kiện chuột phải: Mở video
+            // Sự kiện chuột phải để mở video
             thumb.addEventListener('contextmenu', (e) => {
                 e.preventDefault();
                 const data = thumb.frameData;
-                // >>> SỬA LỖI Ở ĐÂY: Truy cập đúng thuộc tính 'timestamp' đã được gán <<<
                 if (data && data.videoName && data.timestamp) {
                     openVideoModal(data.videoName, data.timestamp);
                 } else {
-                    console.error("Thiếu thông tin để mở video!", data);
-                    showToastNotification("Lỗi: Không đủ dữ liệu (timestamp/videoName) để mở video.", "error");
+                    showToastNotification("Lỗi: Không đủ dữ liệu để mở video.", "error");
                 }
             });
 
-            // Sự kiện click chuột trái
+            // Sự kiện click chuột trái cũng mở video
             thumb.addEventListener('click', () => {
                 const data = thumb.frameData;
-                // >>> SỬA LỖI Ở ĐÂY: Truy cập đúng thuộc tính 'timestamp' đã được gán <<<
                 if (data && data.videoName && data.timestamp) {
                     openVideoModal(data.videoName, data.timestamp);
                 }
             });
             
-            const loadPromise = new Promise((resolve, reject) => {
-                thumb.onload = () => resolve(thumb);
-                thumb.onerror = reject;
+            // Tạo promise để đợi ảnh tải xong
+            const loadPromise = new Promise((resolve) => {
+                thumb.onload = resolve;
+                thumb.onerror = resolve; // Vẫn resolve để Promise.all không bị lỗi
             });
             imageLoadPromises.push(loadPromise);
 
             thumb.src = thumb.frameData.path;
             thumb.title = thumb.frameData.frameIdentifier;
 
+            // Làm nổi bật frame được click (luôn là frame đầu tiên)
             if (neighborData.frame_id_ori === frameData.frame_id_ori) {
-                highlightedThumb = thumb;
+                 thumb.classList.add('highlighted');
             }
 
             previewThumbnails.appendChild(thumb);
         });
 
+        // Bước 5: Đợi tất cả ảnh tải xong để tránh hiệu ứng "pop-in"
         await Promise.all(imageLoadPromises);
         
-        if (highlightedThumb) {
-            highlightedThumb.classList.add('highlighted');
-            highlightedThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
-        }
+        // Bước 6: Hoàn tất - không cần cuộn nữa vì thanh preview sẽ tự bắt đầu từ đầu
 
     } catch (error) {
         console.error('Lỗi khi tải keyframe lân cận:', error);
         previewPlaceholder.textContent = 'Lỗi khi tải dữ liệu.';
     }
+}
+
+function groupResultsByVideo(images) {
+    if (!images || images.length === 0) {
+        return [];
+    }
+
+    // Bước 1: Nhóm các frame vào một object theo videoName
+    const groups = images.reduce((acc, image) => {
+        const videoName = image.videoName;
+        const score = image.temporal_score || image.score || 0;
+
+        if (!acc[videoName]) {
+            acc[videoName] = {
+                videoName: videoName,
+                bestScore: -1,
+                frames: []
+            };
+        }
+
+        acc[videoName].frames.push(image);
+        if (score > acc[videoName].bestScore) {
+            acc[videoName].bestScore = score;
+        }
+
+        return acc;
+    }, {});
+
+    // Bước 2: Chuyển object thành mảng và sắp xếp các nhóm dựa trên bestScore
+    const sortedGroups = Object.values(groups).sort((a, b) => b.bestScore - a.bestScore);
+
+    // Bước 3: Sắp xếp các frame bên trong mỗi nhóm theo điểm số
+    sortedGroups.forEach(group => {
+        group.frames.sort((a, b) => (b.temporal_score || b.score || 0) - (a.temporal_score || a.score || 0));
+    });
+
+    return sortedGroups;
+}
+
+function createImageItemElement(image) {
+    const imageItem = document.createElement('div');
+    imageItem.className = 'image-item';
+    const uniqueFrameId = image.frameIdentifier;
+    imageItem.setAttribute('data-frame-id', uniqueFrameId);
+    imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
+
+
+    let scoreHtml = '';
+    if (image.temporal_score > 0) {
+        scoreHtml = `<div class="score-overlay temporal">T-Score: ${image.temporal_score.toFixed(4)}</div>`;
+    } 
+    else if (image.score > 0) {
+        scoreHtml = `<div class="score-overlay">${image.score.toFixed(4)}</div>`;
+    }
+    imageItem.innerHTML = `
+        <img src="${image.path}" alt="${uniqueFrameId}" loading="lazy">
+        ${scoreHtml}
+        <div class="frame-info">${image.frameIdentifier}</div>
+    `;
+
+    imageItem.addEventListener('mousedown', function(event) {
+        blurActiveInput();
+        if (event.button === 2) { // Chuột phải
+            event.preventDefault();
+            openVideoModal(image.videoName, image.timestamp);
+        } else if (event.button === 0) { // Chuột trái
+            event.preventDefault();
+            showKeyframePreview(image);
+            if (event.ctrlKey) {
+                frameSelectionManager.toggleSelection(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
+            } else {
+                frameSelectionManager.clearAllSelections();
+                frameSelectionManager.selectFrame(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
+            }
+        } else if (event.button === 1) { // Chuột giữa
+            event.preventDefault();
+            openImageModal(image);
+        }
+    });
+
+    imageItem.addEventListener('contextmenu', e => e.preventDefault());
+    return imageItem;
+}
+
+function renderGridLayout(isReranked = false) {
+    const loadingMore = document.getElementById('loadingMore');
+    let headerHtml = isReranked ? `<h3 class="reranked-results-header">T Reranked</h3>` : '';
+    
+    // Tạo container và các cột
+    const masonryContainer = document.createElement('div');
+    masonryContainer.className = 'masonry-container';
+    const numberOfColumns = 6;
+    for (let i = 0; i < numberOfColumns; i++) {
+        const column = document.createElement('div');
+        column.className = 'masonry-column';
+        masonryContainer.appendChild(column);
+    }
+    
+    // Chèn header và container VÀO TRƯỚC phần tử "loading"
+    if (loadingMore) {
+        if (headerHtml) {
+            // Tạm thời tạo một div để chứa chuỗi HTML
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = headerHtml;
+            contentArea.insertBefore(tempDiv.firstChild, loadingMore);
+        }
+        contentArea.insertBefore(masonryContainer, loadingMore);
+    } else {
+        // Fallback nếu không tìm thấy loadingMore
+        if (headerHtml) contentArea.innerHTML = headerHtml;
+        contentArea.appendChild(masonryContainer);
+    }
+}
+
+function loadMoreGroups() {
+    if (isLoading || hasReachedEnd) return;
+
+    isLoading = true;
+    const loadingMore = document.getElementById('loadingMore');
+    if (loadingMore) loadingMore.style.display = 'flex';
+
+    const startIndex = displayedGroupsCount;
+    const endIndex = Math.min(startIndex + GROUPS_PER_BATCH, allGroupedData.length);
+
+    if (startIndex >= allGroupedData.length) {
+        hasReachedEnd = true;
+        isLoading = false;
+        if (loadingMore) loadingMore.style.display = 'none';
+        return;
+    }
+
+    setTimeout(() => {
+        for (let i = startIndex; i < endIndex; i++) {
+            const group = allGroupedData[i];
+            
+            // (Code tạo groupRow vẫn giữ nguyên...)
+            const groupRow = document.createElement('div');
+            groupRow.className = 'video-group-row';
+            const title = document.createElement('h4');
+            title.className = 'video-group-title';
+            title.innerHTML = `<i class="fas fa-video"></i> ${group.videoName} <span>(${group.frames.length} frames)</span>`;
+            groupRow.appendChild(title);
+            const frameStrip = document.createElement('div');
+            frameStrip.className = 'frame-strip';
+            group.frames.forEach(image => {
+                frameStrip.appendChild(createImageItemElement(image));
+            });
+            groupRow.appendChild(frameStrip);
+
+            // === THAY ĐỔI QUAN TRỌNG NHẤT LÀ ĐÂY ===
+            // Chèn hàng video mới VÀO TRƯỚC phần tử "loading"
+            if (loadingMore) {
+                contentArea.insertBefore(groupRow, loadingMore);
+            } else {
+                contentArea.appendChild(groupRow); // Fallback
+            }
+        }
+
+        displayedGroupsCount = endIndex;
+
+        if (displayedGroupsCount >= allGroupedData.length) {
+            hasReachedEnd = true;
+            if (loadingMore) loadingMore.style.display = 'none';
+        }
+
+        isLoading = false;
+    }, 100);
+}
+
+function updateLayoutButton() {
+    if (!toggleLayoutBtn) return;
+
+    if (currentLayout === 'grid') {
+        // Nếu đang ở layout Lưới, nút sẽ hiển thị icon để chuyển sang layout Gom nhóm
+        toggleLayoutBtn.innerHTML = '<i class="fas fa-list"></i>';
+        toggleLayoutBtn.title = 'Chuyển sang layout Gom nhóm (Tab)';
+    } else {
+        // Nếu đang ở layout Gom nhóm, nút sẽ hiển thị icon để chuyển sang layout Lưới
+        toggleLayoutBtn.innerHTML = '<i class="fas fa-th"></i>';
+        toggleLayoutBtn.title = 'Chuyển sang layout Lưới (Tab)';
+    }
+}
+
+
+function toggleLayout() {
+    // Chuyển đổi trạng thái
+    currentLayout = currentLayout === 'grid' ? 'grouped' : 'grid';
+
+    // Cập nhật giao diện nút
+    updateLayoutButton();
+
+    // Hiển thị thông báo
+    const layoutName = currentLayout === 'grid' ? 'Lưới (Grid)' : 'Gom theo Video (Grouped)';
+    showToastNotification(`Đã chuyển sang layout: ${layoutName}`, 'success', 1500);
+
+    // Render lại kết quả với layout mới, nếu có dữ liệu
+    if (allImages && allImages.length > 0) {
+        handleSearchResults(allImages, false); // isReranked là false vì chỉ render lại
+    }
+}
+
+function setupInfiniteScrollForGrid() {
+    if (window.currentInfiniteScrollObserver) {
+        window.currentInfiniteScrollObserver.disconnect();
+    }
+
+    let loadingMore = document.getElementById('loadingMore');
+    if (!loadingMore) return;
+    
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
+                loadMoreImages(); // Gọi hàm tải ảnh
+            }
+        });
+    }, {
+        root: mainContent,
+        rootMargin: '0px 0px 300px 0px',
+        threshold: 0.1
+    });
+    
+    observer.observe(loadingMore);
+    window.currentInfiniteScrollObserver = observer;
+}
+
+function setupInfiniteScrollForGroups() {
+    // Ngắt kết nối observer cũ nếu có để tránh lỗi
+    if (window.currentInfiniteScrollObserver) {
+        window.currentInfiniteScrollObserver.disconnect();
+    }
+
+    let loadingMore = document.getElementById('loadingMore');
+    if (!loadingMore) {
+        console.error("Phần tử #loadingMore không tồn tại!");
+        return;
+    }
+    
+    const observer = new IntersectionObserver((entries) => {
+        entries.forEach(entry => {
+            if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
+                loadMoreGroups(); // Gọi hàm tải nhóm mới
+            }
+        });
+    }, {
+        root: mainContent, // Quan sát bên trong vùng main-content
+        rootMargin: '0px 0px 300px 0px', // Trigger trước khi đến cuối 300px
+        threshold: 0.1
+    });
+    
+    observer.observe(loadingMore);
+    window.currentInfiniteScrollObserver = observer; // Lưu lại để có thể ngắt kết nối
 }
 
 });
