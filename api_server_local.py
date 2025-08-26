@@ -24,41 +24,45 @@ import secrets
 from fastapi import WebSocket, WebSocketDisconnect 
 from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
-
-app = FastAPI()
+import aioredis
+import asyncio
+import pickle
+import base64
+from fastapi.middleware.cors import CORSMiddleware
 
 VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
 
-origins = [
-    "*",  # Cho phép tất cả các nguồn (dễ cho dev, nhưng nên thu hẹp trong production)
-    "null", # Cần thiết cho các trang được mở từ file (origin là "null")
-    "http://127.0.0.1:5500",  
-    "http://localhost", # Cho phép từ server local
-    "http://127.0.0.1",
-    "http://localhost:5500",        # Cho phép Live Server trên localhost
-    "http://localhost:8000" 
-]
+app = FastAPI()
+# Kết nối Redis
+
+# origins = [
+#     "http://localhost",
+#     "http://localhost:8080",
+#     "http://127.0.0.1",
+#     "http://127.0.0.1:8080",
+#     "http://192.168.0.53",       # IP local của bạn
+#     "http://192.168.0.53:8080",  # IP local của bạn với cổng
+# ]
+
+allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"], # Cho phép tất cả các phương thức (GET, POST, etc.)
-    allow_headers=["*"], # Cho phép tất cả các header
-)
-
-# Kết nối Redis
+    allow_origin_regex=allowed_origin_regex,
+    allow_credentials=True, # Cần thiết cho một số kịch bản
+    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, etc.)
+    allow_headers=["*"],    # Cho phép tất cả các header
+)   
 
 # #aic
-# redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
-# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/final"
-# video_path_root = "/workspace/Datasets/HCMAI24/updated/videos/all"
-
+redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
+video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
+hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
 #acm
-redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
-keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
-
+# redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
+# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
+# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 """
 Available models:
 "google/siglip2-large-patch16-512"
@@ -70,7 +74,7 @@ Available models:
 model_paths=[
     # "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
-    "google/siglip2-so400m-patch16-512",
+    # "google/siglip2-so400m-patch16-512",
     # "google/siglip2-so400m-patch16-naflex",
     # "google/siglip2-giant-opt-patch16-384",
     # "google/siglip2-so400m-patch16-384"
@@ -80,7 +84,8 @@ milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths,
-                        mode = 'ACM',  # Chọn chế độ ACM
+                        mode = 'ACM',
+                        # prefix='batch1'
                     )
 
 # clear cache method
@@ -112,6 +117,24 @@ def get_keys_by_pattern(pattern):
            cursor, partial_keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
            keys.extend(partial_keys)
        return keys
+
+
+@app.get("/videos_hls/{video_name}/playlist.m3u8", tags=["HLS"])
+async def get_hls_playlist(video_name: str):
+    playlist_path = f"{hls_path}/{video_name}/playlist.m3u8"
+    if not os.path.exists(playlist_path):
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    # Media type cho M3U8 là application/vnd.apple.mpegurl
+    return FileResponse(playlist_path, media_type="application/vnd.apple.mpegurl")
+
+# Thêm route để phục vụ các file TS
+@app.get("/videos_hls/{video_name}/{segment_name}.ts", tags=["HLS"])
+async def get_hls_segment(video_name: str, segment_name: str):
+    segment_path = f"{hls_path}/{video_name}/{segment_name}.ts"
+    if not os.path.exists(segment_path):
+        raise HTTPException(status_code=404, detail="Segment not found")
+    # Media type cho TS là video/mp2t
+    return FileResponse(segment_path, media_type="video/mp2t")
 
 @app.post("/api/admin/clear-cache")
 async def clear_redis_cache(
@@ -262,122 +285,83 @@ def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
 
 # websocker system
 
-# remove user
-
-# usage
-# curl -X POST -u "admin:hlgay" \
-#      -H "Content-Type: application/json" \
-#      -d '{"username": "StuckUser"}' \
-#      http://YOUR_SERVER_IP:PORT/api/admin/remove-user
-
-
-
-class RemoveUserRequest(BaseModel):
-    username: str
-
-@app.post("/api/admin/remove-user")
-async def remove_user_from_queue(
-    req: RemoveUserRequest,
-    admin: str = Depends(verify_admin)
-):
-    """
-    Xóa một người dùng khỏi danh sách user của queue và ẩn danh
-    các frame mà họ đã thêm vào. Yêu cầu quyền admin.
-    """
-    username_to_remove = req.username
-
-    # Sử dụng pipeline để đảm bảo các thao tác trên Redis là nguyên tử
-    pipe = redis_client.pipeline()
-
-    try:
-        # 1. Kiểm tra xem user có tồn tại trong hash không
-        if not redis_client.hexists(QUEUE_USERS_KEY, username_to_remove):
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"User '{username_to_remove}' not found in the active user list."
-            )
-
-        # 2. Xóa user khỏi hash user
-        pipe.hdel(QUEUE_USERS_KEY, username_to_remove)
-
-        # 3. Lấy toàn bộ queue hiện tại để cập nhật
-        current_queue_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
-        new_queue = []
-        updated = False
-        for item_json in current_queue_json:
-            item = json.loads(item_json)
-            if item.get("added_by") == username_to_remove:
-                # Ẩn danh frame
-                item["added_by"] = "Unknown"
-                item["user_color"] = "#888888" # Màu xám
-                new_queue.append(json.dumps(item))
-                updated = True
-            else:
-                new_queue.append(item_json)
-
-        # 4. Nếu có sự thay đổi, xóa list cũ và push list mới vào
-        if updated:
-            pipe.delete(QUEUE_STATE_KEY)
-            if new_queue:
-                pipe.rpush(QUEUE_STATE_KEY, *new_queue)
-        
-        # 5. Thực thi tất cả các lệnh trong pipeline
-        pipe.execute()
-
-        # 6. Lấy trạng thái mới nhất để phát sóng cho tất cả client
-        final_queue_items_json = redis_client.lrange(QUEUE_STATE_KEY, 0, -1)
-        final_queue_items = [json.loads(item) for item in final_queue_items_json]
-        
-        final_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
-        final_users = {name.decode(): color.decode() for name, color in final_users_raw.items()}
-
-        # 7. Phát sóng trạng thái mới (init_state) cho tất cả client
-        update_message = {
-            "action": "init_state",
-            "payload": {
-                "queue": final_queue_items,
-                "users": final_users
-            }
-        }
-        await manager.broadcast(json.dumps(update_message))
-
-        return {
-            "success": True,
-            "message": f"User '{username_to_remove}' has been removed and their frames anonymized."
-        }
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-
+REDIS_URL = "redis://192.168.20.170:6330" # Đảm bảo địa chỉ này đúng với Redis của bạn
+WEBSOCKET_CHANNEL = "submit_queue_channel"  # Tên kênh chung
 
 
 class ConnectionManager:
-    """Quản lý các kết nối WebSocket đang hoạt động."""
+    """Quản lý các kết nối WebSocket và đồng bộ qua Redis Pub/Sub."""
     def __init__(self):
         self.active_connections: Dict[str, WebSocket] = {}
+        self.redis_pubsub_client = None
+        self.listener_task = None
 
     async def connect(self, websocket: WebSocket, username: str):
-        """Chấp nhận kết nối mới."""
+        """Chấp nhận kết nối mới và khởi tạo listener nếu cần."""
         await websocket.accept()
         self.active_connections[username] = websocket
+        
+        # Chỉ khởi tạo một lần cho mỗi worker
+        if self.redis_pubsub_client is None:
+            self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+            self.listener_task = asyncio.create_task(self._pubsub_listener())
 
     def disconnect(self, username: str):
-        """Ngắt kết nối."""
+        """Ngắt kết nối của một user."""
         if username in self.active_connections:
             del self.active_connections[username]
 
-    async def broadcast(self, message: str):
-        """Gửi tin nhắn đến tất cả các kết nối đang hoạt động."""
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
+    async def _pubsub_listener(self):
+        """Lắng nghe kênh Redis một cách kiên cường và tự động kết nối lại."""
+        while True: # Vòng lặp chính để đảm bảo listener chạy mãi mãi
+            try:
+                # Kết nối lại nếu cần
+                if self.redis_pubsub_client is None:
+                    self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+
+                async with self.redis_pubsub_client.pubsub() as pubsub:
+                    await pubsub.subscribe(WEBSOCKET_CHANNEL)
+                    print(f"Worker (PID: {os.getpid()}) subscribed to '{WEBSOCKET_CHANNEL}'")
+                    
+                    # Vòng lặp lắng nghe tin nhắn
+                    while True:
+                        message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
+                        if message and message["type"] == "message":
+                            # Lặp qua một bản sao của danh sách kết nối để tránh lỗi
+                            living_connections = list(self.active_connections.values())
+                            for connection in living_connections:
+                                try:
+                                    # Gửi tin nhắn đến từng client
+                                    await connection.send_text(message["data"])
+                                except Exception as e:
+                                    # Nếu gửi lỗi (vd: client đã ngắt kết nối), chỉ in lỗi và tiếp tục
+                                    print(f"Could not send message to a client: {e}")
+
+            except (aioredis.exceptions.ConnectionError, asyncio.TimeoutError) as e:
+                # Nếu mất kết nối với Redis, in lỗi và thử kết nối lại sau 1 khoảng thời gian
+                print(f"Redis Pub/Sub connection error: {e}. Reconnecting in 5 seconds...")
+                self.redis_pubsub_client = None
+                await asyncio.sleep(5)
+            except Exception as e:
+                # Bắt các lỗi không lường trước khác, chờ và thử lại
+                print(f"An unexpected error occurred in pubsub listener: {e}. Restarting in 5 seconds...")
+                import traceback
+                traceback.print_exc()
+                self.redis_pubsub_client = None # Reset để kết nối lại
+                await asyncio.sleep(5)
+    
+    async def publish_update(self, message: str):
+        """Đăng (publish) một tin nhắn cập nhật lên kênh Redis."""
+        # Đây là client đồng bộ dùng cho các tác vụ ghi thông thường
+        sync_redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+        sync_redis.publish(WEBSOCKET_CHANNEL, message)
 
 # Khởi tạo manager
 manager = ConnectionManager()
 
 # Khóa các key trong Redis
-QUEUE_STATE_KEY = "submit_queue:frames"
+QUEUE_SORTED_SET_KEY = "submit_queue:order"  # Sorted Set để lưu thứ tự (score, frameIdentifier)
+QUEUE_DATA_HASH_KEY = "submit_queue:data"    # Hash để lưu dữ liệu chi tiết (frameIdentifier, jsonData)
 QUEUE_USERS_KEY = "submit_queue:users"
 
 def get_color_for_user(username: str) -> str:
@@ -397,25 +381,31 @@ def get_color_for_user(username: str) -> str:
 # Models
 class TemporalStartRequest(BaseModel):
     query: str
-    top_k: int = 2000
+    top_k: int = 1000
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    user_id: Optional[str] = None    # <<< THÊM VÀO
+    query_id: Optional[str] = None 
+    use_event_filter: Optional[bool] = False
 
 class TemporalContinueRequest(BaseModel):
     query: str
     chain_id: str
-    top_k: int = 2000
+    top_k: int = 1000
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    query_id: Optional[str] = None 
+    user_id: Optional[str] = None
+    use_event_filter: Optional[bool] = False
 
 class TextSearchRequest(BaseModel):
     query: str
-    top_k: int = 2000
+    top_k: int = 1000
     search_in: str = "image"
     start_temporal_chain: bool = False
     model_name: Optional[str] = None
@@ -423,7 +413,7 @@ class TextSearchRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
-
+    use_event_filter: Optional[bool] = False
 
 class VqaSubmissionRequest(BaseModel):
     id: str
@@ -432,8 +422,6 @@ class VqaSubmissionRequest(BaseModel):
 class FrameSubmissionRequest(BaseModel):
     id: str
     answer: Optional[List[str]] = None
-
-
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -567,30 +555,31 @@ def check_video(video_name: str):
 @cache_result(expire_time=60)  # Cache 1 phút
 async def search_text(req: TextSearchRequest):
     query_lower = req.query.lower()
-    lower_tag = req.tags_filter[0].lower() if req.tags_filter else None
+    lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
     lower_ocr = req.ocr.lower() if req.ocr else None
     results = milvus.search(
         query=query_lower,
         mode="text",
         search_in=req.search_in,
-        top_k=min(req.top_k, 2000),  # Giới hạn top_k tối đa
+        top_k=min(req.top_k, 1000),  # Giới hạn top_k tối đa
         start_temporal_chain=False,
         model_name=req.model_name,
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
         top_k_tags=req.top_k_tags,
         tags_filter=lower_tag,
-        ocr = lower_ocr
+        ocr = lower_ocr,
+        use_event_filter=req.use_event_filter
     )
     return process_milvus_results_for_frontend(results)
 
 @app.post("/api/search/image")
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
-    top_k: int = Form(2000, description="Số lượng kết quả trả về"),
+    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
     model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
     use_tag: bool = Form(False, description="Enable tag filtering"), 
     top_k_tags: int = Form(5, description="Top K tags to use"),
-    # tags_filter: Optional[List[str]] = None
+    use_event_filter: bool = Form(False, description="Enable event filtering") 
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -604,14 +593,99 @@ async def search_image(
         query=image_bytes,
         mode="image",
         search_in="image",
-        top_k=min(top_k, 2000),  # Giới hạn top_k
+        top_k=min(top_k, 1000),  # Giới hạn top_k
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
-        top_k_tags=top_k_tags
-        # tags_filter=tags_filter
+        top_k_tags=top_k_tags,
+        use_event_filter=use_event_filter
     )
     
     return process_milvus_results_for_frontend(results)
+
+
+@app.post("/api/session/cleanup")
+async def cleanup_session(user_id: str = Form(...)):
+    """
+    Endpoint to clear a user's temporal chain state.
+    Designed to be called with navigator.sendBeacon().
+    """
+    try:
+        if user_id:
+            print(f"Cleaning up temporal session for user: {user_id}")
+            milvus.clear_temporal_chain(user_id=user_id)
+        return {"success": True, "message": f"Session for {user_id} cleared."}
+    except Exception as e:
+        # Even if it fails, return success to not block the browser unloading.
+        print(f"ERROR during session cleanup for {user_id}: {e}")
+        return {"success": False, "error": str(e)}
+
+@app.post("/api/search/temporal/start_with_image")
+async def temporal_search_start_with_image(
+    file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
+    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
+    model_name: Optional[str] = Form(None, description="Tên model để sử dụng"),
+    user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
+    query_id: str = Form(..., description="Query ID for this action"),
+    use_event_filter: bool = Form(False, description="Enable event filtering")
+):
+    """
+    Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
+    Trả về kết quả tìm kiếm ban đầu và một chain_id mới.
+    """
+    try:
+        # 1. Tạo một chain_id mới và duy nhất
+        chain_id = str(uuid.uuid4())
+        
+        # 2. Đọc nội dung ảnh
+        image_bytes = await file.read()
+        
+        # 3. Thực hiện tìm kiếm ban đầu với cờ start_temporal_chain=True
+        initial_results = milvus.search(
+            query=image_bytes,
+            mode="image",
+            search_in="image",
+            start_temporal_chain=True,
+            top_k=min(top_k, 1000),
+            model_name=model_name,
+            user_id=user_id,      # <<< THÊM VÀO
+            query_id=query_id,
+            use_event_filter=use_event_filter
+        )
+        
+        # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
+        temporal_state = milvus.get_user_temporal_state(user_id)
+        if not temporal_state:
+            raise HTTPException(
+                status_code=500, 
+                detail="Failed to initialize temporal chain state from image search."
+            )
+            
+        pickled_state = pickle.dumps(temporal_state)
+        base64_state = base64.b64encode(pickled_state).decode('utf-8')
+        
+        temporal_chain_data = {
+            "state_format": "pickle_base64",
+            "state": base64_state,
+            "last_update": time.time()
+        }
+        
+        redis_client.set(
+            f"temporal_chain:{chain_id}",
+            json.dumps(temporal_chain_data)
+        )
+        
+        print(f"Started new image-based temporal chain with ID: {chain_id}")
+        
+        # 5. Trả về kết quả và chain_id
+        return {
+            "chain_id": chain_id,
+            "initial_results": process_milvus_results_for_frontend(initial_results)
+        }
+        
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/metadata/{video_id}")
@@ -633,10 +707,10 @@ async def get_frame_metadata(video_id: str):
     return FileResponse(
         metadata_path,
         media_type="application/json",
-        headers={
-            # Bạn có thể cache file này để tăng tốc độ
-            "Cache-Control": "public, max-age=3600",
-        }
+        # headers={
+        #     # Bạn có thể cache file này để tăng tốc độ
+        #     "Cache-Control": "public, max-age=3600",
+        # }
     )
 
 @app.get("/api/video_info/{video_id}")
@@ -667,34 +741,101 @@ async def get_video_info(video_id: str):
         print(f"Error processing directory {video_id}: {e}")
         raise HTTPException(status_code=500, detail="Error on server")
 
-import pickle
-import base64
+@lru_cache(maxsize=128)
+def _load_and_sort_metadata(video_id: str):
+    """Hàm helper để đọc, chuyển đổi và sắp xếp metadata cho một video."""
+    metadata_path = f"{keysframe_path_root}/{video_id}/metadata.json"
+    if not os.path.exists(metadata_path):
+        return None
+
+    with open(metadata_path, 'r') as f:
+        metadata_file_content = json.load(f)
+    
+    # Metadata có thể nằm trong một key trùng tên với video_id
+    video_metadata = metadata_file_content.get(video_id, metadata_file_content)
+
+    # Chuyển đổi từ dict của dicts sang list của dicts và thêm 'filename'
+    frames_list = []
+    for frame_key, frame_data in video_metadata.items():
+        # Đảm bảo frame_data là một dict và có 'id'
+        if isinstance(frame_data, dict) and 'id' in frame_data:
+            frame_data['filename'] = f"{frame_key}.webp"
+            frame_data['frame_id_ori'] = frame_data['id']
+            frames_list.append(frame_data)
+
+    # Sắp xếp danh sách dựa trên frame ID gốc
+    frames_list.sort(key=lambda x: x['frame_id_ori'])
+    return frames_list
+
+@app.get("/api/keyframes/neighbors/{video_id}/{frame_id_ori}")
+async def get_neighboring_keyframes(
+    video_id: str, 
+    frame_id_ori: int, 
+    look_behind: int = 50, # Mặc định cho openImageModal
+    look_ahead: int = 50   # Mặc định cho openImageModal
+):
+    """
+    Lấy các keyframe lân cận của một frame cụ thể với phạm vi tùy chỉnh.
+    """
+    sorted_frames = _load_and_sort_metadata(video_id)
+    if sorted_frames is None:
+        raise HTTPException(status_code=404, detail=f"Metadata for video {video_id} not found.")
+
+    try:
+        target_index = next(i for i, frame in enumerate(sorted_frames) if frame['frame_id_ori'] == frame_id_ori)
+    except StopIteration:
+        raise HTTPException(status_code=404, detail=f"Frame ID {frame_id_ori} not found in video {video_id}.")
+
+    # >>> LOGIC MỚI: Tính toán khoảng dựa trên look_behind và look_ahead <<<
+    start_index = max(0, target_index - look_behind)
+    end_index = min(len(sorted_frames), target_index + look_ahead + 1)
+    
+    neighboring_frames = sorted_frames[start_index:end_index]
+    
+    # Chuẩn hóa tên thuộc tính trước khi trả về
+    normalized_frames = []
+    for frame in neighboring_frames:
+        new_frame = frame.copy()
+        if 'time-stamp' in new_frame:
+            new_frame['timestamp'] = new_frame.pop('time-stamp')
+        normalized_frames.append(new_frame)
+    
+    return normalized_frames
+
+
 
 @app.post("/api/search/temporal/start")
 async def temporal_search_start(req: TemporalStartRequest):
     try:
-        # 1. Tạo một ID duy nhất cho chuỗi tìm kiếm này
-        chain_id = str(uuid.uuid4())
+        # 1. Sử dụng user_id từ request làm chain_id
+        if not req.user_id: # <<< THÊM VÀO
+            raise HTTPException(status_code=400, detail="user_id is required to start a temporal chain.") # <<< THÊM VÀO
         
+        chain_id = req.user_id # <<< THAY ĐỔI
+
         lower_query = req.query.lower() if req.query else ""
-        lower_tag = req.tags_filter[0].lower() if req.tags_filter else None
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
         lower_ocr = req.ocr.lower() if req.ocr else None
-        # 2. Thực hiện tìm kiếm đầu tiên (Query A) với tham số start_temporal_chain=True
+
+        # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
         initial_results = milvus.search(
             query=lower_query,
             mode="text",
             search_in="image",
             start_temporal_chain=True,
-            top_k=min(req.top_k, 2000),  # Giới hạn top_k
+            top_k=min(req.top_k, 1000),
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
-            ocr = lower_ocr
+            ocr = lower_ocr,
+            user_id=req.user_id,    # <<< THÊM VÀO
+            query_id=req.query_id,
+            use_event_filter=req.use_event_filter
         )
         
         # 3. Lấy trạng thái temporal
-        temporal_state = milvus.temporal_state.copy() if hasattr(milvus, 'temporal_state') else None
+        temporal_state = milvus.get_user_temporal_state(req.user_id)
         if not temporal_state:
             raise HTTPException(
                 status_code=500, 
@@ -759,18 +900,21 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             milvus.temporal_state = saved_state
         
         lower_query = req.query.lower() if req.query else ""
-        lower_tag = req.tags_filter[0].lower() if req.tags_filter else None
+        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
         lower_ocr = req.ocr.lower() if req.ocr else None
 
         # 4. Thực hiện temporal search sequence
         temporal_answer = milvus.temporal_search_sequence(
             query=lower_query,
             mode="text",
-            top_k=min(req.top_k, 2000),
-            use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+            top_k=min(req.top_k, 1000),
+            use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
             ocr = lower_ocr,
+            user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
+            query_id=req.query_id,
+            use_event_filter=req.use_event_filter
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
@@ -840,7 +984,7 @@ def process_milvus_results_for_frontend(results: list) -> list:
         
         frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
         frame_identifier = f"{video_name}_{frame_id_ori}"
-
+        fps_value = metadata.get("fps", 1)
         processed_list.append({
             "frame_id_ori": frame_id_ori,  # Thêm frame_id_ori
             "id": frame_id,
@@ -850,7 +994,8 @@ def process_milvus_results_for_frontend(results: list) -> list:
             "timestamp": metadata.get("timestamp", "00:00.000"),
             "score": res.get("score", res.get("sim_score", 0)),
             "temporal_score": res.get("temporal_score", 0),
-            "frameIdentifier": frame_identifier
+            "frameIdentifier": frame_identifier,
+            "fps": fps_value
         })
     return processed_list
 
@@ -890,9 +1035,15 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     
     # 2. Lấy trạng thái hiện tại của queue (từ SORTED SET) và users
     # Lấy theo thứ tự điểm số giảm dần (vote cao nhất lên trước)
-    current_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
-    current_queue_items = [json.loads(item) for item in current_queue_items_json]
-    
+    sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+    current_queue_items = []
+    if sorted_identifiers:
+        # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
+        frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+        for item_json in frame_data_list:
+            if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+                current_queue_items.append(json.loads(item_json))
+
     current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
     current_users = {name.decode(): color.decode() for name, color in current_users_raw.items()}
 
@@ -911,7 +1062,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         "action": "user_update",
         "payload": {"users": current_users}
     }
-    await manager.broadcast(json.dumps(join_notification))
+    await manager.publish_update(json.dumps(join_notification))
 
     try:
         # 5. Vòng lặp chính: Lắng nghe tin nhắn từ client
@@ -925,81 +1076,100 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
-                items_to_add = {}
                 
                 # Hằng số lớn để ưu tiên vote
                 VOTE_PRIORITY_MULTIPLIER = 10**10 
 
-                for frame in frames_to_add:
-                    # Thêm các trường dữ liệu cần thiết
-                    frame['added_by'] = username
-                    frame['user_color'] = user_color
-                    frame['voters'] = [] 
-                    frame['vote_count'] = 0
-                    # <<< THÊM MỚI: Lưu thời gian tạo vào trong frame data >>>
-                    frame['creation_time'] = time.time()
-                    
-                    # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
-                    # Điểm ban đầu (0 vote) sẽ chính là thời gian tạo
-                    score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
-                    
-                    items_to_add[json.dumps(frame)] = score
+                # Sử dụng pipeline để các lệnh được thực hiện cùng lúc
+                pipe = redis_client.pipeline()
                 
-                if items_to_add:
-                    redis_client.zadd(QUEUE_STATE_KEY, items_to_add)
+                for frame in frames_to_add:
+                    identifier = frame.get("frameIdentifier")
+                    if not identifier:
+                        continue # Bỏ qua nếu frame không có định danh
+
+                    # >>> LOGIC MỚI: Chỉ thêm nếu frame chưa tồn tại <<<
+                    # hsetnx: chỉ set nếu field chưa tồn tại. Trả về 1 nếu set thành công, 0 nếu đã tồn tại.
+                    if redis_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
+                        # Nếu thêm dữ liệu thành công (frame này là mới)
+                        # thì mới thêm vào sorted set để sắp xếp
+                        frame['added_by'] = username
+                        frame['user_color'] = user_color
+                        frame['voters'] = [] 
+                        frame['vote_count'] = 0
+                        frame['creation_time'] = time.time()
+                        
+                        score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
+                        
+                        # Thêm dữ liệu đã cập nhật (có user, vote...) vào lại Hash
+                        pipe.hset(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame))
+                        # Thêm vào Sorted Set để sắp xếp
+                        pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier: score})
+                
+                # Thực thi tất cả các lệnh đã thêm vào pipeline
+                pipe.execute()
 
             elif action == "remove_frame":
-                frame_to_remove_json = json.dumps(payload)
-                # <<< THAY ĐỔI: Xóa khỏi Sorted Set
-                redis_client.zrem(QUEUE_STATE_KEY, frame_to_remove_json)
+                # Payload từ client vẫn là một đối tượng JSON đầy đủ
+                frame_to_remove = payload 
+                identifier_to_remove = frame_to_remove.get("frameIdentifier")
+                if identifier_to_remove:
+                    # >>> LOGIC MỚI: Xóa ở cả 2 nơi <<<
+                    pipe = redis_client.pipeline()
+                    pipe.zrem(QUEUE_SORTED_SET_KEY, identifier_to_remove) # Xóa khỏi Sorted Set
+                    pipe.hdel(QUEUE_DATA_HASH_KEY, identifier_to_remove)  # Xóa dữ liệu khỏi Hash
+                    pipe.execute()
 
             elif action == "clear_all":
-                # Xóa cả hai key
-                redis_client.delete(QUEUE_STATE_KEY, QUEUE_USERS_KEY)
+                # >>> LOGIC MỚI: Xóa cả 3 key <<<
+                redis_client.delete(QUEUE_SORTED_SET_KEY, QUEUE_DATA_HASH_KEY, QUEUE_USERS_KEY)
                 
             elif action == "vote_frame":
                 identifier_to_vote = payload.get("frameIdentifier")
-                all_items_json_with_scores = redis_client.zrange(QUEUE_STATE_KEY, 0, -1, withscores=True)
+                if not identifier_to_vote:
+                    continue
 
-                # Hằng số lớn phải giống hệt như ở trên
-                VOTE_PRIORITY_MULTIPLIER = 10**10
+                # >>> LOGIC MỚI: Lấy trực tiếp dữ liệu từ Hash <<<
+                item_json_str = redis_client.hget(QUEUE_DATA_HASH_KEY, identifier_to_vote)
 
-                for item_json_bytes, old_score in all_items_json_with_scores:
-                    item_json_str = item_json_bytes.decode('utf-8')
+                if item_json_str:
                     item = json.loads(item_json_str)
                     
-                    if item.get("frameIdentifier") == identifier_to_vote:
-                        # Logic toggle vote giữ nguyên
-                        voters = set(item.get("voters", []))
-                        if username in voters:
-                            voters.remove(username)
-                        else:
-                            voters.add(username)
-                        
-                        item["voters"] = list(voters)
-                        item["vote_count"] = len(voters)
+                    # Logic toggle vote giữ nguyên
+                    voters = set(item.get("voters", []))
+                    if username in voters:
+                        voters.remove(username)
+                    else:
+                        voters.add(username)
+                    
+                    item["voters"] = list(voters)
+                    item["vote_count"] = len(voters)
 
-                        # <<< THAY ĐỔI: Tính điểm theo công thức mới >>>
-                        # Lấy thời gian tạo đã được lưu
-                        creation_time = item.get('creation_time', time.time()) # Dùng time.time() làm dự phòng
-                        new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
-                        
-                        # Cập nhật trong Redis
-                        pipe = redis_client.pipeline()
-                        # Xóa item cũ bằng chuỗi JSON cũ (không phải bytes)
-                        pipe.zrem(QUEUE_STATE_KEY, item_json_str) 
-                        # Thêm item mới với score mới
-                        pipe.zadd(QUEUE_STATE_KEY, {json.dumps(item): new_score})
-                        pipe.execute()
-                        
-                        break # Đã tìm thấy và xử lý, thoát vòng lặp
+                    # Hằng số lớn phải giống hệt như ở trên
+                    VOTE_PRIORITY_MULTIPLIER = 10**10
+                    creation_time = item.get('creation_time', time.time())
+                    new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
+                    
+                    # Cập nhật trong Redis
+                    pipe = redis_client.pipeline()
+                    # 1. Cập nhật dữ liệu mới trong Hash
+                    pipe.hset(QUEUE_DATA_HASH_KEY, identifier_to_vote, json.dumps(item))
+                    # 2. Cập nhật điểm trong Sorted Set
+                    pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
+                    pipe.execute()
 
             # --- Phát sóng trạng thái mới cho TẤT CẢ client sau mỗi hành động ---
             
             # Lấy lại toàn bộ queue đã được sắp xếp
-            updated_queue_items_json = redis_client.zrevrange(QUEUE_STATE_KEY, 0, -1)
-            updated_queue_items = [json.loads(item) for item in updated_queue_items_json]
-            
+            sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+            updated_queue_items = []
+            if sorted_identifiers:
+                # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
+                frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+                for item_json in frame_data_list:
+                    if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+                        updated_queue_items.append(json.loads(item_json))
+
             updated_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
             updated_users = {name.decode(): color.decode() for name, color in updated_users_raw.items()}
 
@@ -1011,88 +1181,25 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     "users": updated_users
                 }
             }
-            await manager.broadcast(json.dumps(full_update_message))
+            await manager.publish_update(json.dumps(full_update_message))
 
     except WebSocketDisconnect:
         manager.disconnect(username)
-
-
-@app.post("/api/submit/vqa")
-async def handle_vqa_submission(submission: VqaSubmissionRequest):
-    """
-    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
-    Tên file sẽ là {id}.json.
-    """
-    try:
-        # Đảm bảo thư mục lưu trữ tồn tại
-        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
+        # redis_client.hdel(QUEUE_USERS_KEY, username) # Xóa user khỏi danh sách
         
-        # Tạo tên file an toàn từ ID
-        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
-        if not safe_filename:
-            raise HTTPException(status_code=400, detail="Invalid ID provided.")
+        # # Lấy danh sách user mới nhất
+        # remaining_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
+        # remaining_users = {name.decode(): color.decode() for name, color in remaining_users_raw.items()}
 
-        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
-        
-        # Tạo dữ liệu để lưu
-        data_to_save = {
-            "id": submission.id,
-            "answer": submission.answer
-        }
-        
-        # Ghi file JSON
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            
-        return {
-            "success": True,
-            "message": "VQA submission saved successfully.",
-            "path": file_path
-        }
-
-    except Exception as e:
-        print(f"ERROR saving VQA submission: {e}")
-
-@app.post("/api/submit/frame")
-async def handle_vqa_submission(submission: FrameSubmissionRequest):
-    """
-    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
-    Tên file sẽ là {id}.json.
-    """
-    try:
-        # Đảm bảo thư mục lưu trữ tồn tại
-        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
-        
-        # Tạo tên file an toàn từ ID
-        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
-        if not safe_filename:
-            raise HTTPException(status_code=400, detail="Invalid ID provided.")
-
-        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
-        
-        # Tạo dữ liệu để lưu
-        data_to_save = {
-            "id": submission.id,
-            "answer": submission.answer
-        }
-        
-        # Ghi file JSON
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            
-        return {
-            "success": True,
-            "message": "Frame submission saved successfully.",
-            "path": file_path
-        }
-
-    except Exception as e:
-        print(f"ERROR saving Frame submission: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
-
+        # # Thông báo cho những người còn lại
+        # leave_notification = {
+        #     "action": "user_update",
+        #     "payload": {"users": remaining_users}
+        # }
+        # await manager.publish_update(json.dumps(leave_notification))
 
 
 # Mount static files
-# app.mount("/", StaticFiles(directory="web", html=True), name="static")
+app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
-# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 4 --timeout-keep-alive 65
+# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
