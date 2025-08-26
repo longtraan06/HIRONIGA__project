@@ -39,7 +39,7 @@ app = FastAPI()
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
 keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
 video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
-
+hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
 # keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
@@ -98,6 +98,24 @@ def get_keys_by_pattern(pattern):
            cursor, partial_keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
            keys.extend(partial_keys)
        return keys
+
+
+@app.get("/videos_hls/{video_name}/playlist.m3u8", tags=["HLS"])
+async def get_hls_playlist(video_name: str):
+    playlist_path = f"{hls_path}/{video_name}/playlist.m3u8"
+    if not os.path.exists(playlist_path):
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    # Media type cho M3U8 là application/vnd.apple.mpegurl
+    return FileResponse(playlist_path, media_type="application/vnd.apple.mpegurl")
+
+# Thêm route để phục vụ các file TS
+@app.get("/videos_hls/{video_name}/{segment_name}.ts", tags=["HLS"])
+async def get_hls_segment(video_name: str, segment_name: str):
+    segment_path = f"{hls_path}/{video_name}/{segment_name}.ts"
+    if not os.path.exists(segment_path):
+        raise HTTPException(status_code=404, detail="Segment not found")
+    # Media type cho TS là video/mp2t
+    return FileResponse(segment_path, media_type="video/mp2t")
 
 @app.post("/api/admin/clear-cache")
 async def clear_redis_cache(
@@ -352,6 +370,7 @@ class TemporalStartRequest(BaseModel):
     ocr: str = None
     user_id: Optional[str] = None    # <<< THÊM VÀO
     query_id: Optional[str] = None 
+    use_event_filter: Optional[bool] = False
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -363,6 +382,7 @@ class TemporalContinueRequest(BaseModel):
     ocr: str = None
     query_id: Optional[str] = None 
     user_id: Optional[str] = None
+    use_event_filter: Optional[bool] = False
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -374,6 +394,7 @@ class TextSearchRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    use_event_filter: Optional[bool] = False
 
 class VqaSubmissionRequest(BaseModel):
     id: str
@@ -527,7 +548,8 @@ async def search_text(req: TextSearchRequest):
         use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
         top_k_tags=req.top_k_tags,
         tags_filter=lower_tag,
-        ocr = lower_ocr
+        ocr = lower_ocr,
+        use_event_filter=req.use_event_filter
     )
     return process_milvus_results_for_frontend(results)
 
@@ -538,7 +560,7 @@ async def search_image(
     model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
     use_tag: bool = Form(False, description="Enable tag filtering"), 
     top_k_tags: int = Form(5, description="Top K tags to use"),
-    # tags_filter: Optional[List[str]] = None
+    use_event_filter: bool = Form(False, description="Enable event filtering") 
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -556,7 +578,7 @@ async def search_image(
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags
-        # tags_filter=tags_filter
+        use_event_filter=use_event_filter
     )
     
     return process_milvus_results_for_frontend(results)
@@ -584,7 +606,8 @@ async def temporal_search_start_with_image(
     top_k: int = Form(1000, description="Số lượng kết quả trả về"),
     model_name: Optional[str] = Form(None, description="Tên model để sử dụng"),
     user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
-    query_id: str = Form(..., description="Query ID for this action") # <<< THÊM VÀO
+    query_id: str = Form(..., description="Query ID for this action"),
+    use_event_filter: bool = Form(False, description="Enable event filtering")
 ):
     """
     Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
@@ -606,7 +629,8 @@ async def temporal_search_start_with_image(
             top_k=min(top_k, 1000),
             model_name=model_name,
             user_id=user_id,      # <<< THÊM VÀO
-            query_id=query_id     # <<< THÊM VÀO
+            query_id=query_id,
+            use_event_filter=use_event_filter
         )
         
         # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
@@ -787,7 +811,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             tags_filter=lower_tag,
             ocr = lower_ocr,
             user_id=req.user_id,    # <<< THÊM VÀO
-            query_id=req.query_id   # <<< THÊM VÀO
+            query_id=req.query_id,
+            use_event_filter=req.use_event_filter
         )
         
         # 3. Lấy trạng thái temporal
@@ -869,7 +894,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             tags_filter=lower_tag,
             ocr = lower_ocr,
             user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
-            query_id=req.query_id  # <<< THÊM VÀO
+            query_id=req.query_id,
+            use_event_filter=req.use_event_filter
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
@@ -1153,83 +1179,10 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         # }
         # await manager.publish_update(json.dumps(leave_notification))
 
-
-@app.post("/api/submit/vqa")
-async def handle_vqa_submission(submission: VqaSubmissionRequest):
-    """
-    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
-    Tên file sẽ là {id}.json.
-    """
-    try:
-        # Đảm bảo thư mục lưu trữ tồn tại
-        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
-        
-        # Tạo tên file an toàn từ ID
-        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
-        if not safe_filename:
-            raise HTTPException(status_code=400, detail="Invalid ID provided.")
-
-        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
-        
-        # Tạo dữ liệu để lưu
-        data_to_save = {
-            "id": submission.id,
-            "answer": submission.answer
-        }
-        
-        # Ghi file JSON
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            
-        return {
-            "success": True,
-            "message": "VQA submission saved successfully.",
-            "path": file_path
-        }
-
-    except Exception as e:
-        print(f"ERROR saving VQA submission: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
-@app.post("/api/submit/frame")
-async def handle_vqa_submission(submission: FrameSubmissionRequest):
-    """
-    Nhận dữ liệu VQA từ client và lưu nó thành một file JSON.
-    Tên file sẽ là {id}.json.
-    """
-    try:
-        # Đảm bảo thư mục lưu trữ tồn tại
-        os.makedirs(VQA_SAVE_PATH, exist_ok=True)
-        
-        # Tạo tên file an toàn từ ID
-        safe_filename = "".join(c for c in submission.id if c.isalnum() or c in ('_', '-')).rstrip()
-        if not safe_filename:
-            raise HTTPException(status_code=400, detail="Invalid ID provided.")
-
-        file_path = os.path.join(VQA_SAVE_PATH, f"{safe_filename}.json")
-        
-        # Tạo dữ liệu để lưu
-        data_to_save = {
-            "id": submission.id,
-            "answer": submission.answer
-        }
-        
-        # Ghi file JSON
-        with open(file_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4)
-            
-        return {
-            "success": True,
-            "message": "Frame submission saved successfully.",
-            "path": file_path
-        }
-
-    except Exception as e:
-        print(f"ERROR saving Frame submission: {e}")
-        raise HTTPException(status_code=500, detail=f"An internal error occurred: {e}")
-
+    
 
 
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
-# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 20 --ws-ping-timeout 20
+# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
