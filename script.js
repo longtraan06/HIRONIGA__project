@@ -10,15 +10,16 @@ document.addEventListener('DOMContentLoaded', function() {
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
     const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
-    const DEFAULT_DRES_SESSION_ID = 'W3bboltdf9YxpnDh53znaS6Ml1doZvXq'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'mudM8rLlMfXy9ztmPRbSPGMD4rgv7Lwy'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
+    let isEventFilterEnabled = false;
     // Biến cho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
-
+    let hlsPlayerInstance = null;
     // Thêm một tham chiếu đến main-content để dùng cho IntersectionObserver
     const mainContent = document.querySelector('.main-content');
 
@@ -62,6 +63,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
     const asrFilterBtn = document.getElementById('asrFilterBtn');
     const vqaSubmitBtn = document.getElementById('vqaSubmitBtn');
+    const eventFilterBtn = document.getElementById('eventFilterBtn');
     const vqaModal = document.getElementById('vqaModal');
     const vqaForm = document.getElementById('vqaForm');
     const vqaIdInput = document.getElementById('vqaIdInput');
@@ -194,6 +196,15 @@ document.addEventListener('DOMContentLoaded', function() {
             toggleFilter('asr');
         });
 
+        if (eventFilterBtn) { // <<< THÊM KHỐI LỆNH NÀY
+            eventFilterBtn.addEventListener('click', function() {
+                isEventFilterEnabled = !isEventFilterEnabled;
+                this.classList.toggle('active', isEventFilterEnabled);
+                const status = isEventFilterEnabled ? 'bật' : 'tắt';
+                showToastNotification(`Bộ lọc sự kiện đã ${status}`, 'success');
+            });
+        }
+
         clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
@@ -255,6 +266,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+        
+
         if (shortcutsBtn && shortcutsModal) {
             // Hàm để mở modal
             const openShortcutsModal = () => {
@@ -291,9 +304,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
 
-            if (e.key === 'F4') {
+            if (e.key === 'F4') { // <<< THAY ĐỔI LOGIC F4
                 e.preventDefault();
-                if (translateBtn) translateBtn.click();
+                if (eventFilterBtn) eventFilterBtn.click(); // Kích hoạt Event Filter
             } 
             else if (e.key === 'F2') {
                 e.preventDefault();
@@ -572,140 +585,6 @@ document.addEventListener('DOMContentLoaded', function() {
         // Gán sự kiện cho cả header.
         // Người dùng có thể click vào bất kỳ đâu trên header (trừ vùng actions) để thu nhỏ.
         queueHeader.addEventListener('click', toggleQueueDisplay);
-
-        const openVqaModal = () => {
-            vqaModal.style.display = 'flex';
-            setTimeout(() => {
-                vqaModal.classList.add('visible');
-                vqaIdInput.focus(); // Tự động focus vào ô ID
-            }, 10);
-        };
-        const closeVqaModal = () => {
-            vqaModal.classList.remove('visible');
-            setTimeout(() => {
-                vqaModal.style.display = 'none';
-                vqaForm.reset(); // Xóa nội dung trong form
-            }, 300);
-        };
-        async function submit_form(id, answer) {
-            console.log("Submitting VQA Data:", { id, answer });
-            try {
-                if(Array.isArray(answer)){
-                    const response = await fetch('/api/submit/frame', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ id, answer }),
-                    });
-                    const result = await response.json();
-
-                    if (response.ok && result.success) {
-                        showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
-                    } else {
-                        throw new Error(result.detail || 'Failed to submit.');
-                    }
-                } else {
-                    const response = await fetch('/api/submit/vqa', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ id, answer }),
-                    });
-                    const result = await response.json();
-
-                    if (response.ok && result.success) {
-                        showToastNotification(`Submitted successfully! Saved to ${result.path}`, 'success', 2000);
-                    } else {
-                        throw new Error(result.detail || 'Failed to submit.');
-                    }
-                }
-            } catch (error) {
-                console.error('Submission Error:', error);
-                showToastNotification(`Error: ${error.message}`, 'error', 2000);
-            }
-        }
-
-        // Lắng nghe sự kiện click nút trên header
-        vqaSubmitBtn.addEventListener('click', openVqaModal);
-
-        // Lắng nghe sự kiện đóng modal
-        vqaCloseBtn.addEventListener('click', closeVqaModal);
-        vqaOverlay.addEventListener('click', closeVqaModal);
-        
-        // Lắng nghe sự kiện submit của form (khi nhấn Enter hoặc click nút Submit)
-        vqaForm.addEventListener('submit', function(e) {
-            e.preventDefault(); // Ngăn trình duyệt tải lại trang
-            const id = vqaIdInput.value.trim();
-            const answer = vqaAnswerInput.value.trim();
-
-            if (id && answer) {
-                submit_form(id, answer);
-                closeVqaModal(); // Đóng modal sau khi submit
-            } else {
-                showToastNotification('Please fill out both ID and Answer.', 'error');
-            }
-        });
-
-        vqaIdInput.addEventListener('keydown', function(e) {
-            // Nếu phím được nhấn là 'Enter'
-            if (e.key === 'Enter') {
-                // Ngăn hành vi mặc định của Enter (là submit form)
-                e.preventDefault(); 
-                // Chuyển focus xuống ô nhập Answer
-                vqaAnswerInput.focus();
-            }
-        });
-        // 2. Xử lý sự kiện nhấn Enter trên ô Answer
-        vqaAnswerInput.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault(); 
-                vqaForm.querySelector('.submit-form-btn').click();
-            }
-        });
-
-        const openFrameVqaModal = (answerData) => {
-            // Lưu dữ liệu answer vào biến tạm
-            preparedAnswerData = answerData;
-            // Hiển thị dữ liệu JSON một cách đẹp mắt trong thẻ <pre>
-            frameVqaAnswerDisplay.textContent = JSON.stringify(answerData, null, 2);
-
-            // Mở modal
-            frameVqaModal.style.display = 'flex';
-            setTimeout(() => {
-                frameVqaModal.classList.add('visible');
-                frameVqaIdInput.focus(); // Tự động focus vào ô ID
-            }, 10);
-        };
-
-        const closeFrameVqaModal = () => {
-            frameVqaModal.classList.remove('visible');
-            setTimeout(() => {
-                frameVqaModal.style.display = 'none';
-                frameVqaForm.reset(); // Xóa nội dung
-                preparedAnswerData = null; // Reset biến tạm
-            }, 300);
-        };
-
-        // Đóng modal khi click nút X hoặc overlay
-        frameVqaCloseBtn.addEventListener('click', closeFrameVqaModal);
-        frameVqaOverlay.addEventListener('click', closeFrameVqaModal);
-
-        // Xử lý submit form
-        frameVqaForm.addEventListener('submit', function(e) {
-            e.preventDefault(); // Ngăn submit mặc định
-            const id = frameVqaIdInput.value.trim();
-
-            // Kiểm tra xem ID đã được nhập và dữ liệu Answer đã sẵn sàng chưa
-            if (id && preparedAnswerData) {
-                // Tận dụng hàm submit_form đã có!
-                submit_form(id, preparedAnswerData);
-                closeFrameVqaModal();
-            } else {
-                showToastNotification('Please enter an ID.', 'error');
-            }
-        });
 
 
         closePreviewBarBtn.addEventListener('click', () => {
@@ -1810,6 +1689,10 @@ async function ensureDresPrerequisites() {
         showLoadingIndicator();
         const filterOptions = {};
 
+        if (isEventFilterEnabled) { // <<< THÊM DÒNG NÀY
+            filterOptions.use_event_filter = true;
+        }
+
         // 2. Kiểm tra và lấy giá trị từ bộ lọc OCR
         const ocrFilterContainer = searchGroup.querySelector('.ocr-filter-container');
         if (ocrFilterContainer && ocrFilterContainer.classList.contains('visible')) {
@@ -2036,6 +1919,10 @@ async function ensureDresPrerequisites() {
             query_id: queryId 
         };
 
+        if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
+            body.use_event_filter = true;
+        }
+
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             body.model_name = modelName;
         }
@@ -2068,6 +1955,10 @@ async function ensureDresPrerequisites() {
             chain_id: chainId, // chainId ở đây chính là currentUserId
             query_id: queryId 
         };
+
+        if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
+            body.use_event_filter = true;
+        }
 
         // >>> LOGIC MỚI <<<
         if (filterOptions.use_tag && filterOptions.tags_filter) {
@@ -2130,6 +2021,11 @@ async function ensureDresPrerequisites() {
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             formData.append("model_name", modelName);
         }
+
+        if (isEventFilterEnabled) { // <<< THÊM KHỐI LỆNH NÀY
+            formData.append("use_event_filter", "true");
+        }
+
         let isTagFilterEnabled = false;
         if (isTagFilterEnabled) {
             // Bật cờ use_tag để backend biết là ta có thể lọc tag
@@ -2549,7 +2445,6 @@ function openVideoModal(videoName, timestamp) {
     const closeBtn = document.getElementById('closeVideoModalBtn');
     const captureCanvas = document.getElementById('frameCaptureCanvas');
 
-    // Lấy các phần tử điều khiển (sẽ không còn lỗi null sau khi cập nhật HTML)
     const playPauseBtn = document.getElementById('playPauseBtn');
     const playIcon = playPauseBtn.querySelector('i');
     const seekBackwardBtn = document.getElementById('seekBackwardBtn');
@@ -2558,12 +2453,10 @@ function openVideoModal(videoName, timestamp) {
     const currentTimeDisplay = document.getElementById('currentTimeDisplay');
     const durationDisplay = document.getElementById('durationDisplay');
     
-    // Lấy các phần tử âm thanh
     const muteBtn = document.getElementById('muteBtn');
     const volumeIcon = muteBtn.querySelector('i');
     const volumeSlider = document.getElementById('volumeSlider');
 
-    // Cấu hình (sử dụng SKIP_TIME = 0.5 của bạn)
     const SKIP_TIME = 1;
     const FAST_FORWARD_RATE = 2.5;
 
@@ -2575,7 +2468,6 @@ function openVideoModal(videoName, timestamp) {
         return;
     }
 
-    // --- CÁC HÀM HELPER VÀ CẬP NHẬT UI ---
     const formatTime = (timeInSeconds) => {
         const minutes = Math.floor(timeInSeconds / 60);
         const seconds = Math.floor(timeInSeconds % 60);
@@ -2596,7 +2488,6 @@ function openVideoModal(videoName, timestamp) {
         }
     };
 
-    // --- LOGIC ÂM THANH ---
     const toggleMute = () => {
         player.muted = !player.muted;
     };
@@ -2618,19 +2509,17 @@ function openVideoModal(videoName, timestamp) {
         }
     };
 
-    // --- CÁC BỘ LẮNG NGHE SỰ KIỆN ---
+    // <<< BẮT ĐẦU THAY ĐỔI >>>
+    // Hàm onLoadedMetadata bây giờ chỉ tập trung vào việc cập nhật UI
+    // Việc tua video sẽ được xử lý riêng cho HLS để đảm bảo độ chính xác
     const onLoadedMetadata = () => {
         if (player.duration) {
             seekSlider.max = player.duration;
             durationDisplay.textContent = formatTime(player.duration);
         }
-        const startTime = parseTimestamp(timestamp);
-        if (isFinite(startTime) && startTime < player.duration) {
-            player.currentTime = startTime;
-        }
         updateVolumeUI(); // Cập nhật UI âm thanh ban đầu
-        player.play().catch(e => console.error("Lỗi tự động phát video:", e));
     };
+    // <<< KẾT THÚC THAY ĐỔI >>>
     
     const handleKeyDown = (e) => {
         if (e.key === 'Escape') { closeModal(); return; }
@@ -2713,15 +2602,27 @@ function openVideoModal(videoName, timestamp) {
         }
     };
     
+    // <<< BẮT ĐẦU THAY ĐỔI >>>
+    // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
     const closeModal = () => {
+        // Hủy HLS player instance nếu nó tồn tại
+        if (hlsPlayerInstance) {
+            hlsPlayerInstance.destroy();
+            hlsPlayerInstance = null;
+        }
+
         player.pause();
         document.removeEventListener('keydown', handleKeyDown);
         document.removeEventListener('keyup', handleKeyUp);
         if (rewindInterval) clearInterval(rewindInterval);
+        
+        // Dọn dẹp player để sẵn sàng cho lần mở tiếp theo
         player.removeAttribute('src');
         player.load();
+        
         modal.style.display = 'none';
     };
+    // <<< KẾT THÚC THAY ĐỔI >>>
 
     // --- KHỞI TẠO VÀ GÁN SỰ KIỆN ---
     player.addEventListener('loadedmetadata', onLoadedMetadata);
@@ -2746,8 +2647,42 @@ function openVideoModal(videoName, timestamp) {
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keyup', handleKeyUp);
 
-    player.src = `/videos/${videoName}.mp4`;
+    const hlsSrc = `/videos_hls/${videoName}/playlist.m3u8`;
+    const targetTimeInSeconds = parseTimestamp(timestamp);
+
+    if (hlsPlayerInstance) {
+        hlsPlayerInstance.destroy();
+    }
+    if (player.canPlayType('application/vnd.apple.mpegurl')) {
+        player.src = hlsSrc;
+        player.addEventListener('canplay', () => {
+             player.currentTime = targetTimeInSeconds;
+             player.play().catch(e => console.error("Lỗi tự động phát video:", e));
+        }, { once: true });
+    } 
+    else if (Hls.isSupported()) {
+        hlsPlayerInstance = new Hls();
+        hlsPlayerInstance.loadSource(hlsSrc);
+        hlsPlayerInstance.attachMedia(player);
+        hlsPlayerInstance.on(Hls.Events.MANIFEST_PARSED, function() {
+            player.currentTime = targetTimeInSeconds;
+            player.play().catch(e => console.error("Lỗi tự động phát video:", e));
+        });
+
+        // Xử lý lỗi
+        hlsPlayerInstance.on(Hls.Events.ERROR, function(event, data) {
+            if (data.fatal) {
+                console.error('Lỗi HLS nghiêm trọng:', data.type, data.details);
+                showToastNotification(`Lỗi khi tải video: ${data.details}`, "error");
+            }
+        });
+    } else {
+        showToastNotification("Trình duyệt của bạn không hỗ trợ HLS streaming.", "error");
+        return; // Dừng lại nếu không thể phát video
+    }
+
     modal.style.display = 'flex';
+    // <<< KẾT THÚC THAY ĐỔI >>>
 }
     const frameSelectionManager = {
         selectedFrames: new Map(), // Map lưu tất cả frame đã chọn: key = frameId, value = frameData
@@ -3387,6 +3322,10 @@ function toggleFilter(filterType) {
             formData.append("user_id", currentUserId);
             formData.append("query_id", queryId);
 
+            if (isEventFilterEnabled) { // <<< THÊM KHỐI LỆNH NÀY
+                formData.append("use_event_filter", "true");
+            }
+
             if (currentSelectedModel && currentSelectedModel !== 'all') {
                 formData.append("model_name", currentSelectedModel);
             }
@@ -3730,12 +3669,12 @@ function createImageItemElement(image) {
 
 
     let scoreHtml = '';
-    if (image.temporal_score > 0) {
-        scoreHtml = `<div class="score-overlay temporal">T-Score: ${image.temporal_score.toFixed(4)}</div>`;
-    } 
-    else if (image.score > 0) {
-        scoreHtml = `<div class="score-overlay">${image.score.toFixed(4)}</div>`;
-    }
+    // if (image.temporal_score > 0) {
+    //     scoreHtml = `<div class="score-overlay temporal">T-Score: ${image.temporal_score.toFixed(4)}</div>`;
+    // } 
+    // else if (image.score > 0) {
+    //     scoreHtml = `<div class="score-overlay">${image.score.toFixed(4)}</div>`;
+    // }
     imageItem.innerHTML = `
         <img src="${image.path}" alt="${uniqueFrameId}" loading="lazy">
         ${scoreHtml}
