@@ -577,7 +577,7 @@ async def search_image(
         top_k=min(top_k, 1000),  # Giới hạn top_k
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
-        top_k_tags=top_k_tags
+        top_k_tags=top_k_tags,
         use_event_filter=use_event_filter
     )
     
@@ -1179,7 +1179,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         # }
         # await manager.publish_update(json.dumps(leave_notification))
 
-    
+
 
 
 # Mount static files
