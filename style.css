@@ -2118,7 +2118,7 @@ button:focus, input:focus, textarea:focus {
     position: absolute;
     left: 50%;
     transform: translateX(-50%);
-    width: 60%; /* Tăng nhẹ chiều rộng */
+    width: 55%; /* Tăng nhẹ chiều rộng */
     max-width: 1000px;
     height: calc(100% - 10px); /* Chiếm gần hết chiều cao header */
     background-color: rgba(0, 0, 0, 0.25);
