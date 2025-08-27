@@ -1,8 +1,6 @@
 const APP_CONFIG = {
-    // Địa chỉ của Backend API và Server Video trên server remote
     REMOTE_BASE_URL: 'http://192.168.20.170:8080',
 
-    // Địa chỉ của WebSocket trên server remote
     WEBSOCKET_URL: 'ws://192.168.20.170:8080'
 };
 
@@ -15,44 +13,37 @@ document.addEventListener('DOMContentLoaded', function() {
     let isTranslationEnabled = false;
     let availableModels = [];
     let currentSelectedModel = 'all';
-    let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
+    let highlightedModelIndex = -1;
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
-    const DEFAULT_DRES_SESSION_ID = 'W3bboltdf9YxpnDh53znaS6Ml1doZvXq'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'vhxVT57AOd1klQw5TZ8xGr82puTfqZzS';
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
     let isEventFilterEnabled = false;
-    // Biến cho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
     let hlsPlayerInstance = null;
-    // Thêm một tham chiếu đến main-content để dùng cho IntersectionObserver
     const mainContent = document.querySelector('.main-content');
+    let dresEvaluationId = null; 
+    let selectedQueueFrameIds = new Set();
 
-
-    let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
-    let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
-
-    let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
-    let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
+    let allImages = [];
+    let displayedImagesCount = 0;
 
     let currentUser = null;
     let ws = null;
-    let userColors = {}; // Lưu màu của tất cả user
+    let wsRetryDelayMs = 3000;
+    let userColors = {};
 
     let metadataCache = new Map();
 
-    const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
-    let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
-    let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
+    const IMAGES_PER_BATCH = 60;
+    let isLoading = false;
+    let hasReachedEnd = false;
     
-
-    // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
-    const textToTextBtn = document.getElementById('textToTextBtn');
     const imageToImageBtn = document.getElementById('imageToImageBtn');
     const translateBtn = document.getElementById('translateBtn');
     const searchInputsContainer = document.getElementById('searchInputsContainer');
@@ -60,7 +51,6 @@ document.addEventListener('DOMContentLoaded', function() {
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsMenu = document.getElementById('settingsMenu');
     const tagFilterBtn = document.getElementById('tagFilterBtn'); 
-    const eventFilterBtn = document.getElementById('eventFilterBtn');
     const shortcutsBtn = document.getElementById('shortcutsBtn');
     const shortcutsModal = document.getElementById('shortcutsModal');
     const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
@@ -72,20 +62,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const queueCountSpan = document.getElementById('queueCount');
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
     const asrFilterBtn = document.getElementById('asrFilterBtn');
-    const vqaSubmitBtn = document.getElementById('vqaSubmitBtn');
-    const vqaModal = document.getElementById('vqaModal');
-    const vqaForm = document.getElementById('vqaForm');
-    const vqaIdInput = document.getElementById('vqaIdInput');
-    const vqaAnswerInput = document.getElementById('vqaAnswerInput');
-    const vqaCloseBtn = vqaModal.querySelector('.close-btn');
-    const vqaOverlay = vqaModal.querySelector('.modal-overlay');
-
-    const frameVqaModal = document.getElementById('frameVqaModal');
-    const frameVqaForm = document.getElementById('frameVqaForm');
-    const frameVqaIdInput = document.getElementById('frameVqaIdInput');
-    const frameVqaAnswerDisplay = document.getElementById('frameVqaAnswerDisplay');
-    const frameVqaCloseBtn = frameVqaModal.querySelector('.close-btn');
-    const frameVqaOverlay = frameVqaModal.querySelector('.modal-overlay');
+    const eventFilterBtn = document.getElementById('eventFilterBtn');
 
     const submitAsQaBtn = document.getElementById('submitAsQaBtn');
     const submitAsKisBtn = document.getElementById('submitAsKisBtn');
@@ -107,14 +84,12 @@ document.addEventListener('DOMContentLoaded', function() {
     const closePreviewBarBtn = document.getElementById('closePreviewBarBtn');
     const header = document.querySelector('.header');
 
-    let preparedAnswerData = null; // Biến tạm để lưu dữ liệu Answer
     initializeEventListeners();
 
 
     function getOrCreateUserId() {
         let userId = localStorage.getItem('aic_lunch_user_id');
         if (!userId) {
-            // Tạo một ID đơn giản nhưng đủ duy nhất cho mục đích session
             userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substring(2, 9);
             localStorage.setItem('aic_lunch_user_id', userId);
         }
@@ -127,24 +102,21 @@ document.addEventListener('DOMContentLoaded', function() {
                 const formData = new FormData();
                 formData.append('user_id', currentUserId);
                 const cleanupUrl = `${APP_CONFIG.REMOTE_BASE_URL}/api/session/cleanup`;
-                console.log("url_cleanup", cleanupUrl); 
-                // Dùng sendBeacon để đảm bảo request được gửi đi ngay cả khi trang đang đóng
                 navigator.sendBeacon(cleanupUrl, formData);
             }
         });
     }
 
-    // Initialize
     function initializeEventListeners() {
 
-        currentUserId = getOrCreateUserId(); // <<< THÊM VÀO
+        currentUserId = getOrCreateUserId(); 
         setupUnloadHandler(); 
 
         const savedModel = localStorage.getItem('user_selected_model');
         if (savedModel) {
             currentSelectedModel = savedModel;
         } else {
-            currentSelectedModel = 'all'; // Giá trị mặc định nếu chưa có gì được lưu
+            currentSelectedModel = 'all'; 
         }
         
         setupKeyboardNavigation();
@@ -207,6 +179,15 @@ document.addEventListener('DOMContentLoaded', function() {
             toggleFilter('asr');
         });
 
+        if (eventFilterBtn) { // <<< THÊM KHỐI LỆNH NÀY
+            eventFilterBtn.addEventListener('click', function() {
+                isEventFilterEnabled = !isEventFilterEnabled;
+                this.classList.toggle('active', isEventFilterEnabled);
+                const status = isEventFilterEnabled ? 'bật' : 'tắt';
+                showToastNotification(`Bộ lọc sự kiện đã ${status}`, 'success');
+            });
+        }
+
         clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
@@ -268,6 +249,8 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
+        
+
         if (shortcutsBtn && shortcutsModal) {
             // Hàm để mở modal
             const openShortcutsModal = () => {
@@ -292,16 +275,6 @@ document.addEventListener('DOMContentLoaded', function() {
             shortcutsOverlay.addEventListener('click', closeShortcutsModal);
         }
 
-        if (eventFilterBtn) { // <<< THÊM KHỐI LỆNH NÀY
-            eventFilterBtn.addEventListener('click', function() {
-                isEventFilterEnabled = !isEventFilterEnabled;
-                this.classList.toggle('active', isEventFilterEnabled);
-                const status = isEventFilterEnabled ? 'bật' : 'tắt';
-                showToastNotification(`Bộ lọc sự kiện đã ${status}`, 'success');
-            });
-        }
-
-
         document.addEventListener('keydown', function(e) {
 
             if (e.key === 'Tab') {
@@ -317,7 +290,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (e.key === 'F4') { // <<< THAY ĐỔI LOGIC F4
                 e.preventDefault();
                 if (eventFilterBtn) eventFilterBtn.click(); // Kích hoạt Event Filter
-            }
+            } 
             else if (e.key === 'F2') {
                 e.preventDefault();
                 toggleFilter('tag');
@@ -408,59 +381,6 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('keydown', (e) => {
             const activeElement = document.activeElement;
             const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
-
-
-
-
-            //submit form
-
-
-
-
-
-
-            // if (e.key === 'Enter' && !isTyping && frameSelectionManager.getSelectionCount() > 0) {
-    
-            //     // Ngăn chặn các hành vi mặc định khác của phím Enter
-            //     e.preventDefault();
-
-            //     // Lấy thông tin các frame đã chọn
-            //     const selectedFrames = frameSelectionManager.getAllSelectedFrames();
-                
-            //     // *** THAY ĐỔI QUAN TRỌNG: Chỉ lấy 'frameIdentifier' từ mỗi frame ***
-            //     const allFrameIdentifiers = selectedFrames.map(frame => frame.data.frameIdentifier);
-
-            //     let answerData;
-            //     answerData = allFrameIdentifiers;
-
-            //     // Mở modal mới và truyền dữ liệu đã được đơn giản hóa vào
-            //     openFrameVqaModal(answerData);
-
-            //     // Bỏ chọn tất cả các frame sau khi mở modal
-            //     frameSelectionManager.clearAllSelections();
-            //     return; // Dừng lại để không chạy các logic khác của phím Enter
-            // }
-
-
-
-
-
-
-
-
-            
-
-
-
-
-
-
-
-
-
-
-
-
 
                 const selectedCountInQueue = selectedQueueFrameIds.size;
                 if (selectedCountInQueue > 0 && !isTyping) {
@@ -871,8 +791,8 @@ async function ensureDresPrerequisites() {
                     }
                     const fps = await getFpsForVideo(framesToSubmit[0].videoName);
                     const frameIds = framesToSubmit.map(f => parseInt(f.frame_id_ori, 10));
-                    const minTimeMs = Math.round((Math.min(...frameIds) / DRES_FPS) * 1000);
-                    const maxTimeMs = Math.round((Math.max(...frameIds) / DRES_FPS) * 1000);
+                    const minTimeMs = Math.round((Math.min(...frameIds) / fps) * 1000);
+                    const maxTimeMs = Math.round((Math.max(...frameIds) / fps) * 1000);
                     console.log("frame id:", frame.frame_id_ori, "timeMs:", minTimeMs, maxTimeMs);
                     answers = [{ mediaItemName: firstVideoName, start: minTimeMs, end: maxTimeMs }];
                 }
@@ -938,6 +858,7 @@ async function ensureDresPrerequisites() {
 
         ws.onopen = () => {
             console.log("WebSocket connection established for user:", currentUser);
+            wsRetryDelayMs = 3000; // reset backoff
         };
 
         ws.onmessage = (event) => {
@@ -948,7 +869,8 @@ async function ensureDresPrerequisites() {
         ws.onclose = () => {
             console.log("WebSocket connection closed. Attempting to reconnect...");
             // Thử kết nối lại sau 3 giây
-            setTimeout(connectWebSocket, 3000);
+            setTimeout(connectWebSocket, wsRetryDelayMs);
+            wsRetryDelayMs = Math.min(wsRetryDelayMs * 2, 60000);
         };
 
         ws.onerror = (error) => {
@@ -1434,7 +1356,7 @@ async function ensureDresPrerequisites() {
         return newInput;
     }
     
-    function setupSearchInput(searchGroup) {
+   function setupSearchInput(searchGroup) {
         const textInput = searchGroup.querySelector('.search-input');
         const ocrInput = searchGroup.querySelector('.ocr-input');
         const imageInput = searchGroup.querySelector('.image-input');
@@ -1444,35 +1366,13 @@ async function ensureDresPrerequisites() {
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
 
-        // Auto-resize textarea
-        textInput.addEventListener('input', function() {
-            autoResizeTextarea(this); // Gọi hàm mới, code gọn hơn
+        // Auto-resize textarea + ẩn dòng dịch khi người dùng gõ
+        textInput.addEventListener('input', function () {
+            autoResizeTextarea(this);
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             if (translationDisplay) {
                 translationDisplay.classList.remove('visible');
             }
-
-            const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
-            if (suggestionDisplay) {
-            suggestionDisplay.addEventListener('click', function() {
-                if (this.classList.contains('visible') && this.dataset.suggestion) {
-                    const correctedText = this.dataset.suggestion;
-                    
-                    // Cần lấy lại textInput ở đây vì nó nằm ngoài scope của event listener này
-                    const textInput = searchGroup.querySelector('.search-input');
-                    
-                    textInput.value = correctedText + ' ';
-                    
-                    this.classList.remove('visible');
-                    this.dataset.suggestion = '';
-        
-                    autoResizeTextarea(textInput);
-                    textInput.focus(); // Focus lại vào ô search
-                    textInput.selectionStart = textInput.selectionEnd = textInput.value.length;
-                }
-            });
-        }
-
         });
         
         if (ocrInput) {
@@ -1702,7 +1602,6 @@ async function ensureDresPrerequisites() {
         if (isEventFilterEnabled) { // <<< THÊM DÒNG NÀY
             filterOptions.use_event_filter = true;
         }
-
 
         // 2. Kiểm tra và lấy giá trị từ bộ lọc OCR
         const ocrFilterContainer = searchGroup.querySelector('.ocr-filter-container');
@@ -2236,7 +2135,7 @@ function showToastNotification(message, type = 'success', duration = 2000) {
 // ====== BẮT ĐẦU PHIÊN BẢN MỚI CỦA HÀM OPENIMAGEMODAL ======
 
 async function openImageModal(clickedFrameData) {
-    // --- BƯỚC 1: KIỂM TRA DỮ LIỆU ĐẦU VÀO ---
+    // --- BƯỚC 1: KIỂM TRA DỮ LIỆU ĐẦU VÀO (Giữ nguyên) ---
     if (!clickedFrameData || !clickedFrameData.videoName || typeof clickedFrameData.frame_id_ori === 'undefined') {
         showToastNotification("Lỗi: Dữ liệu frame không đầy đủ để mở modal.", "error");
         console.error("Dữ liệu không hợp lệ được truyền cho openImageModal:", clickedFrameData);
@@ -2254,54 +2153,38 @@ async function openImageModal(clickedFrameData) {
     const videoId = clickedFrameData.videoName;
     const targetFrameIdOri = clickedFrameData.frame_id_ori;
 
-    // --- BƯỚC 2: TẢI DỮ LIỆU CẦN THIẾT (METADATA & VIDEO INFO) ---
-    let videoInfo = videoInfoCache[videoId];
+    // --- BƯỚC 2 (TỐI ƯU HÓA): TẢI METADATA TRỰC TIẾP TỪ NGINX LOCAL ---
     let videoMetadata = null;
-
     try {
-        const [metadataResponse, videoInfoResponse] = await Promise.all([
-            fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/metadata/${videoId}?t=${Date.now()}`),
-            videoInfo ? Promise.resolve(null) : fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/video_info/${videoId}`)
-        ]);
-
-        if (metadataResponse.ok) {
-            videoMetadata = await metadataResponse.json();
-        } else {
-            throw new Error(`Could not fetch metadata for video ${videoId}`);
+        // Chỉ cần một lời gọi fetch duy nhất đến file metadata.json trên local
+        // Nginx sẽ phục vụ file này từ thư mục /data/frames/... của bạn
+        const response = await fetch(`/frames/${videoId}/metadata.json?t=${Date.now()}`);
+        if (!response.ok) {
+            throw new Error(`Không thể tải file metadata.json local cho video ${videoId}`);
         }
+        videoMetadata = await response.json();
 
-        if (videoInfoResponse) {
-            if (videoInfoResponse.ok) {
-                videoInfo = await videoInfoResponse.json();
-                videoInfoCache[videoId] = videoInfo;
-            } else {
-                throw new Error("Server response not ok for video_info");
-            }
-        }
     } catch (error) {
-        console.error("Không thể tải thông tin video hoặc metadata:", error);
+        console.error("Lỗi khi tải metadata local:", error);
         showToastNotification("Lỗi: Không thể tải các frame lân cận.", "error");
         return;
     }
 
-    if (!videoInfo || !videoMetadata) {
-        showToastNotification("Lỗi: Dữ liệu không đầy đủ để hiển thị.", "error");
-        return;
-    }
-
-    const { frame_filenames } = videoInfo;
+    // Không cần videoInfo nữa, vì mọi thứ đã có trong metadata
     const folderUrlPath = `/frames/${videoId}`;
 
-    // --- BƯỚC 3: CHUẨN BỊ VÀ SẮP XẾP DỮ LIỆU FRAME ---
+    // --- BƯỚC 3: CHUẨN BỊ VÀ SẮP XẾP DỮ LIỆU FRAME (Giữ nguyên) ---
     const metadataForVideo = videoMetadata[videoId] || videoMetadata;
-    console.log("metadata_video:", metadataForVideo);
 
-    // Tạo mảng từ metadataForVideo (object -> array)
     const sortedFrames = Object.entries(metadataForVideo)
         .map(([frameKey, metadata]) => {
-            // frameKey ví dụ: "frame_001"
-            const filename = `${frameKey}.webp`;  // hoặc giữ nguyên nếu tên file khác
-            const frameNum = parseInt(frameKey.split('_')[1], 10);
+            if (typeof metadata !== 'object' || metadata === null || !metadata.id) {
+                return null; // Bỏ qua các entry không hợp lệ
+            }
+            const filename = `${frameKey}.webp`;
+            const frameNumMatch = frameKey.match(/\d+/);
+            if (!frameNumMatch) return null; // Bỏ qua nếu không tìm thấy số trong key
+            const frameNum = parseInt(frameNumMatch[0], 10);
 
             return {
                 ...metadata,
@@ -2311,13 +2194,12 @@ async function openImageModal(clickedFrameData) {
                 timestamp: metadata['time-stamp'] || metadata.timestamp
             };
         })
-        .filter(Boolean) // loại bỏ null/undefined nếu có
-        .sort((a, b) => a.frame_id_ori - b.frame_id_ori); // sort theo id gốc
+        .filter(Boolean)
+        .sort((a, b) => a.frame_id_ori - b.frame_id_ori);
 
-    // --- BƯỚC 4: TÌM FRAME MỤC TIÊU BẰNG ID GỐC ---
+    // --- BƯỚC 4, 5, 6 (Giữ nguyên toàn bộ logic còn lại) ---
     const currentIndexInList = sortedFrames.findIndex(frame => frame.frame_id_ori === targetFrameIdOri);
     
-    console.log("index list", sortedFrames);
     if (currentIndexInList === -1) {
         console.error("Frame được click không tìm thấy trong danh sách đã xử lý.", { targetFrameIdOri, videoId });
         showToastNotification("Lỗi: Không tìm thấy frame trong metadata.", "error");
@@ -2326,7 +2208,6 @@ async function openImageModal(clickedFrameData) {
 
     const clickedFrameNumber = sortedFrames[currentIndexInList].frameNum;
 
-    // --- BƯỚC 5: CÁC HÀM NỘI BỘ VÀ EVENT HANDLERS ---
     function updateMainPreview(frameNum) {
         if (frameNum === currentFrameNumber) return;
         
@@ -2343,8 +2224,7 @@ async function openImageModal(clickedFrameData) {
             frameIdentifier: `${videoId}_${frameData.id}`,
             frame_id_ori: frameData.id,
             id: frameData.frameNum,
-            isFromVideo: false, // Mặc định
-            // Thêm các trường khác nếu cần
+            isFromVideo: false,
         };
         modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
 
@@ -2395,7 +2275,7 @@ async function openImageModal(clickedFrameData) {
     
     const clickThumbnailHandler = (e) => {
         if (e.target.tagName === 'IMG') {
-            updateMainPreview(parseInt(e.target.dataset.frameNumber));
+            updateMainPreview(parseInt(e.target.dataset.frameNumber, 10));
         }
     };
 
@@ -2404,13 +2284,12 @@ async function openImageModal(clickedFrameData) {
         document.removeEventListener('keydown', keydownHandler);
         thumbnailStrip.removeEventListener('click', clickThumbnailHandler);
         modal.style.display = 'none';
-        mainPreview.src = ""; // Xóa ảnh để giải phóng bộ nhớ
+        mainPreview.src = "";
         if (typeof onClosedCallback === 'function') {
             setTimeout(onClosedCallback, 50); 
         }
     }
     
-    // --- BƯỚC 6: KHỞI TẠO VÀ HIỂN THỊ MODAL ---
     thumbnailStrip.innerHTML = '';
     
     const start = Math.max(0, currentIndexInList - 50);
@@ -2422,7 +2301,7 @@ async function openImageModal(clickedFrameData) {
         thumb.src = `${folderUrlPath}/${frameData.filename}`;
         thumb.dataset.frameNumber = frameData.frameNum;
         if (frameData.frameNum === clickedFrameNumber) {
-            thumb.classList.add('active-frame'); // Frame ban đầu được click
+            thumb.classList.add('active-frame');
         }
         thumbnailStrip.appendChild(thumb);
     }
@@ -2432,7 +2311,7 @@ async function openImageModal(clickedFrameData) {
     thumbnailStrip.addEventListener('click', clickThumbnailHandler);
     modal.querySelector('.modal-overlay').onclick = () => closeModal();
 
-    updateMainPreview(clickedFrameNumber); // Tải ảnh chính đầu tiên
+    updateMainPreview(clickedFrameNumber);
     modal.style.display = 'flex';
     
     setTimeout(() => {
@@ -2533,7 +2412,7 @@ function openVideoModal(videoName, timestamp) {
     // <<< KẾT THÚC THAY ĐỔI >>>
     
     const handleKeyDown = (e) => {
-        if (e.key === 'Escape') { closeModal(); return; }
+        if (e.key === 'Escape') { closePreviewModal(); return; }
         if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
 
         const activeElement = document.activeElement;
@@ -2605,7 +2484,7 @@ function openVideoModal(videoName, timestamp) {
 
             sendWebSocketMessage('add_frames', { frames: [newFrameData] });
             showToastNotification(`Đã chụp và thêm frame ${newFrameData.frameIdentifier} vào queue!`, 'success');
-            closeModal();
+            closePreviewModal();
         } catch (error) {
             console.error("Lỗi khi chụp frame:", error);
             showToastNotification("Không thể chụp frame.", "error");
@@ -2615,7 +2494,7 @@ function openVideoModal(videoName, timestamp) {
     
     // <<< BẮT ĐẦU THAY ĐỔI >>>
     // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
-    const closeModal = () => {
+    const closePreviewModal = () => {
         // Hủy HLS player instance nếu nó tồn tại
         if (hlsPlayerInstance) {
             hlsPlayerInstance.destroy();
@@ -2652,7 +2531,7 @@ function openVideoModal(videoName, timestamp) {
     
     muteBtn.onclick = toggleMute;
     volumeSlider.addEventListener('input', handleVolumeChange);
-    
+    const closeModal = closePreviewModal;
     modal.querySelector('.modal-overlay').onclick = closeModal;
     closeBtn.onclick = closeModal;
     document.addEventListener('keydown', handleKeyDown);
@@ -3328,10 +3207,6 @@ function toggleFilter(filterType) {
             formData.append("file", imageFile);
             formData.append("user_id", currentUserId);
             formData.append("query_id", queryId);
-
-            if (isEventFilterEnabled) { // <<< THÊM KHỐI LỆNH NÀY
-                formData.append("use_event_filter", "true");
-            }
 
             if (currentSelectedModel && currentSelectedModel !== 'all') {
                 formData.append("model_name", currentSelectedModel);
