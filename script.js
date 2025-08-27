@@ -9,7 +9,6 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DRES_FPS = 25; // Tốc độ khung hình/giây của video để tính toán.
     const DEFAULT_DRES_SESSION_ID = 'mudM8rLlMfXy9ztmPRbSPGMD4rgv7Lwy'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
@@ -20,7 +19,6 @@ document.addEventListener('DOMContentLoaded', function() {
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
     let hlsPlayerInstance = null;
-    // Thêm một tham chiếu đến main-content để dùng cho IntersectionObserver
     const mainContent = document.querySelector('.main-content');
 
 
@@ -32,6 +30,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let currentUser = null;
     let ws = null;
+    let wsRetryDelayMs = 3000;
     let userColors = {}; // Lưu màu của tất cả user
 
     let metadataCache = new Map();
@@ -43,7 +42,6 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
-    const textToTextBtn = document.getElementById('textToTextBtn');
     const imageToImageBtn = document.getElementById('imageToImageBtn');
     const translateBtn = document.getElementById('translateBtn');
     const searchInputsContainer = document.getElementById('searchInputsContainer');
@@ -62,21 +60,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const queueCountSpan = document.getElementById('queueCount');
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
     const asrFilterBtn = document.getElementById('asrFilterBtn');
-    const vqaSubmitBtn = document.getElementById('vqaSubmitBtn');
     const eventFilterBtn = document.getElementById('eventFilterBtn');
-    const vqaModal = document.getElementById('vqaModal');
-    const vqaForm = document.getElementById('vqaForm');
-    const vqaIdInput = document.getElementById('vqaIdInput');
-    const vqaAnswerInput = document.getElementById('vqaAnswerInput');
-    const vqaCloseBtn = vqaModal.querySelector('.close-btn');
-    const vqaOverlay = vqaModal.querySelector('.modal-overlay');
-
-    const frameVqaModal = document.getElementById('frameVqaModal');
-    const frameVqaForm = document.getElementById('frameVqaForm');
-    const frameVqaIdInput = document.getElementById('frameVqaIdInput');
-    const frameVqaAnswerDisplay = document.getElementById('frameVqaAnswerDisplay');
-    const frameVqaCloseBtn = frameVqaModal.querySelector('.close-btn');
-    const frameVqaOverlay = frameVqaModal.querySelector('.modal-overlay');
 
     const submitAsQaBtn = document.getElementById('submitAsQaBtn');
     const submitAsKisBtn = document.getElementById('submitAsKisBtn');
@@ -398,59 +382,6 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('keydown', (e) => {
             const activeElement = document.activeElement;
             const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
-
-
-
-
-            //submit form
-
-
-
-
-
-
-            // if (e.key === 'Enter' && !isTyping && frameSelectionManager.getSelectionCount() > 0) {
-    
-            //     // Ngăn chặn các hành vi mặc định khác của phím Enter
-            //     e.preventDefault();
-
-            //     // Lấy thông tin các frame đã chọn
-            //     const selectedFrames = frameSelectionManager.getAllSelectedFrames();
-                
-            //     // *** THAY ĐỔI QUAN TRỌNG: Chỉ lấy 'frameIdentifier' từ mỗi frame ***
-            //     const allFrameIdentifiers = selectedFrames.map(frame => frame.data.frameIdentifier);
-
-            //     let answerData;
-            //     answerData = allFrameIdentifiers;
-
-            //     // Mở modal mới và truyền dữ liệu đã được đơn giản hóa vào
-            //     openFrameVqaModal(answerData);
-
-            //     // Bỏ chọn tất cả các frame sau khi mở modal
-            //     frameSelectionManager.clearAllSelections();
-            //     return; // Dừng lại để không chạy các logic khác của phím Enter
-            // }
-
-
-
-
-
-
-
-
-            
-
-
-
-
-
-
-
-
-
-
-
-
 
                 const selectedCountInQueue = selectedQueueFrameIds.size;
                 if (selectedCountInQueue > 0 && !isTyping) {
@@ -861,8 +792,8 @@ async function ensureDresPrerequisites() {
                     }
                     const fps = await getFpsForVideo(framesToSubmit[0].videoName);
                     const frameIds = framesToSubmit.map(f => parseInt(f.frame_id_ori, 10));
-                    const minTimeMs = Math.round((Math.min(...frameIds) / DRES_FPS) * 1000);
-                    const maxTimeMs = Math.round((Math.max(...frameIds) / DRES_FPS) * 1000);
+                    const minTimeMs = Math.round((Math.min(...frameIds) / fps) * 1000);
+                    const maxTimeMs = Math.round((Math.max(...frameIds) / fps) * 1000);
                     console.log("frame id:", frame.frame_id_ori, "timeMs:", minTimeMs, maxTimeMs);
                     answers = [{ mediaItemName: firstVideoName, start: minTimeMs, end: maxTimeMs }];
                 }
@@ -928,6 +859,7 @@ async function ensureDresPrerequisites() {
 
         ws.onopen = () => {
             console.log("WebSocket connection established for user:", currentUser);
+            wsRetryDelayMs = 3000; // reset backoff
         };
 
         ws.onmessage = (event) => {
@@ -938,7 +870,8 @@ async function ensureDresPrerequisites() {
         ws.onclose = () => {
             console.log("WebSocket connection closed. Attempting to reconnect...");
             // Thử kết nối lại sau 3 giây
-            setTimeout(connectWebSocket, 3000);
+            setTimeout(connectWebSocket, wsRetryDelayMs);
+            wsRetryDelayMs = Math.min(wsRetryDelayMs * 2, 60000);
         };
 
         ws.onerror = (error) => {
@@ -1424,7 +1357,7 @@ async function ensureDresPrerequisites() {
         return newInput;
     }
     
-    function setupSearchInput(searchGroup) {
+   function setupSearchInput(searchGroup) {
         const textInput = searchGroup.querySelector('.search-input');
         const ocrInput = searchGroup.querySelector('.ocr-input');
         const imageInput = searchGroup.querySelector('.image-input');
@@ -1434,35 +1367,13 @@ async function ensureDresPrerequisites() {
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
 
-        // Auto-resize textarea
-        textInput.addEventListener('input', function() {
-            autoResizeTextarea(this); // Gọi hàm mới, code gọn hơn
+        // Auto-resize textarea + ẩn dòng dịch khi người dùng gõ
+        textInput.addEventListener('input', function () {
+            autoResizeTextarea(this);
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             if (translationDisplay) {
                 translationDisplay.classList.remove('visible');
             }
-
-            const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
-            if (suggestionDisplay) {
-            suggestionDisplay.addEventListener('click', function() {
-                if (this.classList.contains('visible') && this.dataset.suggestion) {
-                    const correctedText = this.dataset.suggestion;
-                    
-                    // Cần lấy lại textInput ở đây vì nó nằm ngoài scope của event listener này
-                    const textInput = searchGroup.querySelector('.search-input');
-                    
-                    textInput.value = correctedText + ' ';
-                    
-                    this.classList.remove('visible');
-                    this.dataset.suggestion = '';
-        
-                    autoResizeTextarea(textInput);
-                    textInput.focus(); // Focus lại vào ô search
-                    textInput.selectionStart = textInput.selectionEnd = textInput.value.length;
-                }
-            });
-        }
-
         });
         
         if (ocrInput) {
@@ -2306,7 +2217,7 @@ async function openImageModal(clickedFrameData) {
     // --- BƯỚC 4: TÌM FRAME MỤC TIÊU BẰNG ID GỐC ---
     const currentIndexInList = sortedFrames.findIndex(frame => frame.frame_id_ori === targetFrameIdOri);
     
-    console.log("index list", sortedFrames);
+    // console.log("index list", sortedFrames);
     if (currentIndexInList === -1) {
         console.error("Frame được click không tìm thấy trong danh sách đã xử lý.", { targetFrameIdOri, videoId });
         showToastNotification("Lỗi: Không tìm thấy frame trong metadata.", "error");
@@ -2522,7 +2433,7 @@ function openVideoModal(videoName, timestamp) {
     // <<< KẾT THÚC THAY ĐỔI >>>
     
     const handleKeyDown = (e) => {
-        if (e.key === 'Escape') { closeModal(); return; }
+        if (e.key === 'Escape') { closePreviewModal(); return; }
         if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
 
         const activeElement = document.activeElement;
@@ -2594,7 +2505,7 @@ function openVideoModal(videoName, timestamp) {
 
             sendWebSocketMessage('add_frames', { frames: [newFrameData] });
             showToastNotification(`Đã chụp và thêm frame ${newFrameData.frameIdentifier} vào queue!`, 'success');
-            closeModal();
+            closePreviewModal();
         } catch (error) {
             console.error("Lỗi khi chụp frame:", error);
             showToastNotification("Không thể chụp frame.", "error");
@@ -2604,7 +2515,7 @@ function openVideoModal(videoName, timestamp) {
     
     // <<< BẮT ĐẦU THAY ĐỔI >>>
     // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
-    const closeModal = () => {
+    const closePreviewModal = () => {
         // Hủy HLS player instance nếu nó tồn tại
         if (hlsPlayerInstance) {
             hlsPlayerInstance.destroy();
@@ -2641,7 +2552,7 @@ function openVideoModal(videoName, timestamp) {
     
     muteBtn.onclick = toggleMute;
     volumeSlider.addEventListener('input', handleVolumeChange);
-    
+    const closeModal = closePreviewModal;
     modal.querySelector('.modal-overlay').onclick = closeModal;
     closeBtn.onclick = closeModal;
     document.addEventListener('keydown', handleKeyDown);
