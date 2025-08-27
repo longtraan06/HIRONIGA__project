@@ -9,7 +9,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'mudM8rLlMfXy9ztmPRbSPGMD4rgv7Lwy'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'vhxVT57AOd1klQw5TZ8xGr82puTfqZzS'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
