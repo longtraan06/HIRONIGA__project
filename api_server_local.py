@@ -36,15 +36,6 @@ FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_
 app = FastAPI()
 # Kết nối Redis
 
-# origins = [
-#     "http://localhost",
-#     "http://localhost:8080",
-#     "http://127.0.0.1",
-#     "http://127.0.0.1:8080",
-#     "http://192.168.0.53",       # IP local của bạn
-#     "http://192.168.0.53:8080",  # IP local của bạn với cổng
-# ]
-
 allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
 
 app.add_middleware(
