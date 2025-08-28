@@ -802,6 +802,14 @@ button:focus, input:focus, textarea:focus {
     transition: transform 0.2s ease, box-shadow 0.2s ease;
     cursor: pointer;
 }
+
+.queue-frame-item:hover{
+    transform: translateY(-3px) scale(1.02);
+    box-shadow: var(--shadow-medium);
+    border-color: #EED3B1;
+    z-index: 1;
+}
+
 .queue-frame-item.selected {
     box-shadow: 0 0 0 3px rgb(0, 170, 255), 0 5px 5px rgba(0,0,0,0.2);
     z-index: 10;
@@ -824,6 +832,7 @@ button:focus, input:focus, textarea:focus {
     width: auto;
     display: block;
 }
+
 .queue-frame-user {
     position: absolute;
     top: 4px;
@@ -2359,3 +2368,47 @@ button:focus, input:focus, textarea:focus {
     position: relative;
     z-index: 1001; 
 }                                                                                                                                           
+
+.form-submit-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 2px 5px; /* Điều chỉnh padding cho gọn gàng */
+    gap: 15px;
+}
+
+#formSubmitText {
+    /* flex-grow: 1; Cho phép ô input chiếm hết không gian còn lại */
+    padding: 8px 12px;
+    font-size: 15px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 8px;
+    background-color: white;
+    color: var(--matcha-dark);
+    transition: all 0.2s ease;
+}
+
+#formSubmitText:focus {
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
+}
+
+.form-submit-actions {
+    display: flex;
+    gap: 10px;
+    flex-shrink: 0; /* Ngăn các nút bị co lại */
+}
+
+#formSubmitBtn:disabled {
+    background-color: #ccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+/* Style cho nút chuyển đổi chế độ */
+#toggleQueueModeBtn.active {
+    background: var(--matcha-pale);
+    color: var(--matcha-dark);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+}
