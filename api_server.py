@@ -6,6 +6,7 @@ from milvus_indexing import MilvusManager
 import tempfile
 import os
 import re
+import csv
 from PIL import Image
 from fastapi import HTTPException
 import time
@@ -28,12 +29,22 @@ import aioredis
 import asyncio
 import pickle
 import base64
+from fastapi.middleware.cors import CORSMiddleware
 
-
-VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
+FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
 
 app = FastAPI()
 # Kết nối Redis
+
+allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origin_regex=allowed_origin_regex,
+    allow_credentials=True, # Cần thiết cho một số kịch bản
+    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, etc.)
+    allow_headers=["*"],    # Cho phép tất cả các header
+)   
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
@@ -53,12 +64,7 @@ Available models:
 """
 
 model_paths=[
-    # "google/siglip2-base-patch16-512",
     "google/siglip2-large-patch16-512",
-    # "google/siglip2-so400m-patch16-512",
-    # "google/siglip2-so400m-patch16-naflex",
-    # "google/siglip2-giant-opt-patch16-384",
-    # "google/siglip2-so400m-patch16-384"
 ]
 
 milvus = MilvusManager(
@@ -396,13 +402,10 @@ class TextSearchRequest(BaseModel):
     ocr: str = None
     use_event_filter: Optional[bool] = False
 
-class VqaSubmissionRequest(BaseModel):
-    id: str
-    answer: str
-
-class FrameSubmissionRequest(BaseModel):
-    id: str
-    answer: Optional[List[str]] = None
+class FormSubmitRequest(BaseModel):
+    video_name: str
+    frame_indices: List[int]
+    answer: Optional[str] = None
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -1179,10 +1182,47 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         # }
         # await manager.publish_update(json.dumps(leave_notification))
 
+@app.post("/api/form-submit")
+async def handle_form_submit(request: FormSubmitRequest):
+    """
+    Nhận dữ liệu từ Form Submit Queue và tạo file CSV trên server.
+    """
+    try:
+        # Đảm bảo thư mục lưu trữ tồn tại
+        os.makedirs(FORM_SUBMIT_SAVE_PATH, exist_ok=True)
 
+        # Tạo một tên file duy nhất dựa trên timestamp và tên video
+        filename = f"{int(time.time())}_{request.video_name}.csv"
+        filepath = os.path.join(FORM_SUBMIT_SAVE_PATH, filename)
+
+        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+
+            # Trường hợp 1: User có nhập "answer"
+            if request.answer and request.answer.strip():
+                # Ghi header
+                writer.writerow(["video_id", "frame_index", "answer"])
+                # Ghi mỗi frame trên một dòng
+                for frame_index in request.frame_indices:
+                    writer.writerow([request.video_name, frame_index, request.answer])
+            
+            # Trường hợp 2: User không nhập "answer"
+            else:
+                # Ghi tất cả trên một dòng
+                row_data = [request.video_name] + request.frame_indices
+                writer.writerow(row_data)
+
+        print(f"Form Submit data saved successfully to: {filepath}")
+        return {"success": True, "message": f"Data saved to {filename}"}
+
+    except Exception as e:
+        print(f"ERROR saving form submit data: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to save data: {str(e)}")
 
 
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
-# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
+# usage uvicorn api_server_local:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
