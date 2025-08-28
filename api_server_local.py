@@ -28,31 +28,12 @@ import aioredis
 import asyncio
 import pickle
 import base64
-from fastapi.middleware.cors import CORSMiddleware
+
 
 VQA_SAVE_PATH = "/workspace/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results" 
 
 app = FastAPI()
 # Kết nối Redis
-
-# origins = [
-#     "http://localhost",
-#     "http://localhost:8080",
-#     "http://127.0.0.1",
-#     "http://127.0.0.1:8080",
-#     "http://192.168.0.53",       # IP local của bạn
-#     "http://192.168.0.53:8080",  # IP local của bạn với cổng
-# ]
-
-allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origin_regex=allowed_origin_regex,
-    allow_credentials=True, # Cần thiết cho một số kịch bản
-    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, etc.)
-    allow_headers=["*"],    # Cho phép tất cả các header
-)   
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
@@ -1197,6 +1178,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         #     "payload": {"users": remaining_users}
         # }
         # await manager.publish_update(json.dumps(leave_notification))
+
+
 
 
 # Mount static files
