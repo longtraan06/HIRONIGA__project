@@ -96,6 +96,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const formSubmitQueueContainer = document.getElementById('formSubmitQueue');
     const formSubmitQueueFramesContainer = document.getElementById('formSubmitQueueFrames');
     const formSubmitText = document.getElementById('formSubmitText');
+    const formSubmitFilename = document.getElementById('formSubmitFilename');
     const formSubmitBtn = document.getElementById('formSubmitBtn');
     const clearFormSubmitQueueBtn = document.getElementById('clearFormSubmitQueueBtn');
     const toggleQueueModeBtn = document.getElementById('toggleQueueModeBtn');
@@ -551,6 +552,13 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleQueueModeBtn.addEventListener('click', toggleQueueMode);
         formSubmitBtn.addEventListener('click', handleFormSubmit);
         clearFormSubmitQueueBtn.addEventListener('click', clearFormSubmitQueue);
+
+        if (formSubmitFilename) {
+            formSubmitFilename.addEventListener('input', () => {
+                // Chạy lại logic kiểm tra mỗi khi người dùng gõ
+                formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
+            });
+        }
 
         updateLayoutButton();
         setTimeout(function() {
@@ -2486,11 +2494,18 @@ function openVideoModal(videoName, timestamp) {
             case 'm': e.preventDefault(); toggleMute(); break;
             case 'arrowright':
                 e.preventDefault();
-                if (e.repeat) { player.playbackRate = FAST_FORWARD_RATE; }
+                if (e.shiftKey) { // Nếu giữ Shift
+                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
+                    player.playbackRate = FAST_FORWARD_RATE;
+                }
                 break;
+
             case 'arrowleft':
                 e.preventDefault();
-                if (e.repeat && !rewindInterval) {
+                if (e.shiftKey) { // Nếu giữ Shift
+                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
                     rewindInterval = setInterval(() => {
                         player.currentTime = Math.max(0, player.currentTime - 0.2);
                     }, 100);
@@ -2499,26 +2514,28 @@ function openVideoModal(videoName, timestamp) {
         }
     };
 
-    const handleKeyUp = (e) => {
-        switch (e.key) {
-            case 'ArrowRight':
-                e.preventDefault();
-                if (!e.repeat && player.playbackRate === 1.0) {
-                    player.currentTime += SKIP_TIME;
-                }
-                player.playbackRate = 1.0;
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                if (rewindInterval) {
-                    clearInterval(rewindInterval);
-                    rewindInterval = null;
-                } else {
-                    player.currentTime -= SKIP_TIME;
-                }
-                break;
-        }
-    };
+const handleKeyUp = (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
+    }
+    switch (e.key) {
+        case 'ArrowRight':
+            e.preventDefault();
+            if (!e.repeat && !e.shiftKey) {
+                player.currentTime += SKIP_TIME;
+            }
+            break;
+        case 'ArrowLeft':
+            e.preventDefault();
+            if (rewindInterval) { // Dừng tua lùi (khi giữ phím)
+                clearInterval(rewindInterval);
+                rewindInterval = null;
+            } else if (!e.shiftKey) { // Tua 1 đoạn ngắn khi nhấn-nhả (không giữ)
+                player.currentTime -= SKIP_TIME;
+            }
+            break;
+    }
+};
 
     const captureFrameAndAddToQueue = async () => { /* Giữ nguyên hàm này */
         player.pause();
@@ -3470,7 +3487,7 @@ async function getFpsForVideo(videoName) {
     } else {
         // 2. Fetch metadata nếu chưa có trong cache
         try {
-            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/metadata/${videoName}`);
+            const response = await fetch(`/frames/${videoName}/metadata.json?t=${Date.now()}`);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             const fullMetadata = await response.json();
             
@@ -3522,7 +3539,7 @@ async function showKeyframePreview(frameData) {
 
     try {
         // Bước 3: Gọi API để lấy frame được click và 20 frame tiếp theo
-        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=0&look_ahead=20`);        
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=10&look_ahead=20`);        
         if (!response.ok) {
             throw new Error(`Lỗi API: ${response.statusText}`);
         }
@@ -3586,7 +3603,7 @@ async function showKeyframePreview(frameData) {
 
             // Làm nổi bật frame được click (luôn là frame đầu tiên)
             if (neighborData.frame_id_ori === frameData.frame_id_ori) {
-                 thumb.classList.add('highlighted');
+                thumb.classList.add('highlighted');
             }
 
             previewThumbnails.appendChild(thumb);
@@ -3595,6 +3612,18 @@ async function showKeyframePreview(frameData) {
         // Bước 5: Đợi tất cả ảnh tải xong để tránh hiệu ứng "pop-in"
         await Promise.all(imageLoadPromises);
         
+        setTimeout(() => {
+            const highlightedThumb = previewThumbnails.querySelector('.highlighted');
+            if (highlightedThumb) {
+                // Cuộn đến frame được highlight và đặt nó vào giữa
+                highlightedThumb.scrollIntoView({
+                    behavior: 'auto', // 'smooth' để cuộn mượt, 'auto' để cuộn ngay lập tức
+                    inline: 'start', // Quan trọng: căn giữa theo chiều ngang
+                    block: 'nearest'  // Căn theo chiều dọc
+                });
+            }
+        }, 50);
+
         // Bước 6: Hoàn tất - không cần cuộn nữa vì thanh preview sẽ tự bắt đầu từ đầu
 
     } catch (error) {
@@ -3970,7 +3999,7 @@ function renderFormSubmitQueue() {
     setupDragAndDrop();
 
     // Cập nhật trạng thái nút Submit
-    formSubmitBtn.disabled = formSubmitQueue.length === 0;
+    formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
 }
 
 
@@ -4032,14 +4061,15 @@ async function handleFormSubmit() {
     const payload = {
         video_name: formSubmitLockedVideoId,
         frame_indices: formSubmitQueue.map(f => f.frame_id_ori),
-        answer: formSubmitText.value.trim()
+        answer: formSubmitText.value.trim(),
+        filename: formSubmitFilename.value.trim()
     };
 
     try {
         formSubmitBtn.disabled = true;
         formSubmitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
 
-        const response = await fetch('/api/form-submit', {
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/form-submit`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload)
@@ -4066,6 +4096,7 @@ function clearFormSubmitQueue() {
     formSubmitQueue = [];
     formSubmitLockedVideoId = null;
     formSubmitText.value = '';
+    formSubmitFilename.value = ''; // <<< THÊM MỚI
     renderFormSubmitQueue(); 
 }
 
