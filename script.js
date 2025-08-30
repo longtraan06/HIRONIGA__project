@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let isRestoringState = false;
     let currentLayout = 'grid';
     let isEventFilterEnabled = false;
-    // Biến cho layout Nhóm (Grouped)
+    // Biến zcho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
@@ -90,6 +90,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const formSubmitQueueContainer = document.getElementById('formSubmitQueue');
     const formSubmitQueueFramesContainer = document.getElementById('formSubmitQueueFrames');
     const formSubmitText = document.getElementById('formSubmitText');
+    const formSubmitFilename = document.getElementById('formSubmitFilename');
     const formSubmitBtn = document.getElementById('formSubmitBtn');
     const clearFormSubmitQueueBtn = document.getElementById('clearFormSubmitQueueBtn');
     const toggleQueueModeBtn = document.getElementById('toggleQueueModeBtn');
@@ -381,10 +382,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         clearQueueBtn.addEventListener('click', () => {
             if (submitQueueFrames.size > 0) {
-                if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
+                // if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
                     // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
-                    sendWebSocketMessage('clear_all', {});
-                }
+                sendWebSocketMessage('clear_all', {});
+                // }
             }
         });
 
@@ -545,6 +546,13 @@ document.addEventListener('DOMContentLoaded', function() {
         toggleQueueModeBtn.addEventListener('click', toggleQueueMode);
         formSubmitBtn.addEventListener('click', handleFormSubmit);
         clearFormSubmitQueueBtn.addEventListener('click', clearFormSubmitQueue);
+
+        if (formSubmitFilename) {
+            formSubmitFilename.addEventListener('input', () => {
+                // Chạy lại logic kiểm tra mỗi khi người dùng gõ
+                formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
+            });
+        }
 
         updateLayoutButton();
         setTimeout(function() {
@@ -3533,7 +3541,7 @@ async function showKeyframePreview(frameData) {
 
     try {
         // Bước 3: Gọi API để lấy frame được click và 20 frame tiếp theo
-        const response = await fetch(`/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=0&look_ahead=20`);
+        const response = await fetch(`/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=20&look_ahead=20`);
         
         if (!response.ok) {
             throw new Error(`Lỗi API: ${response.statusText}`);
@@ -3989,7 +3997,7 @@ function renderFormSubmitQueue() {
     setupDragAndDrop();
 
     // Cập nhật trạng thái nút Submit
-    formSubmitBtn.disabled = formSubmitQueue.length === 0;
+    formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
 }
 
 
@@ -4057,7 +4065,8 @@ async function handleFormSubmit() {
     const payload = {
         video_name: formSubmitLockedVideoId,
         frame_indices: formSubmitQueue.map(f => f.frame_id_ori),
-        answer: formSubmitText.value.trim()
+        answer: formSubmitText.value.trim(),
+        filename: formSubmitFilename.value.trim()
     };
 
     try {
@@ -4094,6 +4103,7 @@ function clearFormSubmitQueue() {
     formSubmitQueue = [];
     formSubmitLockedVideoId = null;
     formSubmitText.value = '';
+    formSubmitFilename.value = '';
     renderFormSubmitQueue(); 
 }
 
