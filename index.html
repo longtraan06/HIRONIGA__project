@@ -25,6 +25,7 @@
             </div>
 
             <div class="header-buttons">
+                
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
@@ -317,7 +318,10 @@
 
     <div id="formSubmitQueue" class="submit-queue">
         <div class="submit-queue-header form-submit-header">
-            <input type="text" id="formSubmitText" placeholder="Nhập câu trả lời (tùy chọn)...">
+            <div class="form-inputs-wrapper">
+                <input type="text" id="formSubmitFilename" placeholder="Nhập tên file (bắt buộc)..." required>
+                <input type="text" id="formSubmitText" placeholder="Nhập câu trả lời (tùy chọn)...">
+            </div>
             <div class="form-submit-actions">
                 <button id="formSubmitBtn" class="queue-action-btn submit-btn" disabled>
                     <i class="fas fa-paper-plane"></i> Submit
