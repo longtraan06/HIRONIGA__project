@@ -65,13 +65,14 @@ Available models:
 
 model_paths=[
     "google/siglip2-large-patch16-512",
+    "google/siglip2-giant-opt-patch16-384"
 ]
 
 milvus = MilvusManager(
                         host="192.168.20.156",
                         port='6090',
                         model_paths=model_paths,
-                        mode = 'ACM',
+                        mode = 'AIC',
                         # prefix='batch1'
                     )
 
@@ -230,9 +231,6 @@ async def redis_stats():
 # clear search cache: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=search
 # clear rate limit counters: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=rate_limit
 # get redis stats: curl http://192.168.20.156:8080/api/admin/redis-stats
-
-
-
 
 
 # Định nghĩa decorator cache_result trước khi sử dụng
@@ -406,6 +404,7 @@ class FormSubmitRequest(BaseModel):
     video_name: str
     frame_indices: List[int]
     answer: Optional[str] = None
+    filename: str
 
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
@@ -1191,9 +1190,11 @@ async def handle_form_submit(request: FormSubmitRequest):
         # Đảm bảo thư mục lưu trữ tồn tại
         os.makedirs(FORM_SUBMIT_SAVE_PATH, exist_ok=True)
 
-        # Tạo một tên file duy nhất dựa trên timestamp và tên video
-        filename = f"{int(time.time())}_{request.video_name}.csv"
-        filepath = os.path.join(FORM_SUBMIT_SAVE_PATH, filename)
+        # Tạo một tên file 
+        safe_filename_base = re.sub(r'[\\/*?:"<>|]', "", request.filename)
+        safe_filename = f"{safe_filename_base}.csv"
+
+        filepath = os.path.join(FORM_SUBMIT_SAVE_PATH, safe_filename)
 
         with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
             writer = csv.writer(csvfile)
@@ -1201,7 +1202,7 @@ async def handle_form_submit(request: FormSubmitRequest):
             # Trường hợp 1: User có nhập "answer"
             if request.answer and request.answer.strip():
                 # Ghi header
-                writer.writerow(["video_id", "frame_index", "answer"])
+                # writer.writerow(["video_id", "frame_index", "answer"])
                 # Ghi mỗi frame trên một dòng
                 for frame_index in request.frame_indices:
                     writer.writerow([request.video_name, frame_index, request.answer])
@@ -1213,7 +1214,7 @@ async def handle_form_submit(request: FormSubmitRequest):
                 writer.writerow(row_data)
 
         print(f"Form Submit data saved successfully to: {filepath}")
-        return {"success": True, "message": f"Data saved to {filename}"}
+        return {"success": True, "message": f"Data saved to {safe_filename}"}
 
     except Exception as e:
         print(f"ERROR saving form submit data: {e}")
@@ -1225,4 +1226,4 @@ async def handle_form_submit(request: FormSubmitRequest):
 # Mount static files
 app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
-# usage uvicorn api_server_local:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
+# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
