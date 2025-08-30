@@ -2505,39 +2505,49 @@ function openVideoModal(videoName, timestamp) {
             case 'm': e.preventDefault(); toggleMute(); break;
             case 'arrowright':
                 e.preventDefault();
-                if (e.repeat) { player.playbackRate = FAST_FORWARD_RATE; }
+                if (e.shiftKey) { // Nếu giữ Shift
+                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
+                    player.playbackRate = FAST_FORWARD_RATE;
+                }
                 break;
+
             case 'arrowleft':
                 e.preventDefault();
-                if (e.repeat && !rewindInterval) {
+                if (e.shiftKey) { // Nếu giữ Shift
+                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
                     rewindInterval = setInterval(() => {
                         player.currentTime = Math.max(0, player.currentTime - 0.2);
                     }, 100);
                 }
                 break;
-        }
+            }
     };
 
-    const handleKeyUp = (e) => {
-        switch (e.key) {
-            case 'ArrowRight':
-                e.preventDefault();
-                if (!e.repeat && player.playbackRate === 1.0) {
-                    player.currentTime += SKIP_TIME;
-                }
-                player.playbackRate = 1.0;
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                if (rewindInterval) {
-                    clearInterval(rewindInterval);
-                    rewindInterval = null;
-                } else {
-                    player.currentTime -= SKIP_TIME;
-                }
-                break;
-        }
-    };
+const handleKeyUp = (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+        player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
+    }
+    switch (e.key) {
+        case 'ArrowRight':
+            e.preventDefault();
+            if (!e.repeat && !e.shiftKey) {
+                player.currentTime += SKIP_TIME;
+            }
+            break;
+
+        case 'ArrowLeft':
+            e.preventDefault();
+            if (rewindInterval) { // Dừng tua lùi (khi giữ phím)
+                clearInterval(rewindInterval);
+                rewindInterval = null;
+            } else if (!e.shiftKey) { // Tua 1 đoạn ngắn khi nhấn-nhả (không giữ)
+                player.currentTime -= SKIP_TIME;
+            }
+            break;
+    }
+};
 
     const captureFrameAndAddToQueue = async () => { /* Giữ nguyên hàm này */
         player.pause();
@@ -3604,9 +3614,8 @@ async function showKeyframePreview(frameData) {
             thumb.src = thumb.frameData.path;
             thumb.title = thumb.frameData.frameIdentifier;
 
-            // Làm nổi bật frame được click (luôn là frame đầu tiên)
             if (neighborData.frame_id_ori === frameData.frame_id_ori) {
-                 thumb.classList.add('highlighted');
+                thumb.classList.add('highlighted');
             }
 
             previewThumbnails.appendChild(thumb);
@@ -3615,6 +3624,18 @@ async function showKeyframePreview(frameData) {
         // Bước 5: Đợi tất cả ảnh tải xong để tránh hiệu ứng "pop-in"
         await Promise.all(imageLoadPromises);
         
+        setTimeout(() => {
+            const highlightedThumb = previewThumbnails.querySelector('.highlighted');
+            if (highlightedThumb) {
+                // Cuộn đến frame được highlight và đặt nó vào giữa
+                highlightedThumb.scrollIntoView({
+                    behavior: 'auto', // 'smooth' để cuộn mượt, 'auto' để cuộn ngay lập tức
+                    inline: 'start', // Quan trọng: căn giữa theo chiều ngang
+                    block: 'nearest'  // Căn theo chiều dọc
+                });
+            }
+        }, 50);
+
         // Bước 6: Hoàn tất - không cần cuộn nữa vì thanh preview sẽ tự bắt đầu từ đầu
 
     } catch (error) {
