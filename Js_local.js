@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'vhxVT57AOd1klQw5TZ8xGr82puTfqZzS'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'tvt0j_AgNmdvD3voZ9LWttgaDZ1hlCPr'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
@@ -388,10 +388,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         clearQueueBtn.addEventListener('click', () => {
             if (submitQueueFrames.size > 0) {
-                if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
+                //if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
                     // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
                     sendWebSocketMessage('clear_all', {});
-                }
+                //}
             }
         });
 
@@ -2360,13 +2360,37 @@ async function openImageModal(clickedFrameData) {
 }
 
 
-    function parseTimestamp(ts) {
-        if (!ts || typeof ts !== 'string') return 0; // Xử lý nếu timestamp không hợp lệ
-        const parts = ts.split(':');
-        const minutes = parseInt(parts[0], 10);
-        const seconds = parseFloat(parts[1]);
-        return (minutes * 60) + seconds;
+function parseTimestamp(inputTimestamp) {
+    if (inputTimestamp === null || inputTimestamp === undefined || inputTimestamp === '') {
+        return 0;
     }
+
+    if (typeof inputTimestamp === 'number') {
+        return inputTimestamp; // Trả về trực tiếp
+    }
+
+    if (typeof inputTimestamp === 'string') {
+        if (inputTimestamp.includes(':')) {
+            const parts = inputTimestamp.split(':');
+            if (parts.length === 2) {
+                const minutes = parseInt(parts[0], 10);
+                const seconds = parseFloat(parts[1]);
+                if (!isNaN(minutes) && !isNaN(seconds)) {
+                    return (minutes * 60) + seconds;
+                }
+            }
+        } 
+        else {
+            const numericValue = parseFloat(inputTimestamp);
+            if (!isNaN(numericValue)) {
+                return numericValue;
+            }
+        }
+    }
+
+    console.warn(`Không thể phân tích định dạng timestamp: "${inputTimestamp}". Mặc định là 0 giây.`);
+    return 0;
+}
 
 function openVideoModal(videoName, timestamp) {
     const modal = document.getElementById('videoModal');
