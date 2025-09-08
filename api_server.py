@@ -49,7 +49,8 @@ app.add_middleware(
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
 keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
-video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
+video_path_root = "/mlcv2/Datasets/HCMAI25/batch2/video"
+# video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
 hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
@@ -70,10 +71,10 @@ model_paths=[
 
 milvus = MilvusManager(
                         host="192.168.20.156",
-                        port='6090',
+                        port='6050',
                         model_paths=model_paths,
                         mode = 'AIC',
-                        # prefix='batch1'
+                        prefix='full'
                     )
 
 # clear cache method
@@ -115,14 +116,20 @@ async def get_hls_playlist(video_name: str):
     # Media type cho M3U8 là application/vnd.apple.mpegurl
     return FileResponse(playlist_path, media_type="application/vnd.apple.mpegurl")
 
-# Thêm route để phục vụ các file TS
-@app.get("/videos_hls/{video_name}/{segment_name}.ts", tags=["HLS"])
-async def get_hls_segment(video_name: str, segment_name: str):
-    segment_path = f"{hls_path}/{video_name}/{segment_name}.ts"
-    if not os.path.exists(segment_path):
+@app.get("/videos_hls/{video_name}/{segment_filename:path}", tags=["HLS"])
+async def get_hls_segment(video_name: str, segment_filename: str):
+    segment_path = os.path.join(hls_path, video_name, segment_filename)
+
+    if not os.path.exists(segment_path) or not segment_path.startswith(os.path.realpath(hls_path)):
         raise HTTPException(status_code=404, detail="Segment not found")
-    # Media type cho TS là video/mp2t
-    return FileResponse(segment_path, media_type="video/mp2t")
+
+    media_type = "application/octet-stream" # Giá trị mặc định
+    if segment_filename.endswith('.ts'):
+        media_type = "video/mp2t"
+    elif segment_filename.endswith('.m4s') or segment_filename.endswith('.mp4'):
+        media_type = "video/mp4"
+    
+    return FileResponse(segment_path, media_type=media_type)
 
 @app.post("/api/admin/clear-cache")
 async def clear_redis_cache(
@@ -375,6 +382,8 @@ class TemporalStartRequest(BaseModel):
     user_id: Optional[str] = None    # <<< THÊM VÀO
     query_id: Optional[str] = None 
     use_event_filter: Optional[bool] = False
+    ocr_fuzzy: Optional[bool] = False
+    asr_fuzzy: Optional[bool] = False
 
 class TemporalContinueRequest(BaseModel):
     query: str
@@ -387,6 +396,8 @@ class TemporalContinueRequest(BaseModel):
     query_id: Optional[str] = None 
     user_id: Optional[str] = None
     use_event_filter: Optional[bool] = False
+    ocr_fuzzy: Optional[bool] = False
+    asr_fuzzy: Optional[bool] = False
 
 class TextSearchRequest(BaseModel):
     query: str
@@ -814,7 +825,9 @@ async def temporal_search_start(req: TemporalStartRequest):
             ocr = lower_ocr,
             user_id=req.user_id,    # <<< THÊM VÀO
             query_id=req.query_id,
-            use_event_filter=req.use_event_filter
+            use_event_filter=req.use_event_filter,
+            ocr_fuzzy=req.ocr_fuzzy,
+            asr_fuzzy=req.asr_fuzzy
         )
         
         # 3. Lấy trạng thái temporal
@@ -897,7 +910,9 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             ocr = lower_ocr,
             user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
             query_id=req.query_id,
-            use_event_filter=req.use_event_filter
+            use_event_filter=req.use_event_filter,
+            ocr_fuzzy=req.ocr_fuzzy,
+            asr_fuzzy=req.asr_fuzzy
         )
         
         # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
