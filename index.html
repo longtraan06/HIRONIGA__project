@@ -93,9 +93,23 @@
                             </div> 
                             <div class="ocr-filter-container">
                                 <input type="text" class="ocr-input" placeholder="Enter OCR">
+                                <div class="fuzzy-switch-wrapper">
+                                    <label class="fuzzy-switch-container">
+                                        <input type="checkbox" id="ocrFuzzySwitch">
+                                        <span class="slider round"></span>
+                                    </label>
+                                    <span>Fuzzy Search</span>
+                                </div>
                             </div>
                             <div class="asr-filter-container">
                                 <input type="text" class="asr-input" placeholder="Enter ASR">
+                                <div class="fuzzy-switch-wrapper">
+                                    <label class="fuzzy-switch-container">
+                                        <input type="checkbox" id="asrFuzzySwitch">
+                                        <span class="slider round"></span>
+                                    </label>
+                                    <span>Fuzzy Search</span>
+                                </div>
                             </div>
                             <div class="image-upload-area" style="display: none;">
                                 <input type="file" class="image-input" accept="image/*" style="display: none;">
