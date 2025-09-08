@@ -1354,9 +1354,23 @@ async function ensureDresPrerequisites() {
                 </div>  
                 <div class="ocr-filter-container">
                     <input type="text" class="ocr-input" placeholder="Enter OCR">
+                    <div class="fuzzy-switch-wrapper">
+                        <label class="fuzzy-switch-container">
+                            <input type="checkbox"> <!-- Không cần ID ở đây vì nó sẽ là duy nhất trong group -->
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Fuzzy Search</span>
+                    </div>
                 </div>
                 <div class="asr-filter-container">
                     <input type="text" class="asr-input" placeholder="Enter ASR">
+                    <div class="fuzzy-switch-wrapper">
+                        <label class="fuzzy-switch-container">
+                            <input type="checkbox">
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Fuzzy Search</span>
+                    </div>
                 </div>
                 <div class="image-upload-area" style="display: none;">
                     <input type="file" class="image-input" accept="image/*" style="display: none;">
@@ -1640,6 +1654,11 @@ async function ensureDresPrerequisites() {
             const ocrInput = searchGroup.querySelector('.ocr-input');
             if (ocrInput && ocrInput.value.trim() !== '') {
                 filterOptions.ocr = ocrInput.value.trim();
+                // Lấy trạng thái của fuzzy switch
+                const ocrFuzzySwitch = ocrFilterContainer.querySelector('input[type="checkbox"]');
+                if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
+                    filterOptions.ocr_fuzzy = true; // Thêm tham số fuzzy
+                }
             }
         }
 
@@ -1655,14 +1674,20 @@ async function ensureDresPrerequisites() {
                     filterOptions.tags_filter = tags;
                 }
             }
-            const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
-            if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
-                if (asrInput && asrInput.value.trim() !== '') {
-                    filterOptions.asr = asrInput.value.trim(); // Thêm tham số asr
+        }
+
+        const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
+        if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
+            const asrInput = searchGroup.querySelector('.asr-input'); // Lấy asrInput bên trong group
+            if (asrInput && asrInput.value.trim() !== '') {
+                filterOptions.asr = asrInput.value.trim();
+                // Lấy trạng thái của fuzzy switch
+                const asrFuzzySwitch = asrFilterContainer.querySelector('input[type="checkbox"]');
+                if (asrFuzzySwitch && asrFuzzySwitch.checked) {
+                    filterOptions.asr_fuzzy = true; // Thêm tham số fuzzy
                 }
             }
         }
-
         try {
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             let finalQuery = query;
@@ -1880,6 +1905,13 @@ async function ensureDresPrerequisites() {
             body.asr = filterOptions.asr;
         }
 
+        if (filterOptions.ocr_fuzzy) {
+            body.ocr_fuzzy = true;
+        }
+        if (filterOptions.asr_fuzzy) {
+            body.asr_fuzzy = true;
+        }
+
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1913,6 +1945,13 @@ async function ensureDresPrerequisites() {
             body.asr = filterOptions.asr;
         }
         // >>> KẾT THÚC LOGIC MỚI <<<
+
+        if (filterOptions.ocr_fuzzy) {
+            body.ocr_fuzzy = true;
+        }
+        if (filterOptions.asr_fuzzy) {
+            body.asr_fuzzy = true;
+        }
 
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/continue`, {
             method: "POST",
