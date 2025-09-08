@@ -1348,9 +1348,23 @@ async function ensureDresPrerequisites() {
                 </div>  
                 <div class="ocr-filter-container">
                     <input type="text" class="ocr-input" placeholder="Enter OCR">
+                    <div class="fuzzy-switch-wrapper">
+                        <label class="fuzzy-switch-container">
+                            <input type="checkbox"> <!-- Không cần ID ở đây vì nó sẽ là duy nhất trong group -->
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Fuzzy Search</span>
+                    </div>
                 </div>
                 <div class="asr-filter-container">
                     <input type="text" class="asr-input" placeholder="Enter ASR">
+                    <div class="fuzzy-switch-wrapper">
+                        <label class="fuzzy-switch-container">
+                            <input type="checkbox">
+                            <span class="slider round"></span>
+                        </label>
+                        <span>Fuzzy Search</span>
+                    </div>
                 </div>
                 <div class="image-upload-area" style="display: none;">
                     <input type="file" class="image-input" accept="image/*" style="display: none;">
@@ -1634,6 +1648,10 @@ async function ensureDresPrerequisites() {
             const ocrInput = searchGroup.querySelector('.ocr-input');
             if (ocrInput && ocrInput.value.trim() !== '') {
                 filterOptions.ocr = ocrInput.value.trim();
+                const ocrFuzzySwitch = ocrFilterContainer.querySelector('input[type="checkbox"]');
+                if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
+                    filterOptions.ocr_fuzzy = true;
+                }
             }
         }
 
@@ -1649,10 +1667,18 @@ async function ensureDresPrerequisites() {
                     filterOptions.tags_filter = tags;
                 }
             }
-            const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
-            if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
-                if (asrInput && asrInput.value.trim() !== '') {
-                    filterOptions.asr = asrInput.value.trim(); // Thêm tham số asr
+            
+        }
+
+        const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
+        if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
+            const asrInput = searchGroup.querySelector('.asr-input'); // Lấy asrInput bên trong group
+            if (asrInput && asrInput.value.trim() !== '') {
+                filterOptions.asr = asrInput.value.trim();
+                // Lấy trạng thái của fuzzy switch
+                const asrFuzzySwitch = asrFilterContainer.querySelector('input[type="checkbox"]');
+                if (asrFuzzySwitch && asrFuzzySwitch.checked) {
+                    filterOptions.asr_fuzzy = true; // Thêm tham số fuzzy
                 }
             }
         }
@@ -1874,6 +1900,13 @@ async function ensureDresPrerequisites() {
             body.asr = filterOptions.asr;
         }
 
+        if (filterOptions.ocr_fuzzy) {
+            body.ocr_fuzzy = true;
+        }
+        if (filterOptions.asr_fuzzy) {
+            body.asr_fuzzy = true;
+        }
+
         return fetch("/api/search/temporal/start", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1907,6 +1940,13 @@ async function ensureDresPrerequisites() {
             body.asr = filterOptions.asr;
         }
         // >>> KẾT THÚC LOGIC MỚI <<<
+
+        if (filterOptions.ocr_fuzzy) {
+            body.ocr_fuzzy = true;
+        }
+        if (filterOptions.asr_fuzzy) {
+            body.asr_fuzzy = true;
+        }
 
         return fetch("/api/search/temporal/continue", {
             method: "POST",
@@ -2371,13 +2411,37 @@ async function openImageModal(clickedFrameData) {
 }
 
 
-    function parseTimestamp(ts) {
-        if (!ts || typeof ts !== 'string') return 0; // Xử lý nếu timestamp không hợp lệ
-        const parts = ts.split(':');
-        const minutes = parseInt(parts[0], 10);
-        const seconds = parseFloat(parts[1]);
-        return (minutes * 60) + seconds;
+function parseTimestamp(inputTimestamp) {
+    if (inputTimestamp === null || inputTimestamp === undefined || inputTimestamp === '') {
+        return 0;
     }
+
+    if (typeof inputTimestamp === 'number') {
+        return inputTimestamp; // Trả về trực tiếp
+    }
+
+    if (typeof inputTimestamp === 'string') {
+        if (inputTimestamp.includes(':')) {
+            const parts = inputTimestamp.split(':');
+            if (parts.length === 2) {
+                const minutes = parseInt(parts[0], 10);
+                const seconds = parseFloat(parts[1]);
+                if (!isNaN(minutes) && !isNaN(seconds)) {
+                    return (minutes * 60) + seconds;
+                }
+            }
+        } 
+        else {
+            const numericValue = parseFloat(inputTimestamp);
+            if (!isNaN(numericValue)) {
+                return numericValue;
+            }
+        }
+    }
+
+    console.warn(`Không thể phân tích định dạng timestamp: "${inputTimestamp}". Mặc định là 0 giây.`);
+    return 0;
+}
 
 function openVideoModal(videoName, timestamp) {
     const modal = document.getElementById('videoModal');
@@ -2408,6 +2472,7 @@ function openVideoModal(videoName, timestamp) {
         return;
     }
 
+    console.log("time:", timestamp);
     const formatTime = (timeInSeconds) => {
         const minutes = Math.floor(timeInSeconds / 60);
         const seconds = Math.floor(timeInSeconds % 60);
