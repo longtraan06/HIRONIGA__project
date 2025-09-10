@@ -355,6 +355,7 @@ manager = ConnectionManager()
 QUEUE_SORTED_SET_KEY = "submit_queue:order"  # Sorted Set để lưu thứ tự (score, frameIdentifier)
 QUEUE_DATA_HASH_KEY = "submit_queue:data"    # Hash để lưu dữ liệu chi tiết (frameIdentifier, jsonData)
 QUEUE_USERS_KEY = "submit_queue:users"
+TRAKE_QUEUE_STATE_KEY = "trake_queue:state"
 
 def get_color_for_user(username: str) -> str:
     """Tạo một màu sắc cố định dựa trên tên người dùng."""
@@ -379,6 +380,7 @@ class TemporalStartRequest(BaseModel):
     top_k_tags: Optional[int] = 5 
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    asr: str = None
     user_id: Optional[str] = None    # <<< THÊM VÀO
     query_id: Optional[str] = None 
     use_event_filter: Optional[bool] = False
@@ -393,6 +395,7 @@ class TemporalContinueRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    asr: str = None
     query_id: Optional[str] = None 
     user_id: Optional[str] = None
     use_event_filter: Optional[bool] = False
@@ -409,6 +412,7 @@ class TextSearchRequest(BaseModel):
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
+    asr: str = None
     use_event_filter: Optional[bool] = False
 
 class FormSubmitRequest(BaseModel):
@@ -823,6 +827,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
             ocr = lower_ocr,
+            asr = req.asr,
             user_id=req.user_id,    # <<< THÊM VÀO
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
@@ -908,6 +913,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             top_k_tags=req.top_k_tags,
             tags_filter=lower_tag,
             ocr = lower_ocr,
+            asr = req.asr,
             user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
@@ -1061,7 +1067,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         "payload": {"users": current_users}
     }
     await manager.publish_update(json.dumps(join_notification))
-
+    await broadcast_trake_queue_update(send_to_specific_connection=websocket)
     try:
         # 5. Vòng lặp chính: Lắng nghe tin nhắn từ client
         while True:
@@ -1156,8 +1162,28 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
                     pipe.execute()
 
+
+            if action == "add_or_override_trake_frame":
+                frame_data = payload
+                event_number = str(frame_data.get("eventNumber"))
+
+                if event_number:
+                    # Gán thêm thông tin người nộp
+                    frame_data['submitted_by'] = username
+                    frame_data['user_color'] = get_color_for_user(username)
+                    # Ghi đè hoặc thêm mới vào Redis Hash
+                    redis_client.hset(TRAKE_QUEUE_STATE_KEY, event_number, json.dumps(frame_data))
+                    # Sau khi cập nhật, broadcast trạng thái mới cho mọi người
+                    await broadcast_trake_queue_update()
+
+            elif action == "clear_trake_event": # Dùng khi user xác nhận xóa frame override
+                event_number_to_clear = str(payload.get("eventNumber"))
+                if event_number_to_clear:
+                    redis_client.hdel(TRAKE_QUEUE_STATE_KEY, event_number_to_clear)
+                    await broadcast_trake_queue_update()
+
             # --- Phát sóng trạng thái mới cho TẤT CẢ client sau mỗi hành động ---
-            
+        
             # Lấy lại toàn bộ queue đã được sắp xếp
             sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
             updated_queue_items = []
@@ -1195,6 +1221,62 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         #     "payload": {"users": remaining_users}
         # }
         # await manager.publish_update(json.dumps(leave_notification))
+
+async def broadcast_trake_queue_update(send_to_specific_connection: Optional[WebSocket] = None):
+    """
+    Lấy trạng thái hiện tại của TRAKE Queue từ Redis, sắp xếp và gửi tới client.
+    """
+    all_trake_frames_raw = redis_client.hgetall(TRAKE_QUEUE_STATE_KEY)
+    
+    # Chuyển đổi dữ liệu từ Redis (bytes) thành list các object
+    trake_queue_items = []
+    for event_num_bytes, frame_json_bytes in all_trake_frames_raw.items():
+        try:
+            frame_data = json.loads(frame_json_bytes)
+            # eventNumber có thể đã có trong frame_data, nhưng chúng ta ghi đè lại
+            # từ key của hash để đảm bảo tính nhất quán.
+            frame_data['eventNumber'] = int(event_num_bytes)
+            trake_queue_items.append(frame_data)
+        except (json.JSONDecodeError, ValueError):
+            continue # Bỏ qua nếu dữ liệu không hợp lệ
+
+    # Sắp xếp các frame theo eventNumber
+    trake_queue_items.sort(key=lambda x: x.get('eventNumber', 0))
+
+    # Tạo message cuối cùng
+    update_message = {
+        "action": "trake_queue_update",
+        "payload": trake_queue_items
+    }
+    
+    message_str = json.dumps(update_message)
+
+    if send_to_specific_connection:
+        # Chỉ gửi cho 1 người dùng (khi họ mới kết nối)
+        await send_to_specific_connection.send_text(message_str)
+    else:
+        # Gửi cho tất cả mọi người qua Pub/Sub
+        await manager.publish_update(message_str)
+
+class TrakeSubmitRequest(BaseModel):
+    frames: List[dict]
+
+@app.post("/api/trake-submit")
+async def handle_trake_submit(request: TrakeSubmitRequest):
+    """
+    Placeholder để nhận dữ liệu cuối cùng từ TRAKE Submit Queue.
+    """
+    submitted_frames = request.frames
+    print("--- NHẬN DỮ LIỆU SUBMIT TỪ TRAKE QUEUE ---")
+    for frame in submitted_frames:
+        print(f"  Event {frame.get('eventNumber')}: {frame.get('frameIdentifier')}")
+    
+    # Sau khi submit thành công, có thể xóa trạng thái trong Redis
+    redis_client.delete(TRAKE_QUEUE_STATE_KEY)
+    # Và broadcast một queue rỗng để cập nhật UI của mọi người
+    await broadcast_trake_queue_update()
+
+    return {"status": "success", "message": f"Received {len(submitted_frames)} frames for TRAKE submission."}
 
 @app.post("/api/form-submit")
 async def handle_form_submit(request: FormSubmitRequest):
