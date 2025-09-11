@@ -144,7 +144,9 @@ button:focus, input:focus, textarea:focus {
 
 /* Nội dung chính - chiếm 4/5 chiều ngang còn lại */
 .main-content {
-    width: 85%;
+    /* width: 85%; XÓA hoặc GHI ĐÈ dòng này */
+    flex: 1; /* Thêm dòng này để nó chiếm hết không gian còn lại */
+    min-width: 0; /* Thêm dòng này để tránh lỗi flexbox overflow */
     margin: 0.5%;
     border-radius: 10px;
     border: 2px solid #47663B;
@@ -153,6 +155,7 @@ button:focus, input:focus, textarea:focus {
     background: rgba(71, 65, 65, 0.25);
     backdrop-filter: blur(5px);
     box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.03);
+    transition: width 0.3s ease-in-out; /* Thêm hiệu ứng chuyển động mượt mà */
 }
 
 .main-content::-webkit-scrollbar {
@@ -2594,45 +2597,60 @@ input:checked + .slider:before {
     padding: 5px;
 }
 
-/* Layout cho các hàng đợi (REVISED) */
-.queue-container {
-    position: fixed;
-    bottom: 0;
-    left: 0;
-    width: 100%;
-    
-    /* Sử dụng flex để sắp xếp các queue con */
-    display: flex;
-    justify-content: center; /* Căn các queue ra giữa nếu chỉ có 1 */
-    align-items: flex-end;
-    
-    pointer-events: none;
-}
-.queue-container > .submit-queue {
+#trakeSubmitQueue {
+    /* --- Reset các style cũ từ .submit-queue --- */
+    position: relative;
+    transform: none;
+    bottom: auto;
+    left: auto;
+    opacity: 1;
+    max-height: none; /* Bỏ giới hạn chiều cao */
     pointer-events: auto;
-    max-height: 40vh;
-    flex-shrink: 0;
+
+    /* --- Style cho layout cột dọc --- */
+    display: none; /* Mặc định vẫn ẩn */
+    flex-direction: column; /* Quan trọng: Xếp các thành phần con theo chiều dọc */
+    flex-shrink: 0; /* Ngăn không cho cột này bị co lại */
     
-    /* Đảm bảo transition mượt mà */
-    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), 
-                opacity 0.3s ease,
-                flex-basis 0.3s ease,
-                max-width 0.3s ease;
+    width: 200px; /* Chiều rộng cố định, đủ cho 1 frame. Bạn có thể điều chỉnh */
+    height: 94vh; /* Chiều cao tương tự main-content */
+    margin: 0px;
+    
+    border-radius: 10px;
+    border: 1px solid var(--matcha-border);
+    background-color: var(--matcha-pale);
+    
+    transition: all 0.3s ease;
 }
 
-/* Mặc định, mỗi queue chiếm toàn bộ không gian của container */
-.queue-container > .submit-queue {
-    flex-basis: 95%; /* Chiếm 95% chiều rộng */
-    max-width: 95%;
+/* Container chứa các frame bên trong queue */
+#trakeSubmitQueueFrames {
+    flex-direction: column; /* Xếp các frame theo chiều dọc */
+    overflow-x: hidden;     /* Tắt cuộn ngang */
+    overflow-y: auto;       /* Bật cuộn dọc khi cần */
+    gap: 15px;              /* Tăng khoảng cách giữa các frame */
+    padding-right: 5px;     /* Thêm chút không gian cho thanh cuộn */
 }
 
-.queue-container > .submit-queue.visible + .trake-queue.visible {
-    flex-basis: 47.5%; /* Chia đôi và có một khoảng nhỏ ở giữa */
-    max-width: 47.5%;
+/* Style cho từng frame item bên trong */
+#trakeSubmitQueue .queue-frame-item {
+    width: 100%; /* Chiếm toàn bộ chiều rộng của cột queue */
+    height: auto; /* Chiều cao sẽ tự động theo tỷ lệ ảnh */
 }
-.queue-container > .submit-queue.visible.split-view {
-    flex-basis: 47.5%;
-    max-width: 47.5%;
+
+#trakeSubmitQueue .queue-frame-item img {
+    width: 100%; /* Ảnh cũng chiếm hết chiều rộng */
+    height: auto;
+}
+
+/* Đổi lại cách hiển thị/ẩn TRAKE queue */
+.main-container.trake-active #trakeSubmitQueue {
+    display: flex; /* Hiện cột queue lên */
+}
+
+/* Khi TRAKE queue không hoạt động, ẩn nó đi */
+.main-container:not(.trake-active) #trakeSubmitQueue {
+    display: none;
 }
 
 .trake-queue {
