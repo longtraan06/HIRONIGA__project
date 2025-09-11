@@ -1,7 +1,7 @@
 const APP_CONFIG = {
-    REMOTE_BASE_URL: 'http://192.168.20.170:8080',
+    REMOTE_BASE_URL: 'http://192.168.20.156:8080',
 
-    WEBSOCKET_URL: 'ws://192.168.20.170:8080'
+    WEBSOCKET_URL: 'ws://192.168.20.156:8080'
 };
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -15,18 +15,20 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'tvt0j_AgNmdvD3voZ9LWttgaDZ1hlCPr'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'zTCZouc8fxzZtDag0RF5F_Gj6zEP8Dhr'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
     let isEventFilterEnabled = false;
-    // Biến cho layout Nhóm (Grouped)
+    // Biến zcho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
     let hlsPlayerInstance = null;
     const mainContent = document.querySelector('.main-content');
-
+    let isTrakeMode = false;
+    let trakeQueueState = []; // Lưu trạng thái TRAKE queue từ server
+    let currentVideoModalData = {}; // Lưu thông tin video đang mở
 
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
@@ -101,6 +103,14 @@ document.addEventListener('DOMContentLoaded', function() {
     const clearFormSubmitQueueBtn = document.getElementById('clearFormSubmitQueueBtn');
     const toggleQueueModeBtn = document.getElementById('toggleQueueModeBtn');
 
+    const videoModal = document.getElementById('videoModal'); // Lấy modal chính
+    const trakeStatusBar = document.getElementById('trakeStatusBar');
+    const trakeSeekGapInput = document.getElementById('trakeSeekGap');
+    const trakeSubmitQueueContainer = document.getElementById('trakeSubmitQueue');
+    const trakeSubmitQueueFramesContainer = document.getElementById('trakeSubmitQueueFrames');
+    const submitTrakeBtn = document.getElementById('submitTrakeBtn');
+
+
     initializeEventListeners();
 
 
@@ -119,8 +129,8 @@ document.addEventListener('DOMContentLoaded', function() {
             if (currentUserId) {
                 const formData = new FormData();
                 formData.append('user_id', currentUserId);
-                const cleanupUrl = `${APP_CONFIG.REMOTE_BASE_URL}/api/session/cleanup`;
-                navigator.sendBeacon(cleanupUrl, formData);
+                // Dùng sendBeacon để đảm bảo request được gửi đi ngay cả khi trang đang đóng
+                navigator.sendBeacon(`${APP_CONFIG.REMOTE_BASE_URL}/api/session/cleanup`, formData);
             }
         });
     }
@@ -210,6 +220,33 @@ document.addEventListener('DOMContentLoaded', function() {
         clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
+
+        trakeSeekGapInput.addEventListener('change', () => {
+            localStorage.setItem('trake_seek_gap', trakeSeekGapInput.value);
+        });
+
+        // Gắn sự kiện cho nút submit của TRAKE queue
+        submitTrakeBtn.addEventListener('click', () => {
+            if (trakeQueueState.length === 5) {
+                // Gọi API placeholder
+                fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/trake-submit`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ frames: trakeQueueState })
+                })
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === 'success') {
+                        showToastNotification('TRAKE submission thành công!', 'success');
+                    }
+                })
+                .catch(err => {
+                    showToastNotification('Lỗi khi submit TRAKE queue.', 'error');
+                    console.error(err);
+                });
+            }
+        });
+
         // Đóng các menu thả xuống khi click ra ngoài
         document.addEventListener('click', function(e) {
             if (historyMenu.classList.contains('visible') && !historyMenu.contains(e.target) && !historyBtn.contains(e.target)) {
@@ -297,6 +334,11 @@ document.addEventListener('DOMContentLoaded', function() {
         document.addEventListener('keydown', function(e) {
 
             if (e.key === 'Tab') {
+                const videoModal = document.getElementById('videoModal');
+                if (videoModal && videoModal.style.display === 'flex') {
+                    return; 
+                }
+
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
@@ -388,10 +430,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
         clearQueueBtn.addEventListener('click', () => {
             if (submitQueueFrames.size > 0) {
-                //if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
+                // if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
                     // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
-                    sendWebSocketMessage('clear_all', {});
-                //}
+                sendWebSocketMessage('clear_all', {});
+                // }
             }
         });
 
@@ -760,7 +802,7 @@ async function ensureDresPrerequisites() {
 
         try {
             showToastNotification("Fetching DRES evaluation list...", "success");
-            const evalResponse = await fetch(`http://192.168.28.151:5000/api/v2/client/evaluation/list?session=${DEFAULT_DRES_SESSION_ID}`);
+            const evalResponse = await fetch(`http://192.168.20.156:5601/api/v2/client/evaluation/list?session=${DEFAULT_DRES_SESSION_ID}`);
 
             if (!evalResponse.ok) {
                 throw new Error(`Failed to get evaluation list: ${evalResponse.statusText}`);
@@ -844,7 +886,7 @@ async function ensureDresPrerequisites() {
                 throw new Error("Invalid submission type.");
             }
 
-            const submitUrl = `http://192.168.28.151:5000/api/v2/submit/${dresEvaluationId}?session=${DEFAULT_DRES_SESSION_ID}`;
+            const submitUrl = `http://192.168.20.156:5601/api/v2/submit/${dresEvaluationId}?session=${DEFAULT_DRES_SESSION_ID}`;
             showToastNotification(`Submitting as ${submissionType}...`, "success");
 
             const response = await fetch(submitUrl, {
@@ -852,7 +894,6 @@ async function ensureDresPrerequisites() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(submissionBody)
             });
-
             if (response.ok) {
                 showToastNotification("Submission to DRES successful!", "success", 2000);
                 return true;
@@ -884,7 +925,6 @@ async function ensureDresPrerequisites() {
         // Xác định giao thức ws:// hoặc wss:// (cho https)
         const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsUrl = `${APP_CONFIG.WEBSOCKET_URL}/ws/queue/${currentUser}`;
-
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
@@ -913,6 +953,10 @@ async function ensureDresPrerequisites() {
     function handleWebSocketMessage(message) {
         const { action, payload } = message;
 
+         if (action === 'trake_queue_update') {
+            console.log('[TRAKE] Received queue update from server:', payload);
+        }
+
         switch (action) {
             case 'init_state':
                 userColors = payload.users;
@@ -939,6 +983,9 @@ async function ensureDresPrerequisites() {
             case 'queue_cleared':
                 submitQueueFrames.clear();
                 renderFullQueue([]);
+                break;
+            case 'trake_queue_update':
+                renderTrakeQueue(payload);
                 break;
         }
     }
@@ -1654,10 +1701,9 @@ async function ensureDresPrerequisites() {
             const ocrInput = searchGroup.querySelector('.ocr-input');
             if (ocrInput && ocrInput.value.trim() !== '') {
                 filterOptions.ocr = ocrInput.value.trim();
-                // Lấy trạng thái của fuzzy switch
                 const ocrFuzzySwitch = ocrFilterContainer.querySelector('input[type="checkbox"]');
                 if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
-                    filterOptions.ocr_fuzzy = true; // Thêm tham số fuzzy
+                    filterOptions.ocr_fuzzy = true;
                 }
             }
         }
@@ -1674,6 +1720,7 @@ async function ensureDresPrerequisites() {
                     filterOptions.tags_filter = tags;
                 }
             }
+            
         }
 
         const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
@@ -1688,6 +1735,7 @@ async function ensureDresPrerequisites() {
                 }
             }
         }
+
         try {
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             let finalQuery = query;
@@ -2205,7 +2253,6 @@ function showToastNotification(message, type = 'success', duration = 2000) {
 // ====== BẮT ĐẦU PHIÊN BẢN MỚI CỦA HÀM OPENIMAGEMODAL ======
 
 async function openImageModal(clickedFrameData) {
-    // --- BƯỚC 1: KIỂM TRA DỮ LIỆU ĐẦU VÀO ---
     if (!clickedFrameData || !clickedFrameData.videoName || typeof clickedFrameData.frame_id_ori === 'undefined') {
         showToastNotification("Lỗi: Dữ liệu frame không đầy đủ để mở modal.", "error");
         console.error("Dữ liệu không hợp lệ được truyền cho openImageModal:", clickedFrameData);
@@ -2223,11 +2270,8 @@ async function openImageModal(clickedFrameData) {
     const videoId = clickedFrameData.videoName;
     const targetFrameIdOri = clickedFrameData.frame_id_ori;
 
-    // --- BƯỚC 2 (ĐÃ THAY ĐỔI): TẢI METADATA TRỰC TIẾP TỪ NGINX LOCAL ---
     let videoMetadata = null;
     try {
-        // Yêu cầu Nginx local phục vụ file metadata.json
-        // URL này sẽ được Nginx ánh xạ đến thư mục data của bạn.
         const metadataResponse = await fetch(`/frames/${videoId}/metadata.json`);
         
         if (!metadataResponse.ok) {
@@ -2240,19 +2284,14 @@ async function openImageModal(clickedFrameData) {
         showToastNotification("Lỗi: Không thể tải metadata.json từ máy local.", "error");
         return;
     }
-    // Không cần fetch /api/video_info nữa vì nó không được sử dụng.
 
-    const folderUrlPath = `/frames/${videoId}`; // Đường dẫn này vẫn đúng vì Nginx local đang phục vụ nó
-
-    // --- BƯỚC 3: CHUẨN BỊ VÀ SẮP XẾP DỮ LIỆU FRAME ---
+    const folderUrlPath = `/frames/${videoId}`; 
     const metadataForVideo = videoMetadata[videoId] || videoMetadata;
     console.log("metadata_video:", metadataForVideo);
 
-    // Tạo mảng từ metadataForVideo (object -> array)
     const sortedFrames = Object.entries(metadataForVideo)
         .map(([frameKey, metadata]) => {
-            // frameKey ví dụ: "frame_001"
-            const filename = `${frameKey}.webp`;  // hoặc giữ nguyên nếu tên file khác
+            const filename = `${frameKey}.webp`;  
             const frameNum = parseInt(frameKey.split('_')[1], 10);
 
             return {
@@ -2264,9 +2303,7 @@ async function openImageModal(clickedFrameData) {
             };
         })
         .filter(Boolean) // loại bỏ null/undefined nếu có
-        .sort((a, b) => a.frame_id_ori - b.frame_id_ori); // sort theo id gốc
-
-    // --- BƯỚC 4: TÌM FRAME MỤC TIÊU BẰNG ID GỐC ---
+        .sort((a, b) => a.frame_id_ori - b.frame_id_ori); 
     const currentIndexInList = sortedFrames.findIndex(frame => frame.frame_id_ori === targetFrameIdOri);
     
     // console.log("index list", sortedFrames);
@@ -2278,7 +2315,6 @@ async function openImageModal(clickedFrameData) {
 
     const clickedFrameNumber = sortedFrames[currentIndexInList].frameNum;
 
-    // --- BƯỚC 5: CÁC HÀM NỘI BỘ VÀ EVENT HANDLERS ---
     function updateMainPreview(frameNum) {
         if (frameNum === currentFrameNumber) return;
         
@@ -2432,6 +2468,12 @@ function parseTimestamp(inputTimestamp) {
 }
 
 function openVideoModal(videoName, timestamp) {
+
+    if (isTrakeMode) {
+        toggleTrakeMode(false); 
+    }
+    currentVideoModalData = { videoName, timestamp };
+
     const modal = document.getElementById('videoModal');
     const player = document.getElementById('videoPlayer');
     const closeBtn = document.getElementById('closeVideoModalBtn');
@@ -2460,6 +2502,7 @@ function openVideoModal(videoName, timestamp) {
         return;
     }
 
+    console.log("time:", timestamp);
     const formatTime = (timeInSeconds) => {
         const minutes = Math.floor(timeInSeconds / 60);
         const seconds = Math.floor(timeInSeconds % 60);
@@ -2514,66 +2557,89 @@ function openVideoModal(videoName, timestamp) {
     // <<< KẾT THÚC THAY ĐỔI >>>
     
     const handleKeyDown = (e) => {
+
+        if (document.activeElement === trakeSeekGapInput) {
+            if (e.key === 'Enter' || e.key === 'Escape') {
+                trakeSeekGapInput.blur(); // Thoát focus khi nhấn Enter hoặc Escape
+            }
+            return; // Không xử lý các phím tắt khác khi đang gõ
+        }
+        if (e.key === 'Tab') {
+            e.preventDefault(); // Ngăn hành vi mặc định của Tab
+            toggleTrakeMode(!isTrakeMode); // Bật/tắt chế độ TRAKE
+            return; // Dừng lại sau khi xử lý Tab
+        }
+
+
         if (e.key === 'Escape') { closePreviewModal(); return; }
-        if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
-
-        const activeElement = document.activeElement;
-        if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
-        
-        const key = e.key.toLowerCase();
-
-        switch (key) {
-            case ' ': e.preventDefault(); togglePlayPause(); break;
-            case 'v':
+        if (isTrakeMode) {
+            const eventNumber = parseInt(e.key);
+            if (!isNaN(eventNumber) && eventNumber >= 1 && eventNumber <= 5) {
                 e.preventDefault();
-                // Tạm dừng video để chụp frame
-                player.pause();
-                // Tạo một hàm async nhỏ để xử lý vì captureFrame cần là async
-                (async () => {
-                    const currentTime = player.currentTime;
-                    const fps = await getFpsForVideo(videoName);
-                    const frameNumber = Math.round(currentTime * fps);
-                    
-                    captureCanvas.width = player.videoWidth;
-                    captureCanvas.height = player.videoHeight;
-                    // ... (phần code vẽ canvas giống hệt trong captureFrameAndAddToQueue)
-                    const context = captureCanvas.getContext('2d');
-                    context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-                    const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+                captureAndSubmitTrakeFrame(eventNumber);
+            }
+        } else {
+            
+            if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
 
-                    const minutes = Math.floor(currentTime / 60);
-                    const seconds = (currentTime % 60).toFixed(3);
-                    const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+            const activeElement = document.activeElement;
+            if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
+            
+            const key = e.key.toLowerCase();
 
-                    const newFrameData = {
-                        videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
-                        timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
-                        score: 0, temporal_score: 0, videoPath: `/videos/${videoName}.mp4`, fps, isFromVideo: true
-                    };
-                    
-                    addToFormSubmitQueue(newFrameData);
-                })();
-                break;
-            case 'm': e.preventDefault(); toggleMute(); break;
-            case 'arrowright':
-                e.preventDefault();
-                if (e.shiftKey) { // Nếu giữ Shift
-                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
-                } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
-                    player.playbackRate = FAST_FORWARD_RATE;
+            switch (key) {
+                case ' ': e.preventDefault(); togglePlayPause(); break;
+                case 'v':
+                    e.preventDefault();
+                    // Tạm dừng video để chụp frame
+                    player.pause();
+                    // Tạo một hàm async nhỏ để xử lý vì captureFrame cần là async
+                    (async () => {
+                        const currentTime = player.currentTime;
+                        const fps = await getFpsForVideo(videoName);
+                        const frameNumber = Math.round(currentTime * fps);
+                        
+                        captureCanvas.width = player.videoWidth;
+                        captureCanvas.height = player.videoHeight;
+                        // ... (phần code vẽ canvas giống hệt trong captureFrameAndAddToQueue)
+                        const context = captureCanvas.getContext('2d');
+                        context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
+                        const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
+                        const minutes = Math.floor(currentTime / 60);
+                        const seconds = (currentTime % 60).toFixed(3);
+                        const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+
+                        const newFrameData = {
+                            videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
+                            timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
+                            score: 0, temporal_score: 0, videoPath: `/videos/${videoName}.mp4`, fps, isFromVideo: true
+                        };
+                        
+                        addToFormSubmitQueue(newFrameData);
+                    })();
+                    break;
+                case 'm': e.preventDefault(); toggleMute(); break;
+                case 'arrowright':
+                    e.preventDefault();
+                    if (e.shiftKey) { // Nếu giữ Shift
+                        player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                    } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
+                        player.playbackRate = FAST_FORWARD_RATE;
+                    }
+                    break;
+
+                case 'arrowleft':
+                    e.preventDefault();
+                    if (e.shiftKey) { // Nếu giữ Shift
+                        player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                    } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
+                        rewindInterval = setInterval(() => {
+                            player.currentTime = Math.max(0, player.currentTime - 0.2);
+                        }, 100);
+                    }
+                    break;
                 }
-                break;
-
-            case 'arrowleft':
-                e.preventDefault();
-                if (e.shiftKey) { // Nếu giữ Shift
-                    player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
-                } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
-                    rewindInterval = setInterval(() => {
-                        player.currentTime = Math.max(0, player.currentTime - 0.2);
-                    }, 100);
-                }
-                break;
         }
     };
 
@@ -2588,6 +2654,7 @@ const handleKeyUp = (e) => {
                 player.currentTime += SKIP_TIME;
             }
             break;
+
         case 'ArrowLeft':
             e.preventDefault();
             if (rewindInterval) { // Dừng tua lùi (khi giữ phím)
@@ -2636,6 +2703,9 @@ const handleKeyUp = (e) => {
     // <<< BẮT ĐẦU THAY ĐỔI >>>
     // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
     const closePreviewModal = () => {
+        if (isTrakeMode) {
+            toggleTrakeMode(false);
+        }
         // Hủy HLS player instance nếu nó tồn tại
         if (hlsPlayerInstance) {
             hlsPlayerInstance.destroy();
@@ -3074,6 +3144,7 @@ const handleKeyUp = (e) => {
             submitQueueContainer.classList.add('visible');
         } else {
             submitQueueContainer.classList.remove('visible');
+            submitQueueContainer.classList.remove('split-view'); // Gỡ class chia đôi khi nó ẩn
         }
 
         // Bước 2: Cập nhật số lượng
@@ -3602,7 +3673,8 @@ async function showKeyframePreview(frameData) {
 
     try {
         // Bước 3: Gọi API để lấy frame được click và 20 frame tiếp theo
-        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=10&look_ahead=20`);        
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=20&look_ahead=20`);
+        
         if (!response.ok) {
             throw new Error(`Lỗi API: ${response.statusText}`);
         }
@@ -3664,7 +3736,6 @@ async function showKeyframePreview(frameData) {
             thumb.src = thumb.frameData.path;
             thumb.title = thumb.frameData.frameIdentifier;
 
-            // Làm nổi bật frame được click (luôn là frame đầu tiên)
             if (neighborData.frame_id_ori === frameData.frame_id_ori) {
                 thumb.classList.add('highlighted');
             }
@@ -3968,6 +4039,10 @@ function toggleQueueMode() {
     }
 }
 
+/**
+ * Thêm một frame vào Form Submit Queue
+ * @param {object} frameData - Dữ liệu đầy đủ của frame
+ */
 function addToFormSubmitQueue(frameData) {
     
     if (!isFormSubmitMode) {
@@ -4000,6 +4075,9 @@ function addToFormSubmitQueue(frameData) {
     showToastNotification(`Đã thêm ${frameData.frameIdentifier} vào Form Submit.`, "success", 1500);
 }
 
+/**
+ * Vẽ lại toàn bộ giao diện của Form Submit Queue từ mảng `formSubmitQueue`
+ */
 function renderFormSubmitQueue() {
 
     if (formSubmitQueue.length > 0) {
@@ -4066,6 +4144,9 @@ function renderFormSubmitQueue() {
 }
 
 
+/**
+ * Thiết lập sự kiện kéo-thả cho các item trong queue
+ */
 function setupDragAndDrop() {
     const items = formSubmitQueueFramesContainer.querySelectorAll('.queue-frame-item');
     
@@ -4118,6 +4199,9 @@ function getDragAfterElement(container, x) {
 }
 
 
+/**
+ * Xử lý khi nhấn nút Submit: Gửi dữ liệu lên backend
+ */
 async function handleFormSubmit() {
     if (formSubmitQueue.length === 0) return;
 
@@ -4155,14 +4239,160 @@ async function handleFormSubmit() {
     }
 }
 
+/**
+ * Xóa sạch Form Submit Queue và reset trạng thái
+ */
 function clearFormSubmitQueue() {
     formSubmitQueue = [];
     formSubmitLockedVideoId = null;
     formSubmitText.value = '';
-    formSubmitFilename.value = ''; // <<< THÊM MỚI
+    formSubmitFilename.value = '';
     renderFormSubmitQueue(); 
 }
 
+function toggleTrakeMode(isActive) {
+    isTrakeMode = isActive;
+    videoModal.classList.toggle('trake-active', isActive);
+    
+    const player = document.getElementById('videoPlayer');
+    if (isActive) {
+        player.pause();
+        player.addEventListener('wheel', handleVideoScrub, { passive: false });
+        // Lấy giá trị gap từ cache nếu có
+        const savedGap = localStorage.getItem('trake_seek_gap');
+        if (savedGap) {
+            trakeSeekGapInput.value = savedGap;
+        }
+    } else {
+        player.removeEventListener('wheel', handleVideoScrub);
+    }
+}
 
+/**
+ * Xử lý việc tua video bằng con lăn chuột.
+ */
+function handleVideoScrub(e) {
+    e.preventDefault();
+    const gap = parseFloat(trakeSeekGapInput.value) || 0.1;
+    const direction = e.deltaY > 0 ? 1 : -1;
+    const player = document.getElementById('videoPlayer');
+    
+    let newTime = player.currentTime + (gap * direction);
+    // Đảm bảo không tua ra ngoài khoảng video
+    player.currentTime = Math.max(0, Math.min(player.duration, newTime));
+}
+
+/**
+ * Chụp frame hiện tại, kiểm tra ghi đè và gửi lên server.
+ * @param {number} eventNumber - Số thứ tự sự kiện (1-5).
+ */
+async function captureAndSubmitTrakeFrame(eventNumber) {
+    const existingFrame = trakeQueueState.find(f => f.eventNumber === eventNumber);
+    if (existingFrame) {
+        const confirmed = confirm(`Sự kiện ${eventNumber} đã có frame do người dùng "${existingFrame.submitted_by}" nộp.\nBạn có chắc chắn muốn GHI ĐÈ không?`);
+        if (!confirmed) {
+            return; // Người dùng hủy
+        }
+    }
+
+    const player = document.getElementById('videoPlayer');
+    player.pause();
+    
+    try {
+        const currentTime = player.currentTime;
+        const fps = await getFpsForVideo(currentVideoModalData.videoName);
+        const frameNumber = Math.round(currentTime * fps);
+
+        const captureCanvas = document.getElementById('frameCaptureCanvas');
+        captureCanvas.width = player.videoWidth;
+        captureCanvas.height = player.videoHeight;
+        const context = captureCanvas.getContext('2d');
+        context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
+        const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
+        const minutes = Math.floor(currentTime / 60);
+        const seconds = (currentTime % 60).toFixed(3);
+        const timestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+        
+        const frameData = {
+            eventNumber: eventNumber,
+            videoName: currentVideoModalData.videoName,
+            path: imagePathDataUrl,
+            frame_id_ori: frameNumber,
+            timestamp: timestamp,
+            frameIdentifier: `${currentVideoModalData.videoName}_${frameNumber}`,
+            isFromVideo: true
+        };
+        
+        // Gửi hành động lên server
+        console.log('[TRAKE] Sending frame to server for event:', eventNumber, frameData);
+        sendWebSocketMessage('add_or_override_trake_frame', frameData);
+        showToastNotification(`Đang gửi frame cho sự kiện ${eventNumber}...`, 'success');
+
+    } catch (error) {
+        console.error("Lỗi khi chụp frame TRAKE:", error);
+        showToastNotification("Không thể chụp frame.", "error");
+    }
+}
+
+function renderTrakeQueue(frames = []) {
+    console.log('[TRAKE] Rendering queue with frames:', frames);
+    trakeQueueState = frames;
+
+    const mainContainer = document.querySelector('.main-container');
+    const trakeQueueContainer = document.getElementById('trakeSubmitQueue');
+
+    if (frames.length > 0) {
+        // === BỔ SUNG ĐỂ CHẮC CHẮN ===
+        // Xóa style display inline (nếu có) để CSS có thể hoạt động
+        trakeQueueContainer.style.display = ''; 
+        // === KẾT THÚC BỔ SUNG ===
+
+        mainContainer.classList.add('trake-active');
+    } else {
+        mainContainer.classList.remove('trake-active');
+    }
+
+    // Cập nhật thanh trạng thái 5 sự kiện (giữ nguyên)
+    const filledEvents = new Set(frames.map(f => f.eventNumber));
+    trakeStatusBar.querySelectorAll('.status-dot').forEach(dot => {
+        const eventNum = parseInt(dot.dataset.event);
+        if (filledEvents.has(eventNum)) {
+            dot.classList.remove('empty');
+            dot.classList.add('filled');
+        } else {
+            dot.classList.remove('filled');
+            dot.classList.add('empty');
+        }
+    });
+
+    // Render các frame trong queue (giữ nguyên)
+    trakeSubmitQueueFramesContainer.innerHTML = '';
+    frames.forEach(frameData => {
+        const frameElement = document.createElement('div');
+        frameElement.className = 'queue-frame-item trake-item';
+        frameElement.dataset.frameId = frameData.frameIdentifier;
+        
+        frameElement.innerHTML = `
+            <div class="queue-frame-image-container" data-event-number="${frameData.eventNumber}">
+                <img src="${frameData.path}" alt="TRAKE frame">
+                <div class="queue-frame-user">${frameData.submitted_by}</div>
+                <button class="remove-queue-item-btn" title="Xóa frame này">&times;</button>
+            </div>
+            <div class="queue-frame-info-bar">${frameData.frameIdentifier}</div>
+        `;
+        
+        frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', () => {
+             if (confirm(`Bạn có chắc muốn xóa frame cho sự kiện ${frameData.eventNumber} không?`)) {
+                sendWebSocketMessage('clear_trake_event', { eventNumber: frameData.eventNumber });
+             }
+        });
+
+        trakeSubmitQueueFramesContainer.appendChild(frameElement);
+    });
+
+    // Cập nhật trạng thái nút Submit (giữ nguyên)
+    submitTrakeBtn.disabled = frames.length !== 5;
+}
 
 });
