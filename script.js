@@ -4364,31 +4364,21 @@ function renderTrakeQueue(frames = []) {
     console.log('[TRAKE] Rendering queue with frames:', frames);
     trakeQueueState = frames;
 
+    const mainContainer = document.querySelector('.main-container');
     const trakeQueueContainer = document.getElementById('trakeSubmitQueue');
-    const regularSubmitQueue = document.getElementById('submitQueue');
 
-    // 1. Quản lý hiển thị của TRAKE queue
     if (frames.length > 0) {
-        trakeQueueContainer.style.display = 'flex';
-        setTimeout(() => trakeQueueContainer.classList.add('visible'), 10);
+        // === BỔ SUNG ĐỂ CHẮC CHẮN ===
+        // Xóa style display inline (nếu có) để CSS có thể hoạt động
+        trakeQueueContainer.style.display = ''; 
+        // === KẾT THÚC BỔ SUNG ===
+
+        mainContainer.classList.add('trake-active');
     } else {
-        trakeQueueContainer.classList.remove('visible');
-        setTimeout(() => {
-            if (trakeQueueState.length === 0) {
-                trakeQueueContainer.style.display = 'none';
-            }
-        }, 300);
+        mainContainer.classList.remove('trake-active');
     }
-    const isRegularQueueVisible = regularSubmitQueue.classList.contains('visible');
-    
-    if (frames.length > 0 && isRegularQueueVisible) {
-        // Nếu cả hai queue cùng hiển thị, thêm class để chia đôi
-        regularSubmitQueue.classList.add('split-view');
-    } else {
-        // Nếu chỉ có một trong hai (hoặc không có) hiển thị, xóa class chia đôi
-        regularSubmitQueue.classList.remove('split-view');
-    }
-    // 2. Cập nhật thanh trạng thái 5 sự kiện
+
+    // Cập nhật thanh trạng thái 5 sự kiện (giữ nguyên)
     const filledEvents = new Set(frames.map(f => f.eventNumber));
     trakeStatusBar.querySelectorAll('.status-dot').forEach(dot => {
         const eventNum = parseInt(dot.dataset.event);
@@ -4401,7 +4391,7 @@ function renderTrakeQueue(frames = []) {
         }
     });
 
-    // 3. Render các frame trong queue (Giữ nguyên logic này)
+    // Render các frame trong queue (giữ nguyên)
     trakeSubmitQueueFramesContainer.innerHTML = '';
     frames.forEach(frameData => {
         const frameElement = document.createElement('div');
@@ -4426,7 +4416,7 @@ function renderTrakeQueue(frames = []) {
         trakeSubmitQueueFramesContainer.appendChild(frameElement);
     });
 
-    // 4. Cập nhật trạng thái nút Submit
+    // Cập nhật trạng thái nút Submit (giữ nguyên)
     submitTrakeBtn.disabled = frames.length !== 5;
 }
 
