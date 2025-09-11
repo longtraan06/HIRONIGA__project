@@ -138,6 +138,22 @@
                 </div>
             </div>
         </main>
+
+        <div id="trakeSubmitQueue" class="submit-queue trake-queue">
+            <div class="submit-queue-header">
+                <h3>TRAKE</h3>
+                <div class="queue-actions">
+                    <button id="submitTrakeBtn" class="queue-action-btn submit-btn" disabled>
+                        <i class="fas fa-paper-plane"></i> Submit
+                    </button>
+                </div>
+            </div>
+            <div id="trakeSubmitQueueFrames" class="submit-queue-frames">
+                <!-- Các frame TRAKE sẽ được thêm vào đây -->
+            </div>
+        </div>
+
+
     </div>
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-content">
@@ -321,64 +337,50 @@
     </div>
 
     <script src="script.js"></script>
-
-    <div id="submitQueue" class="submit-queue">
-        <div class="submit-queue-header">
-            <button id="toggleQueueBtn" class="queue-toggle-btn" title="Minimize/Expand Queue">
-                <i class="fas fa-chevron-down"></i>
-            </button>
-            <div class="queue-actions">
-                <span id="queueCount" class="queue-count">0 frames</span>
-                <button id="submitAsQaBtn" class="queue-action-btn" title="Submit selected frame as QA" disabled>
-                    <i class="fas fa-question-circle"></i> Submit as QA
+    <div id="queueContainer" class="queue-container">
+        <div id="submitQueue" class="submit-queue">
+            <div class="submit-queue-header">
+                <button id="toggleQueueBtn" class="queue-toggle-btn" title="Minimize/Expand Queue">
+                    <i class="fas fa-chevron-down"></i>
                 </button>
-                <button id="submitAsKisBtn" class="queue-action-btn" title="Submit selected frame(s) as KIS" disabled>
-                    <i class="fas fa-film"></i> Submit as KIS
-                </button>
-                <button id="clearQueueBtn" class="queue-action-btn" title="Clear All Frames">
-                    <i class="fas fa-trash"></i> Clear All
-                </button>
+                <div class="queue-actions">
+                    <span id="queueCount" class="queue-count">0 frames</span>
+                    <button id="submitAsQaBtn" class="queue-action-btn" title="Submit selected frame as QA" disabled>
+                        <i class="fas fa-question-circle"></i> Submit as QA
+                    </button>
+                    <button id="submitAsKisBtn" class="queue-action-btn" title="Submit selected frame(s) as KIS" disabled>
+                        <i class="fas fa-film"></i> Submit as KIS
+                    </button>
+                    <button id="clearQueueBtn" class="queue-action-btn" title="Clear All Frames">
+                        <i class="fas fa-trash"></i> Clear All
+                    </button>
+                </div>
+                <h3>Submit Queue</h3>
             </div>
-            <h3>Submit Queue</h3>
+            <div id="submitQueueFrames" class="submit-queue-frames">
+            </div>
         </div>
-        <div id="submitQueueFrames" class="submit-queue-frames">
+
+        <div id="formSubmitQueue" class="submit-queue">
+            <div class="submit-queue-header form-submit-header">
+                <div class="form-inputs-wrapper">
+                    <input type="text" id="formSubmitFilename" placeholder="Nhập tên file (bắt buộc)..." required>
+                    <input type="text" id="formSubmitText" placeholder="Nhập câu trả lời (tùy chọn)...">
+                </div>
+                <div class="form-submit-actions">
+                    <button id="formSubmitBtn" class="queue-action-btn submit-btn" disabled>
+                        <i class="fas fa-paper-plane"></i> Submit
+                    </button>
+                    <button id="clearFormSubmitQueueBtn" class="queue-action-btn">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                </div>
+            </div>
+            <div id="formSubmitQueueFrames" class="submit-queue-frames">
+                <!-- Các frame sẽ được thêm vào đây bằng JavaScript -->
+            </div>
         </div>
     </div>
-
-    <div id="formSubmitQueue" class="submit-queue">
-        <div class="submit-queue-header form-submit-header">
-            <div class="form-inputs-wrapper">
-                <input type="text" id="formSubmitFilename" placeholder="Nhập tên file (bắt buộc)..." required>
-                <input type="text" id="formSubmitText" placeholder="Nhập câu trả lời (tùy chọn)...">
-            </div>
-            <div class="form-submit-actions">
-                <button id="formSubmitBtn" class="queue-action-btn submit-btn" disabled>
-                    <i class="fas fa-paper-plane"></i> Submit
-                </button>
-                <button id="clearFormSubmitQueueBtn" class="queue-action-btn">
-                    <i class="fas fa-trash"></i> Clear
-                </button>
-            </div>
-        </div>
-        <div id="formSubmitQueueFrames" class="submit-queue-frames">
-            <!-- Các frame sẽ được thêm vào đây bằng JavaScript -->
-        </div>
-    </div>
-
-    <div id="trakeSubmitQueue" class="submit-queue trake-queue" style="display: none;">
-        <div class="submit-queue-header">
-            <h3>TRAKE Queue</h3>
-            <div class="queue-actions">
-                <button id="submitTrakeBtn" class="queue-action-btn submit-btn" disabled>
-                    <i class="fas fa-paper-plane"></i> Submit
-                </button>
-            </div>
-        </div>
-        <div id="trakeSubmitQueueFrames" class="submit-queue-frames">
-            <!-- Các frame TRAKE sẽ được thêm vào đây -->
-        </div>
-    </div>
-
 
     <div id="historyMenu" class="history-menu">
         <div class="history-menu-header">
