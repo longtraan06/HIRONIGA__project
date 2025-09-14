@@ -15,7 +15,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'zTCZouc8fxzZtDag0RF5F_Gj6zEP8Dhr'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'oHfUbRafSuofjaBLTYWDUDdaS2tdtCUU'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
@@ -29,7 +29,7 @@ document.addEventListener('DOMContentLoaded', function() {
     let isTrakeMode = false;
     let trakeQueueState = []; // Lưu trạng thái TRAKE queue từ server
     let currentVideoModalData = {}; // Lưu thông tin video đang mở
-
+    let queuedFramesSet = new Set();
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
 
@@ -52,6 +52,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let isFormSubmitMode = false; // Mặc định là chế độ cộng tác
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
+
+    let resolveInitialStatePromise; 
+    const initialStateReady = new Promise(resolve => {
+        resolveInitialStatePromise = resolve;
+    });
 
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
@@ -961,7 +966,36 @@ async function ensureDresPrerequisites() {
             case 'init_state':
                 userColors = payload.users;
                 renderFullQueue(payload.queue);
-                // renderUserLegend();
+                queuedFramesSet = new Set(payload.queue.map(frame => frame.frameIdentifier));
+                if (allImages.length > 0) {
+                    allImages = allImages.map(image => ({
+                        ...image,
+                        isInQueue: queuedFramesSet.has(image.frameIdentifier)
+                    }));
+                }
+                if (allGroupedData.length > 0) {
+                    allGroupedData.forEach(group => {
+                        group.frames = group.frames.map(image => ({
+                            ...image,
+                            isInQueue: queuedFramesSet.has(image.frameIdentifier)
+                        }));
+                    });
+                }
+                const resultFrames = document.querySelectorAll('.main-content .image-item');
+                resultFrames.forEach(frameElement => {
+                    const frameId = frameElement.getAttribute('data-frame-identifier');
+                    if (queuedFramesSet.has(frameId)) {
+                        frameElement.classList.add('is-in-queue');
+                    } else {
+                        frameElement.classList.remove('is-in-queue');
+                    }
+                });
+
+                // updateSearchResultsUI();
+                if (resolveInitialStatePromise) {
+                    resolveInitialStatePromise();
+                    resolveInitialStatePromise = null; 
+                }
                 break;
             case 'user_update':
                 userColors = payload.users;
@@ -988,6 +1022,20 @@ async function ensureDresPrerequisites() {
                 renderTrakeQueue(payload);
                 break;
         }
+    }
+
+    function updateSearchResultsUI() {
+        const resultFrames = document.querySelectorAll('.main-content .image-item');
+
+        resultFrames.forEach(frameElement => {
+            const frameId = frameElement.getAttribute('data-frame-identifier');
+
+            if (queuedFramesSet.has(frameId)) {
+                frameElement.classList.add('is-in-queue');
+            } else {
+                frameElement.classList.remove('is-in-queue');
+            }
+        });
     }
 
     function sendWebSocketMessage(action, payload) {
@@ -2071,7 +2119,7 @@ async function ensureDresPrerequisites() {
             throw err;
         });
     }
-function handleSearchResults(images, isReranked = false) {
+async function handleSearchResults(images, isReranked = false) {
     // 1. Dọn dẹp trạng thái cũ
     if (window.currentInfiniteScrollObserver) {
         window.currentInfiniteScrollObserver.disconnect();
@@ -2082,15 +2130,21 @@ function handleSearchResults(images, isReranked = false) {
         return;
     }
 
-    allImages = images;
+    await initialStateReady;
+
+    const markedImages = images.map(image => {
+        return {
+            ...image, // Giữ lại tất cả thông tin cũ của frame
+            isInQueue: queuedFramesSet.has(image.frameIdentifier) // Thêm thuộc tính mới
+        };
+    });
+
+    allImages = markedImages; 
     frameSelectionManager.clearAllSelections();
     contentArea.innerHTML = '';
     isLoading = false;
     hasReachedEnd = false;
-
-    // 2. Tạo và thêm phần tử "loading". Nó sẽ được quản lý bởi các hàm con.
     const loadingMore = document.createElement('div');
-    loadingMore.className = 'loading-more';
     loadingMore.id = 'loadingMore';
     loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
     loadingMore.style.display = 'none';
@@ -2111,6 +2165,7 @@ function handleSearchResults(images, isReranked = false) {
         setupInfiniteScrollForGroups();
         loadMoreGroups();
     }
+    updateSearchResultsUI();
 }
 
 function resetOcrFiltering() {
@@ -3805,7 +3860,9 @@ function groupResultsByVideo(images) {
 
 function createImageItemElement(image) {
     const imageItem = document.createElement('div');
-    imageItem.className = 'image-item';
+
+    const inQueueClass = image.isInQueue ? 'is-in-queue' : '';
+    imageItem.className = `image-item ${inQueueClass}`;
     const uniqueFrameId = image.frameIdentifier;
     imageItem.setAttribute('data-frame-id', uniqueFrameId);
     imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
