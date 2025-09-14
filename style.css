@@ -981,7 +981,6 @@ button:focus, input:focus, textarea:focus {
     background: var(--matcha-pale); /* Có thể giữ lại hoặc đổi màu khác */
     color: var(--matcha-brown);
     text-align: center;
-    padding: 1px; /* Tăng padding một chút cho đẹp */
     font-size: 11px;
     font-weight: 500; /* Làm chữ đậm hơn một chút */
     white-space: nowrap;
@@ -2684,4 +2683,41 @@ input:checked + .slider:before {
     font-size: 14px;
     border: 2px solid white;
     z-index: 10;
+}
+
+.image-item.is-in-queue {
+    border: 2px solid #E53935; 
+}
+
+.image-item.is-in-queue::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    
+    background-color: rgba(0, 0, 0, 0.4); 
+    backdrop-filter: blur(1.5px);
+    z-index: 2; 
+    border-radius: 10px;
+    pointer-events: none; 
+}
+.image-item.is-in-queue::before {
+    content: "Q"; /* Hoặc bạn có thể dùng icon FontAwesome */
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    background-color: #E53935;
+    color: white;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: bold;
+    z-index: 3; /* Nổi trên cả lớp phủ mờ */
+    border: 1px solid white;
 }
