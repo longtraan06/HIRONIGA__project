@@ -9,12 +9,11 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'zTCZouc8fxzZtDag0RF5F_Gj6zEP8Dhr'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    const DEFAULT_DRES_SESSION_ID = 'oHfUbRafSuofjaBLTYWDUDdaS2tdtCUU'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
     let isEventFilterEnabled = false;
-    // Biến zcho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
     const GROUPS_PER_BATCH = 5; 
@@ -23,10 +22,10 @@ document.addEventListener('DOMContentLoaded', function() {
     let isTrakeMode = false;
     let trakeQueueState = []; // Lưu trạng thái TRAKE queue từ server
     let currentVideoModalData = {}; // Lưu thông tin video đang mở
-
+    let queuedFramesSet = new Set();
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
-
+    let resolveInitialStatePromise;
     let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
 
@@ -46,6 +45,10 @@ document.addEventListener('DOMContentLoaded', function() {
     let isFormSubmitMode = false; // Mặc định là chế độ cộng tác
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
+
+    const initialStateReady = new Promise(resolve => {
+        resolveInitialStatePromise = resolve;
+    });
 
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
@@ -957,7 +960,36 @@ async function ensureDresPrerequisites() {
             case 'init_state':
                 userColors = payload.users;
                 renderFullQueue(payload.queue);
-                // renderUserLegend();
+                queuedFramesSet = new Set(payload.queue.map(frame => frame.frameIdentifier));
+                if (allImages.length > 0) {
+                    allImages = allImages.map(image => ({
+                        ...image,
+                        isInQueue: queuedFramesSet.has(image.frameIdentifier)
+                    }));
+                }
+                if (allGroupedData.length > 0) {
+                    allGroupedData.forEach(group => {
+                        group.frames = group.frames.map(image => ({
+                            ...image,
+                            isInQueue: queuedFramesSet.has(image.frameIdentifier)
+                        }));
+                    });
+                }
+                const resultFrames = document.querySelectorAll('.main-content .image-item');
+                resultFrames.forEach(frameElement => {
+                    const frameId = frameElement.getAttribute('data-frame-identifier');
+                    if (queuedFramesSet.has(frameId)) {
+                        frameElement.classList.add('is-in-queue');
+                    } else {
+                        frameElement.classList.remove('is-in-queue');
+                    }
+                });
+
+                // updateSearchResultsUI();
+                if (resolveInitialStatePromise) {
+                    resolveInitialStatePromise();
+                    resolveInitialStatePromise = null; 
+                }
                 break;
             case 'user_update':
                 userColors = payload.users;
@@ -995,7 +1027,19 @@ async function ensureDresPrerequisites() {
     }
 
 
+    function updateSearchResultsUI() {
+        const resultFrames = document.querySelectorAll('.main-content .image-item');
 
+        resultFrames.forEach(frameElement => {
+            const frameId = frameElement.getAttribute('data-frame-identifier');
+
+            if (queuedFramesSet.has(frameId)) {
+                frameElement.classList.add('is-in-queue');
+            } else {
+                frameElement.classList.remove('is-in-queue');
+            }
+        });
+    }
 
 
 
@@ -1209,39 +1253,61 @@ async function ensureDresPrerequisites() {
             }
         });
     }
-    async function translateText(text, sourceLang = 'vi', targetLang = 'en', apiKey = 'AIzaSyDvIhSOv06Tt8FTwOp40P1wjU9itsgDFvw') {
-        if (!text || typeof text !== "string") return '';
+// Thay thế hàm cũ bằng hàm này
+async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
+    if (!text || typeof text !== "string") return '';
 
-        const url = `https://translation.googleapis.com/language/translate/v2?key=${apiKey}`;
+    const LLM_API_URL = 'http://192.168.20.156:5070/v1/chat/completions';
+    
+    const MODEL_NAME = 'unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit'; 
 
-        const body = {
-            q: text,
-            source: sourceLang,
-            target: targetLang,
-            format: 'text'
-        };
+    const systemPrompt = `You are an expert translator. Your task is to translate text from Vietnamese to English accurately and concisely. Do not add any extra explanations, comments, or apologies. Provide ONLY the translated English text.`;
 
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(body)
-            });
-
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`API error: ${response.status} - ${errorText}`);
+    const body = {
+        model: MODEL_NAME,
+        messages: [
+            {
+                role: 'system',
+                content: systemPrompt
+            },
+            {
+                role: 'user', 
+                content: text
             }
+        ],
+        temperature: 0.1,  
+        max_tokens: 1024,  
+        stream: false       
+    };
 
-            const data = await response.json();
-            return data.data.translations[0].translatedText;
-        } catch (error) {
-            console.error('Official translation API error:', error);
-            return text;
+    try {
+        const response = await fetch(LLM_API_URL, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body)
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Lỗi API LLM: ${response.status} - ${errorText}`);
         }
+
+        const data = await response.json();
+
+        if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
+            const translatedText = data.choices[0].message.content.trim();
+            return translatedText;
+        } else {
+            throw new Error('Cấu trúc phản hồi từ API LLM không hợp lệ.');
+        }
+
+    } catch (error) {
+        console.error('Lỗi khi gọi API dịch của LLM:', error);
+        return text; 
     }
+}
 
     function switchSearchMode(mode) {
         // Cập nhật UI của các nút
@@ -2067,7 +2133,7 @@ async function ensureDresPrerequisites() {
             throw err;
         });
     }
-function handleSearchResults(images, isReranked = false) {
+async function handleSearchResults(images, isReranked = false) {
     // 1. Dọn dẹp trạng thái cũ
     if (window.currentInfiniteScrollObserver) {
         window.currentInfiniteScrollObserver.disconnect();
@@ -2078,15 +2144,23 @@ function handleSearchResults(images, isReranked = false) {
         return;
     }
 
-    allImages = images;
+    await initialStateReady;
+
+    const markedImages = images.map(image => {
+        return {
+            ...image, // Giữ lại tất cả thông tin cũ của frame
+            isInQueue: queuedFramesSet.has(image.frameIdentifier) // Thêm thuộc tính mới
+        };
+    });
+
+    allImages = markedImages; 
+
+    // allImages = images;
     frameSelectionManager.clearAllSelections();
     contentArea.innerHTML = '';
     isLoading = false;
     hasReachedEnd = false;
-
-    // 2. Tạo và thêm phần tử "loading". Nó sẽ được quản lý bởi các hàm con.
     const loadingMore = document.createElement('div');
-    loadingMore.className = 'loading-more';
     loadingMore.id = 'loadingMore';
     loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
     loadingMore.style.display = 'none';
@@ -2107,6 +2181,7 @@ function handleSearchResults(images, isReranked = false) {
         setupInfiniteScrollForGroups();
         loadMoreGroups();
     }
+    updateSearchResultsUI();
 }
 
 function resetOcrFiltering() {
@@ -3830,7 +3905,8 @@ function groupResultsByVideo(images) {
 
 function createImageItemElement(image) {
     const imageItem = document.createElement('div');
-    imageItem.className = 'image-item';
+    const inQueueClass = image.isInQueue ? 'is-in-queue' : '';
+    imageItem.className = `image-item ${inQueueClass}`;
     const uniqueFrameId = image.frameIdentifier;
     imageItem.setAttribute('data-frame-id', uniqueFrameId);
     imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
