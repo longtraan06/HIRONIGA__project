@@ -41,21 +41,19 @@ allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=allowed_origin_regex,
-    allow_credentials=True, # Cần thiết cho một số kịch bản
-    allow_methods=["*"],    # Cho phép tất cả các phương thức (GET, POST, etc.)
-    allow_headers=["*"],    # Cho phép tất cả các header
+    allow_credentials=True, 
+    allow_methods=["*"],    
+    allow_headers=["*"],    
 )   
 
 # #aic
 redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
 keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
 video_path_root = "/mlcv2/Datasets/HCMAI25/batch2/video"
-# video_path_root = "/mlcv1/Datasets/HCMAI25/batch1/video"
 hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
+
 #acm
 # redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
-# keysframe_path_root = "/workspace/WorkingSpace/Personal/chinhnm/Keyframe_Extraction/server/output"
-# video_path_root = "/workspace/Datasets/ACM2025/Batch1/video"
 """
 Available models:
 "google/siglip2-large-patch16-512"
@@ -66,7 +64,7 @@ Available models:
 
 model_paths=[
     "google/siglip2-large-patch16-512",
-    # "google/siglip2-giant-opt-patch16-384"
+    "google/siglip2-giant-opt-patch16-384"
 ]
 
 milvus = MilvusManager(
@@ -233,7 +231,7 @@ async def redis_stats():
         }
 
 # usage
-# clear all cache: curl -X POST -u "admin:hlgay" http://192.168.20.170:8080/api/admin/clear-cache?cache_type=all
+# clear all cache: curl -X POST -u "admin:hlgay" http://192.168.20.152:8080/api/admin/clear-cache?cache_type=all
 # clear temporal chains: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=temporal
 # clear search cache: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=search
 # clear rate limit counters: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=rate_limit
@@ -1050,13 +1048,15 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
     current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
     current_users = {name.decode(): color.decode() for name, color in current_users_raw.items()}
-
+    wrong_ids_bytes = redis_client.smembers("dres:wrong_submissions")
+    wrong_ids = [id_bytes.decode('utf-8') for id_bytes in wrong_ids_bytes]
     # 3. Gửi trạng thái đầy đủ cho user vừa kết nối
     initial_state = {
         "action": "init_state",
         "payload": {
             "queue": current_queue_items,
-            "users": current_users
+            "users": current_users,
+            "wrongSubmissionIds": wrong_ids
         }
     }
     await websocket.send_text(json.dumps(initial_state))
@@ -1120,6 +1120,42 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                         "payload": {"username": username}
                     }
                     await manager.publish_update(json.dumps(alert_message))
+
+            elif action == "report_dres_result":
+                result_payload = payload
+                submission_status = result_payload.get("status")  # "CORRECT" hoặc "WRONG"
+                frame_identifiers = result_payload.get("frameIdentifiers", [])
+
+                # Chỉ xử lý nếu có danh sách frame
+                if not frame_identifiers:
+                    continue
+
+                if submission_status == "WRONG":
+                    # Thêm tất cả các frame trong submission sai vào Set của Redis
+                    redis_client.sadd("dres:wrong_submissions", *frame_identifiers)
+                    
+                    # Tạo tin nhắn để phát đi cho mọi người
+                    broadcast_message = {
+                        "action": "dres_submission_wrong",
+                        "payload": {
+                            "submittedBy": username,
+                            "frameIdentifiers": frame_identifiers
+                        }
+                    }
+                    await manager.publish_update(json.dumps(broadcast_message))
+
+                elif submission_status == "CORRECT":
+                    redis_client.delete("dres:wrong_submissions")
+                    
+                    broadcast_message = {
+                        "action": "dres_submission_correct",
+                        "payload": {
+                            "submittedBy": username,
+                            "frameIdentifiers": frame_identifiers
+                        }
+                    }
+                    await manager.publish_update(json.dumps(broadcast_message))
+
             elif action == "remove_frame":
                 # Payload từ client vẫn là một đối tượng JSON đầy đủ
                 frame_to_remove = payload 
@@ -1328,6 +1364,6 @@ async def handle_form_submit(request: FormSubmitRequest):
 
 
 # Mount static files
-app.mount("/", StaticFiles(directory="web", html=True), name="static")
+# app.mount("/", StaticFiles(directory="web", html=True), name="static")
 
 # usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
