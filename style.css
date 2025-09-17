@@ -1,8 +1,8 @@
 @font-face {
-    font-family: 'PoppinsVH';
-    src: url('./public/fonts/FZ Poppins-Regular.ttf') format('truetype');
-    font-weight: 400;
-    font-style: normal;
+  font-family: 'PoppinsVH';
+  src: url('./public/fonts/FZ Poppins-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
 }
 
 :root {
@@ -24,7 +24,7 @@
     --border-light: rgba(139, 195, 115, 0.3);
     --shadow-soft: 0 4px 15px rgba(139, 195, 115, 0.15);
     --shadow-medium: 0 6px 20px rgba(139, 195, 115, 0.25);
-
+    
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -224,12 +224,12 @@ button:focus, input:focus, textarea:focus {
     transform: translateY(-3px);
 }
 #settingsBtn {
-color: var(--matcha-dark);
-background-color: var(--matcha-pale);
+    color: var(--matcha-dark);
+    background-color: var(--matcha-pale);
 }
 #shortcutsBtn {
-margin-left: auto;
-color: var(--matcha-cream);
+    margin-left: auto;
+    color: var(--matcha-cream);
 }
 
 .search-mode-buttons {
@@ -416,7 +416,7 @@ color: var(--matcha-cream);
 }
 
 .image-item {
-    position: relative;
+    position: relative; 
     display: flex; /* <-- Sử dụng Flexbox để xếp ảnh và text theo chiều dọc */
     flex-direction: column; /* <-- Xếp theo cột */
     border-radius: 12px;
@@ -864,10 +864,10 @@ color: var(--matcha-cream);
     background-size: 400% 400%;
     animation: rainbow-border 6s linear infinite;
     -webkit-mask:
-    linear-gradient(#fff 0 0) content-box,
-    linear-gradient(#fff 0 0);
+        linear-gradient(#fff 0 0) content-box,
+        linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
-    mask-composite: exclude;
+            mask-composite: exclude;
     z-index: -2;
 }
 
@@ -1091,7 +1091,7 @@ color: var(--matcha-cream);
 .close-btn {
     position: absolute;
     /* top: 3vh;
-     *   right: 1vh; */
+    right: 1vh; */
     background: rgb(0, 0, 0);
     color: black;
     border: none;
@@ -1121,23 +1121,19 @@ color: var(--matcha-cream);
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%) scale(0.8);
-    background-color: #d90429; /* A strong, vibrant red */
     color: white;
     padding: 25px 50px;
     border-radius: 15px;
     border: 3px solid #fff;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 0 10px rgba(217, 4, 41, 0.3);
-    z-index: 99999; /* Must be on top of everything */
-
-    font-size: 2.5em; /* Larger font size */
-    font-weight: 800; /* Bolder font */
+    z-index: 99999; 
+    font-size: 2.5em; 
+    font-weight: 800; 
     text-align: center;
     text-transform: uppercase;
     letter-spacing: 1px;
     text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
-
     opacity: 0;
-    pointer-events: none; /* Can't be clicked */
+    pointer-events: none; 
     transition: opacity 0.3s ease-in-out, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
@@ -1146,12 +1142,29 @@ color: var(--matcha-cream);
     transform: translate(-50%, -50%) scale(1);
 }
 
-.global-alert-notification span {
-    display: block; /* Puts username on its own line */
-    font-size: 0.6em; /* Makes username slightly smaller */
-    margin-bottom: 5px;
-    color: #ffc900; /* A gold color for the username */
+.global-alert-notification.is-special {
+    background-color: #d90429; /* Màu đỏ đậm */
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 0 10px rgba(217, 4, 41, 0.3);
 }
+
+.global-alert-notification.is-special span {
+    color: #ffc900; /* Màu vàng gold */
+}
+
+
+/* Lớp cho thông báo ĐÚNG (màu xanh) */
+.global-alert-notification.is-correct {
+    background-color: #28a745; /* Màu xanh lá cây thành công */
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4), 0 0 0 10px rgba(40, 167, 69, 0.3);
+}
+
+.global-alert-notification.is-correct span {
+    color: #f8f9fa; /* Màu trắng sáng hơn một chút */
+    display: block; 
+    margin-bottom: 5px;
+}
+
+
 /* Image/Keyframe Modal */
 .image-modal {
     position: fixed;
@@ -1601,59 +1614,59 @@ color: var(--matcha-cream);
 }
 
 #submissionForm .form-group {
-margin-bottom: 20px;
+    margin-bottom: 20px;
 }
 
 #submissionForm label {
-display: block;
-font-size: 15px;
-font-weight: 600;
-color: var(--matcha-dark);
-margin-bottom: 8px;
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--matcha-dark);
+    margin-bottom: 8px;
 }
 
 #submissionForm input[type="text"],
 #submissionForm textarea {
-width: 100%;
-padding: 12px 15px;
-border: 2px solid var(--matcha-light);
-border-radius: 10px;
-font-size: 15px;
-font-family: inherit;
-transition: var(--transition-smooth);
-background-color: white;
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: inherit;
+    transition: var(--transition-smooth);
+    background-color: white;
 }
 
 #submissionForm input[type="text"]:focus,
 #submissionForm textarea:focus {
-outline: none;
-border-color: var(--matcha-primary);
-box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
 #submissionForm textarea {
-resize: vertical;
-min-height: 100px;
+    resize: vertical;
+    min-height: 100px;
 }
 
 #submissionForm .submit-form-btn {
-width: 100%;
-padding: 12px;
-font-size: 16px;
-font-weight: 600;
-background-color: var(--matcha-primary);
-color: white;
-border: none;
-border-radius: 10px;
-cursor: pointer;
-transition: var(--transition-smooth);
-box-shadow: var(--shadow-soft);
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    background-color: var(--matcha-primary);
+    color: white;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-soft);
 }
 
 #submissionForm .submit-form-btn:hover {
-background-color: var(--matcha-dark);
-transform: translateY(-2px);
-box-shadow: var(--shadow-medium);
+    background-color: var(--matcha-dark);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-medium);
 }
 
 
@@ -1726,73 +1739,73 @@ box-shadow: var(--shadow-medium);
 }
 
 #vqaForm .form-group {
-margin-bottom: 20px;
+    margin-bottom: 20px;
 }
 
 #vqaForm label {
-display: block;
-font-size: 15px;
-font-weight: 600;
-color: var(--matcha-dark);
-margin-bottom: 8px;
+    display: block;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--matcha-dark);
+    margin-bottom: 8px;
 }
 
 #vqaForm input[type="text"],
 #vqaForm textarea {
-width: 100%;
-padding: 12px 15px;
-border: 2px solid var(--matcha-light);
-border-radius: 10px;
-font-size: 15px;
-font-family: inherit;
-transition: var(--transition-smooth);
-background-color: white;
+    width: 100%;
+    padding: 12px 15px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    font-size: 15px;
+    font-family: inherit;
+    transition: var(--transition-smooth);
+    background-color: white;
 }
 
 #vqaForm input[type="text"]:focus,
 #vqaForm textarea:focus {
-outline: none;
-border-color: var(--matcha-primary);
-box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
 #vqaForm textarea {
-resize: vertical;
-min-height: 80px;
+    resize: vertical;
+    min-height: 80px;
 }
 
 #vqaForm .submit-form-btn {
-width: 100%;
-padding: 12px;
-font-size: 16px;
-font-weight: 600;
-background-color: var(--matcha-primary);
-color: black;
-border: none;
-border-radius: 10px;
-cursor: pointer;
-transition: var(--transition-smooth);
-box-shadow: var(--shadow-soft);
+    width: 100%;
+    padding: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    background-color: var(--matcha-primary);
+    color: black;
+    border: none;
+    border-radius: 10px;
+    cursor: pointer;
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-soft);
 }
 
 #vqaForm .submit-form-btn:hover {
-background-color: var(--matcha-dark);
-transform: translateY(-2px);
-box-shadow: var(--shadow-medium);
+    background-color: var(--matcha-dark);
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-medium);
 }
 
 #frameVqaAnswerDisplay {
-background-color: var(--matcha-pale);
-border: 2px solid var(--matcha-light);
-border-radius: 10px;
-padding: 10px;
-font-family: 'Courier New', Courier, monospace;
-font-size: 13px;
-color: var(--matcha-dark);
-max-height: 200px; /* Giới hạn chiều cao */
-overflow-y: auto;   /* Thêm thanh cuộn khi nội dung quá dài */
-white-space: pre-wrap; /* Đảm bảo xuống dòng */
-word-break: break-all;
+    background-color: var(--matcha-pale);
+    border: 2px solid var(--matcha-light);
+    border-radius: 10px;
+    padding: 10px;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    color: var(--matcha-dark);
+    max-height: 200px; /* Giới hạn chiều cao */
+    overflow-y: auto;   /* Thêm thanh cuộn khi nội dung quá dài */
+    white-space: pre-wrap; /* Đảm bảo xuống dòng */
+    word-break: break-all;
 }
 
 .mini-modal {
@@ -1808,7 +1821,7 @@ word-break: break-all;
     justify-content: center;
     z-index: 10002; /* Đảm bảo nổi trên cả submit queue */
     backdrop-filter: blur(3px);
-
+    
     /* Điều khiển hiển thị */
     opacity: 0;
     pointer-events: none;
@@ -1839,7 +1852,7 @@ word-break: break-all;
     width: 90%;
     max-width: 420px; /* Giới hạn độ rộng để nó nhỏ gọn */
     z-index: 1; /* Nổi trên lớp phủ */
-
+    
     /* Hiệu ứng xuất hiện */
     transform: scale(0.9) translateY(20px);
     transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -1970,7 +1983,7 @@ word-break: break-all;
     transform: translateY(-10px);
     transition: opacity 0.2s ease, transform 0.2s ease;
     pointer-events: none; /* Không thể tương tác khi đang ẩn */
-
+    
     display: flex;
     flex-direction: column;
 }
@@ -2079,7 +2092,7 @@ word-break: break-all;
     margin-top: 5px; /* Thêm khoảng cách với ô search */
     border-left: 3px solid #007bff;
     cursor: pointer; /* Cho người dùng biết có thể click vào */
-
+    
     /* Các thuộc tính để làm hiệu ứng ẩn/hiện */
     opacity: 0;
     max-height: 0;
@@ -2418,7 +2431,7 @@ word-break: break-all;
     flex-shrink: 1;
     flex-basis: calc(16.66% - 10px);
     min-width: 150px;
-    height: auto;
+    height: auto; 
 }
 
 .frame-strip .image-item img {
@@ -2477,12 +2490,12 @@ word-break: break-all;
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 1000;
+    z-index: 1000; 
 }
 .video-modal .modal-content {
     position: relative;
-    z-index: 1001;
-}
+    z-index: 1001; 
+}                                                                                                                                           
 
 .form-submit-header {
     display: flex;
@@ -2493,20 +2506,20 @@ word-break: break-all;
 }
 
 #formSubmitText {
-/* flex-grow: 1; Cho phép ô input chiếm hết không gian còn lại */
-padding: 8px 12px;
-font-size: 15px;
-border: 2px solid var(--matcha-light);
-border-radius: 8px;
-background-color: white;
-color: var(--matcha-dark);
-transition: all 0.2s ease;
+    /* flex-grow: 1; Cho phép ô input chiếm hết không gian còn lại */
+    padding: 8px 12px;
+    font-size: 15px;
+    border: 2px solid var(--matcha-light);
+    border-radius: 8px;
+    background-color: white;
+    color: var(--matcha-dark);
+    transition: all 0.2s ease;
 }
 
 #formSubmitText:focus {
-outline: none;
-border-color: var(--matcha-primary);
-box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
+    outline: none;
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
 }
 
 .form-submit-actions {
@@ -2516,16 +2529,16 @@ box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
 }
 
 #formSubmitBtn:disabled {
-background-color: #ccc;
-cursor: not-allowed;
-opacity: 0.6;
+    background-color: #ccc;
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 /* Style cho nút chuyển đổi chế độ */
 #toggleQueueModeBtn.active {
-background: var(--matcha-pale);
-color: var(--matcha-dark);
-box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+    background: var(--matcha-pale);
+    color: var(--matcha-dark);
+    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 
 .form-submit-header {
@@ -2541,9 +2554,9 @@ box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 
 #formSubmitFilename,
 #formSubmitText {
-border-color: var(--matcha-border);
-border-radius: 10px;
-width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
+    border-color: var(--matcha-border);
+    border-radius: 10px;
+    width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
 }
 
 .fuzzy-switch-wrapper {
@@ -2618,14 +2631,14 @@ input:checked + .slider:before {
     left: 0;
     width: 100%;
     height: 100%;
-
+    
     /* Bỏ background và backdrop-filter để không làm mờ video */
     background: none;
     backdrop-filter: none;
 
     /* Rất quan trọng: Cho phép sự kiện chuột đi xuyên qua lớp phủ này */
-    pointer-events: none;
-
+    pointer-events: none; 
+    
     opacity: 0;
     transition: opacity 0.3s ease;
     z-index: 10;
@@ -2699,60 +2712,60 @@ input:checked + .slider:before {
 }
 
 #trakeSeekGap {
-background-color: rgba(0, 0, 0, 0.5);
-border: 1px solid #555;
-color: white;
-border-radius: 5px;
-width: 60px;
-text-align: center;
-font-size: 14px;
-padding: 5px;
+    background-color: rgba(0, 0, 0, 0.5);
+    border: 1px solid #555;
+    color: white;
+    border-radius: 5px;
+    width: 60px;
+    text-align: center;
+    font-size: 14px;
+    padding: 5px;
 }
 
 #trakeSubmitQueue {
-/* --- Reset các style cũ từ .submit-queue --- */
-position: relative;
-transform: none;
-bottom: auto;
-left: auto;
-opacity: 1;
-max-height: none; /* Bỏ giới hạn chiều cao */
-pointer-events: auto;
+    /* --- Reset các style cũ từ .submit-queue --- */
+    position: relative;
+    transform: none;
+    bottom: auto;
+    left: auto;
+    opacity: 1;
+    max-height: none; /* Bỏ giới hạn chiều cao */
+    pointer-events: auto;
 
-/* --- Style cho layout cột dọc --- */
-display: none; /* Mặc định vẫn ẩn */
-flex-direction: column; /* Quan trọng: Xếp các thành phần con theo chiều dọc */
-flex-shrink: 0; /* Ngăn không cho cột này bị co lại */
-
-width: 200px; /* Chiều rộng cố định, đủ cho 1 frame. Bạn có thể điều chỉnh */
-height: 94vh; /* Chiều cao tương tự main-content */
-margin: 0px;
-
-border-radius: 10px;
-border: 1px solid var(--matcha-border);
-background-color: var(--matcha-pale);
-
-transition: all 0.3s ease;
+    /* --- Style cho layout cột dọc --- */
+    display: none; /* Mặc định vẫn ẩn */
+    flex-direction: column; /* Quan trọng: Xếp các thành phần con theo chiều dọc */
+    flex-shrink: 0; /* Ngăn không cho cột này bị co lại */
+    
+    width: 200px; /* Chiều rộng cố định, đủ cho 1 frame. Bạn có thể điều chỉnh */
+    height: 94vh; /* Chiều cao tương tự main-content */
+    margin: 0px;
+    
+    border-radius: 10px;
+    border: 1px solid var(--matcha-border);
+    background-color: var(--matcha-pale);
+    
+    transition: all 0.3s ease;
 }
 
 /* Container chứa các frame bên trong queue */
 #trakeSubmitQueueFrames {
-flex-direction: column; /* Xếp các frame theo chiều dọc */
-overflow-x: hidden;     /* Tắt cuộn ngang */
-overflow-y: auto;       /* Bật cuộn dọc khi cần */
-gap: 15px;              /* Tăng khoảng cách giữa các frame */
-padding-right: 5px;     /* Thêm chút không gian cho thanh cuộn */
+    flex-direction: column; /* Xếp các frame theo chiều dọc */
+    overflow-x: hidden;     /* Tắt cuộn ngang */
+    overflow-y: auto;       /* Bật cuộn dọc khi cần */
+    gap: 15px;              /* Tăng khoảng cách giữa các frame */
+    padding-right: 5px;     /* Thêm chút không gian cho thanh cuộn */
 }
 
 /* Style cho từng frame item bên trong */
 #trakeSubmitQueue .queue-frame-item {
-width: 100%; /* Chiếm toàn bộ chiều rộng của cột queue */
-height: auto; /* Chiều cao sẽ tự động theo tỷ lệ ảnh */
+    width: 100%; /* Chiếm toàn bộ chiều rộng của cột queue */
+    height: auto; /* Chiều cao sẽ tự động theo tỷ lệ ảnh */
 }
 
 #trakeSubmitQueue .queue-frame-item img {
-width: 100%; /* Ảnh cũng chiếm hết chiều rộng */
-height: auto;
+    width: 100%; /* Ảnh cũng chiếm hết chiều rộng */
+    height: auto;
 }
 
 /* Đổi lại cách hiển thị/ẩn TRAKE queue */
@@ -2799,7 +2812,7 @@ height: auto;
 }
 
 .image-item.is-in-queue {
-    border: 2px solid #E53935;
+    border: 2px solid #35e54c; 
 }
 
 .image-item.is-in-queue::after {
@@ -2809,19 +2822,19 @@ height: auto;
     left: 0;
     width: 100%;
     height: 100%;
-
-    background-color: rgba(0, 0, 0, 0.4);
+    
+    background-color: rgba(0, 0, 0, 0.4); 
     backdrop-filter: blur(1.5px);
-    z-index: 2;
+    z-index: 2; 
     border-radius: 10px;
-    pointer-events: none;
+    pointer-events: none; 
 }
 .image-item.is-in-queue::before {
     content: "Q"; /* Hoặc bạn có thể dùng icon FontAwesome */
     position: absolute;
     top: 8px;
     left: 8px;
-    background-color: #E53935;
+    background-color: #35e578;
     color: white;
     width: 22px;
     height: 22px;
@@ -2832,5 +2845,28 @@ height: auto;
     font-size: 12px;
     font-weight: bold;
     z-index: 3; /* Nổi trên cả lớp phủ mờ */
+    border: 1px solid white;
+}
+.image-item.is-wrong-submission,
+.queue-frame-item.is-wrong-submission {
+    border: 3px solid #E53935 !important; 
+    box-shadow: 0 0 15px rgba(229, 57, 53, 0.8) !important; 
+}
+
+/* Thêm một nhãn "WRONG" nhỏ ở góc */
+.image-item.is-wrong-submission::before,
+.queue-frame-item.is-wrong-submission 
+.queue-frame-image-container::after {
+    content: "WRONG";
+    position: absolute;
+    top: 5px;
+    left: 5px;
+    background-color: #E53935;
+    color: white;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: bold;
+    border-radius: 4px;
+    z-index: 5;
     border: 1px solid white;
 }
