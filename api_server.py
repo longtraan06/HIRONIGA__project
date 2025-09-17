@@ -66,7 +66,7 @@ Available models:
 
 model_paths=[
     "google/siglip2-large-patch16-512",
-    "google/siglip2-giant-opt-patch16-384"
+    # "google/siglip2-giant-opt-patch16-384"
 ]
 
 milvus = MilvusManager(
@@ -374,7 +374,7 @@ def get_color_for_user(username: str) -> str:
 # Models
 class TemporalStartRequest(BaseModel):
     query: str
-    top_k: int = 1000
+    top_k: int = 900
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
@@ -1086,11 +1086,13 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
                 # Sử dụng pipeline để các lệnh được thực hiện cùng lúc
                 pipe = redis_client.pipeline()
-                
+                special_frame_found = False
                 for frame in frames_to_add:
                     identifier = frame.get("frameIdentifier")
                     if not identifier:
                         continue # Bỏ qua nếu frame không có định danh
+                    if frame.get("isSpecial") is True:
+                        special_frame_found = True
 
                     # >>> LOGIC MỚI: Chỉ thêm nếu frame chưa tồn tại <<<
                     # hsetnx: chỉ set nếu field chưa tồn tại. Trả về 1 nếu set thành công, 0 nếu đã tồn tại.
@@ -1112,7 +1114,12 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 
                 # Thực thi tất cả các lệnh đã thêm vào pipeline
                 pipe.execute()
-
+                if special_frame_found:
+                    alert_message = {
+                        "action": "special_submission_alert",
+                        "payload": {"username": username}
+                    }
+                    await manager.publish_update(json.dumps(alert_message))
             elif action == "remove_frame":
                 # Payload từ client vẫn là một đối tượng JSON đầy đủ
                 frame_to_remove = payload 
