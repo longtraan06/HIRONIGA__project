@@ -668,9 +668,9 @@ button:focus, input:focus, textarea:focus {
 .submit-queue {
     position: fixed;
     bottom: 0;
-    left: 50%;
+    left: 57.5%;
     transform: translateX(-50%) translateY(100%);
-    width: 95%;
+    width: 75%;
     background: var(--matcha-pale);
     border-top-left-radius: 16px;
     border-top-right-radius: 16px;
@@ -2722,52 +2722,55 @@ input:checked + .slider:before {
     padding: 5px;
 }
 
-#trakeSubmitQueue {
-    /* --- Reset các style cũ từ .submit-queue --- */
+#trakeSubmitQueue, #deletionViewerPanel {
     position: relative;
     transform: none;
     bottom: auto;
     left: auto;
     opacity: 1;
-    max-height: none; /* Bỏ giới hạn chiều cao */
+    max-height: none;
     pointer-events: auto;
-
-    /* --- Style cho layout cột dọc --- */
-    display: none; /* Mặc định vẫn ẩn */
-    flex-direction: column; /* Quan trọng: Xếp các thành phần con theo chiều dọc */
-    flex-shrink: 0; /* Ngăn không cho cột này bị co lại */
-    
-    width: 200px; /* Chiều rộng cố định, đủ cho 1 frame. Bạn có thể điều chỉnh */
-    height: 94vh; /* Chiều cao tương tự main-content */
-    margin: 0px;
-    
+    display: none; /* All panels are hidden by default */
+    flex-direction: column;
+    flex-shrink: 0;
+    width: 200px;
+    height: 94vh;
+    margin: 0.5%;
     border-radius: 10px;
     border: 1px solid var(--matcha-border);
     background-color: var(--matcha-pale);
-    
     transition: all 0.3s ease;
 }
 
-/* Container chứa các frame bên trong queue */
-#trakeSubmitQueueFrames {
-    flex-direction: column; /* Xếp các frame theo chiều dọc */
-    overflow-x: hidden;     /* Tắt cuộn ngang */
-    overflow-y: auto;       /* Bật cuộn dọc khi cần */
-    gap: 15px;              /* Tăng khoảng cách giữa các frame */
-    padding-right: 5px;     /* Thêm chút không gian cho thanh cuộn */
+/* Container for frames inside the panels */
+#trakeSubmitQueueFrames, #deletionViewerClusters {
+    display: flex;
+    flex: 1; /* <<< CRITICAL FIX: Allows this container to fill available space */
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+    gap: 15px;
+    padding: 10px;
 }
 
-/* Style cho từng frame item bên trong */
-#trakeSubmitQueue .queue-frame-item {
-    width: 100%; /* Chiếm toàn bộ chiều rộng của cột queue */
-    height: auto; /* Chiều cao sẽ tự động theo tỷ lệ ảnh */
-}
-
-#trakeSubmitQueue .queue-frame-item img {
-    width: 100%; /* Ảnh cũng chiếm hết chiều rộng */
+/* Individual items within the panels */
+#trakeSubmitQueue .queue-frame-item, #deletionViewerPanel .cluster-group {
+    width: 100%;
     height: auto;
 }
 
+#trakeSubmitQueue .queue-frame-item img {
+    width: 100%;
+    height: auto;
+}
+
+/* Logic to show the TRAKE panel */
+.main-container.trake-active #trakeSubmitQueue {
+    display: flex;
+}
+.main-container:not(.trake-active) #trakeSubmitQueue {
+    display: none;
+}
 /* Đổi lại cách hiển thị/ẩn TRAKE queue */
 .main-container.trake-active #trakeSubmitQueue {
     display: flex; /* Hiện cột queue lên */
@@ -2790,6 +2793,17 @@ input:checked + .slider:before {
     transform: translateY(0);
 }
 
+.deletion-queue .submit-queue-header h3 {
+    color: #b71c1c; /* Dark red text */
+}
+
+.deletion-queue .submit-btn {
+    background-color: #D32F2F; /* Red submit button */
+    color: white;
+}
+.deletion-queue .submit-btn:hover {
+    background-color: #b71c1c;
+}
 
 /* Border hiển thị số event trên frame */
 .queue-frame-item.trake-item .queue-frame-image-container::before {
@@ -2830,7 +2844,7 @@ input:checked + .slider:before {
     pointer-events: none; 
 }
 .image-item.is-in-queue::before {
-    content: "Q"; /* Hoặc bạn có thể dùng icon FontAwesome */
+    content: "O"; /* Hoặc bạn có thể dùng icon FontAwesome */
     position: absolute;
     top: 8px;
     left: 8px;
@@ -2869,4 +2883,411 @@ input:checked + .slider:before {
     border-radius: 4px;
     z-index: 5;
     border: 1px solid white;
+}
+/* At the end of the file or in a relevant section */
+
+.deletion-viewer-modal {
+    width: 80vw;
+    max-width: 1400px;
+    height: auto;
+    max-height: 80vh;
+    padding: 20px;
+    background: white;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+    display: flex;
+    flex-direction: column;
+}
+
+.deletion-preview-header {
+    flex-shrink: 0;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #eee;
+}
+
+/* Override thumbnail-strip styles for deletion viewer */
+.deletion-viewer-modal .thumbnail-strip {
+    flex: 1;
+    width: 100%;
+    padding: 10px;
+    background-color: rgba(0,0,0,0.05);
+    border-radius: 8px;
+    display: grid !important;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-gap: 10px;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    max-height: 60vh;
+    align-content: start;
+}
+
+#deletionViewerClusters {
+    flex: 1;
+    width: 100%;
+    padding: 10px;
+    background-color: rgba(0,0,0,0.05);
+    border-radius: 8px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-gap: 10px;
+    overflow-y: auto;
+    max-height: 60vh;
+    align-content: start;
+}
+
+/* Override thumbnail-strip img styles for deletion viewer */
+.deletion-viewer-modal .thumbnail-strip img,
+#deletionViewerClusters img {
+    width: 100% !important;
+    height: 100px !important;
+    border: 2px solid var(--matcha-primary);
+    border-radius: 4px;
+    cursor: pointer;
+    object-fit: cover;
+    transition: all 0.2s ease;
+}
+
+.deletion-viewer-modal .thumbnail-strip img:hover,
+#deletionViewerClusters img:hover {
+    border-color: var(--matcha-dark);
+    transform: scale(1.05);
+}
+
+/* Cluster frame container styles */
+.cluster-frame-container {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background: white;
+    border-radius: 8px;
+    padding: 8px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    transition: all 0.2s ease;
+}
+
+.cluster-frame-container:hover {
+    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+}
+
+.cluster-frame-wrapper {
+    position: relative;
+    width: 100%;
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.cluster-frame-wrapper img {
+    width: 100%;
+    height: 100px;
+    object-fit: cover;
+    border: 2px solid var(--matcha-primary);
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+
+.cluster-frame-wrapper:hover img {
+    border-color: var(--matcha-dark);
+    transform: scale(1.02);
+}
+
+.cluster-undo-btn {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 20px;
+    height: 20px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid #ccc;
+    border-radius: 50%;
+    color: #666;
+    font-size: 12px;
+    font-weight: bold;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    z-index: 10;
+    line-height: 1;
+}
+
+.cluster-undo-btn:hover {
+    background: #ff4444;
+    color: white;
+    border-color: #ff4444;
+    transform: scale(1.1);
+}
+
+.cluster-id-label {
+    margin-top: 4px;
+    font-size: 10px;
+    color: #666;
+    font-weight: bold;
+    text-align: center;
+    background: rgba(71, 102, 59, 0.1);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgba(71, 102, 59, 0.3);
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Cluster group styling */
+.cluster-group {
+    display: contents; /* This allows grid items to flow naturally */
+}
+
+/* Animation for removing frames */
+.cluster-frame-container.removing {
+    opacity: 0;
+    transform: scale(0.8) translateY(-10px);
+    transition: all 0.3s ease;
+}
+
+/* Debug styles to ensure the deletion viewer panel is visible */
+#deletionViewerPanel {
+    z-index: 9999 !important;
+}
+
+#deletionViewerPanel.image-modal {
+    display: none !important; /* Will be overridden by JavaScript */
+}
+
+#deletionViewerPanel[style*="display: flex"] {
+    display: flex !important;
+}
+
+/* --- Mark for Deletion State --- */
+.image-item.deletion-candidate {
+    border: 3px solid #FFC107; /* Yellow border */
+    box-shadow: 0 0 12px rgba(255, 193, 7, 0.7);
+}
+
+/* Red minus icon on top right */
+.image-item.deletion-candidate::after {
+    content: '-';
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background-color: #E53935; /* Red */
+    color: white;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    font-weight: bold;
+    line-height: 22px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    z-index: 3;
+    border: 1px solid white;
+    animation: pop-in 0.2s;
+}
+
+/* --- Confirmation Modal --- */
+.confirmation-buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 25px;
+}
+.confirmation-btn {
+    flex-grow: 1;
+    padding: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.confirmation-btn.confirm {
+    background: var(--matcha-primary);
+    color: white;
+}
+.confirmation-btn.confirm:hover {
+    background: var(--matcha-dark);
+}
+.confirmation-btn.cancel {
+    background: #e0e0e0;
+    color: #333;
+}
+.confirmation-btn.cancel:hover {
+    background: #bdbdbd;
+}
+.deletion-preview-modal {
+    width: 60vw;
+    max-width: 1200px;
+    height: auto; /* Height will be determined by content */
+    max-height: 60vh;
+    padding: 15px; /* Add some internal padding */
+}
+
+.deletion-preview-header {
+    width: 100%;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 15px;
+    margin-bottom: 15px;
+    border-bottom: 1px solid var(--matcha-light);
+}
+
+.deletion-preview-header h3 {
+    color: var(--matcha-dark);
+    font-size: 18px;
+    margin: 0;
+}
+
+.modal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.modal-header-actions span {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.modal-header-actions .cancel-btn {
+    background-color: #f0f0f0;
+    border-color: #ccc;
+}
+.modal-header-actions .cancel-btn:hover {
+    background-color: #e0e0e0;
+}
+
+#deletionPreviewFrames {
+    width: 100%;
+    height: 100%;
+    padding: 10px;
+    background-color: rgba(0,0,0,0.05);
+    border-radius: 8px;
+    flex-wrap: wrap; /* Allow frames to wrap to the next line */
+    justify-content: flex-start;
+    align-content: flex-start;
+}
+
+#deletionPreviewFrames img {
+    height: 100px; /* Same size as keyframe preview */
+    border: 2px solid var(--matcha-primary);
+    position: relative;
+}
+
+/* Style for unselecting frames in the preview */
+#deletionPreviewFrames img:hover {
+    cursor: pointer;
+    border-color: #E53935; /* Red border on hover */
+    box-shadow: 0 0 10px rgba(229, 57, 53, 0.7);
+}
+
+#deletionPreviewFrames img:hover::after {
+    content: '×';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(229, 57, 53, 0.5); /* Red overlay */
+    color: white;
+    font-size: 48px;
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px; /* Match the image's border-radius */
+}
+
+.cluster-group {
+    background-color: rgba(255, 255, 255, 0.5);
+    border-radius: 8px;
+    padding: 10px;
+    border: 1px solid #ffcc80;
+}
+
+.cluster-group-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    padding-bottom: 5px;
+    border-bottom: 1px dashed #ffcc80;
+}
+
+.cluster-group-title {
+    font-weight: 600;
+    font-size: 14px;
+    color: #e65100; /* Dark Orange */
+}
+
+.undo-cluster-btn {
+    background-color: #ffc107;
+    border: none;
+    color: #333;
+    border-radius: 50%;
+    width: 24px;
+    height: 24px;
+    font-size: 16px;
+    cursor: pointer;
+    line-height: 24px;
+    font-weight: bold;
+    transition: all 0.2s ease;
+}
+
+.undo-cluster-btn:hover {
+    background-color: #E53935;
+    color: white;
+    transform: scale(1.1);
+}
+
+.cluster-video-group {
+    margin-bottom: 8px;
+}
+
+.cluster-video-group p {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-muted);
+    margin-bottom: 5px;
+}
+
+.cluster-frame-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+}
+
+.cluster-frame-list span {
+    background-color: #fff;
+    border: 1px solid #eee;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.cluster-frame-thumb {
+    width: 60px;
+    height: 40px;
+    object-fit: cover;
+    border: 2px solid #ffcc80;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.cluster-frame-thumb:hover {
+    border-color: #ff9800;
+    transform: scale(1.1);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    z-index: 10;
+    position: relative;
 }
