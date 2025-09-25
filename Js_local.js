@@ -73,7 +73,8 @@ document.addEventListener('DOMContentLoaded', function() {
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'KzI1hQj8lezW372fXeurZKtqRYZght4z'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    let lastAddedFrameId = null;
+    const DEFAULT_DRES_SESSION_ID = 'fC9euV03LsHQCoiSTF3w2gz_AUIfSQrW'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
@@ -289,6 +290,17 @@ document.addEventListener('DOMContentLoaded', function() {
         trakeSeekGapInput.addEventListener('change', () => {
             localStorage.setItem('trake_seek_gap', trakeSeekGapInput.value);
         });
+
+        document.addEventListener('click', function(e) {
+            // Kiểm tra xem có frame nào đang được chọn trong queue không
+            if (selectedQueueFrameIds.size > 0) {
+                // Nếu click vào một nơi KHÔNG phải là queue, thì bỏ chọn
+                // Chúng ta cũng không muốn bỏ chọn khi click vào một frame trong kết quả tìm kiếm
+                if (!e.target.closest('#submitQueue') && !e.target.closest('.image-item')) {
+                    clearQueueSelection();
+                }
+            }
+        }, true);
 
         // Gắn sự kiện cho nút submit của TRAKE queue
         submitTrakeBtn.addEventListener('click', () => {
@@ -624,7 +636,7 @@ document.addEventListener('DOMContentLoaded', function() {
                             } else {
                                 showToastNotification("Please select only one frame to view keyframes.", "error");
                             }
-                            clearQueueSelection();
+                            // clearQueueSelection();
                             break;
                             // Xử lý phím mũi tên để điều hướng lựa chọn trong queue
                         case 'arrowright':
@@ -3430,6 +3442,10 @@ document.addEventListener('DOMContentLoaded', function() {
                         isSpecial: isSpecialSubmission // Add the special flag here
                     }));
 
+                    if (selectedFramesData.length > 0) {
+                        lastAddedFrameId = selectedFramesData[0].frameIdentifier;
+                    }
+
                     sendWebSocketMessage('add_frames', { frames: selectedFramesData });
                     showToastNotification(`Added ${selectedCount} frame(s) to the queue.`, 'success');
                     // if (isSpecialSubmission) {
@@ -3653,6 +3669,31 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>`;
                 submitQueueFramesContainer.appendChild(frameElement);
         });
+
+        if (lastAddedFrameId) {
+            // Xóa lựa chọn cũ trước khi target cái mới
+            clearQueueSelection();
+
+            const newFrameElement = submitQueueFramesContainer.querySelector(`.queue-frame-item[data-frame-id="${lastAddedFrameId}"]`);
+
+            if (newFrameElement) {
+                // Thực hiện các hành động "target"
+                newFrameElement.classList.add('selected');
+                selectedQueueFrameIds.add(lastAddedFrameId);
+                updateSubmitButtonStates();
+
+                // Cuộn tới frame đó để người dùng thấy
+                newFrameElement.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'nearest',
+                    inline: 'center'
+                });
+            }
+
+            // Reset biến tạm sau khi đã xử lý xong
+            lastAddedFrameId = null;
+        }
+
     }
 
     function renderUserLegend() {
@@ -4305,6 +4346,7 @@ showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
                 if (event.ctrlKey) {
                     frameSelectionManager.toggleSelection(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
                 } else {
+                    clearQueueSelection();
                     frameSelectionManager.clearAllSelections();
                     frameSelectionManager.selectFrame(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
                 }
