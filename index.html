@@ -50,6 +50,10 @@
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
                 </button>
+                <button id="deletionViewerBtn" class="header-btn" title="View Deleted Frames">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
+                </button>
+                
                 <button id="toggleLayoutBtn" class="header-btn" title="Chuyển sang layout Gom nhóm (Tab)">
                     <i class="fas fa-list"></i>
                 </button>
@@ -153,13 +157,36 @@
             </div>
         </div>
 
-
+        <div id="clusterDeletionQueue" class="submit-queue deletion-queue">
+            <div class="submit-queue-header">
+                <h3>Cluster Deletion</h3>
+                <div class="queue-actions">
+                    <button id="submitClusterDeletionBtn" class="queue-action-btn submit-btn" disabled>
+                        <i class="fas fa-shield-slash"></i> Submit
+                    </button>
+                    <button id="clearClusterDeletionBtn" class="queue-action-btn">
+                        <i class="fas fa-trash"></i> Clear
+                    </button>
+                </div>
+            </div>
+            <div id="clusterDeletionQueueFrames" class="submit-queue-frames">
+                <!-- Frames for deletion will be added here -->
+            </div>
+        </div>
     </div>
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-content">
             <div id="modalFrameInfo" class="modal-frame-info"></div>
             <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
             <div class="thumbnail-strip" id="thumbnailStrip"></div>
+        </div>
+        <div class="modal-overlay"></div>
+    </div>
+    <div id="temporalChainModal" class="image-modal" style="display: none;">
+        <div class="modal-content">
+            <div id="temporalModalFrameInfo" class="modal-frame-info"></div>
+            <img id="temporalMainPreviewImage" class="main-preview" src="" alt="Temporal chain preview">
+            <div class="thumbnail-strip" id="temporalThumbnailStrip"></div>
         </div>
         <div class="modal-overlay"></div>
     </div>
@@ -273,6 +300,10 @@
                     <span class="shortcut-key">Hold Ctrl</span>
                 </div>
                 <div class="shortcut-item">
+                    <span class="shortcut-description">Hide Frame (hover)</span>
+                    <span class="shortcut-key">X</span>
+                </div>
+                <div class="shortcut-item">
                     <span class="shortcut-description">Focus Search Bar</span>
                     <span class="shortcut-key">Alt + S</span>
                 </div>
@@ -282,6 +313,10 @@
                  <div class="shortcut-item">
                     <span class="shortcut-description">Neighboring keyframe</span>
                     <span class="shortcut-key">F</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">View Temporal Chain</span>
+                    <span class="shortcut-key">T</span>
                 </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">Semantic Search</span>
@@ -430,7 +465,40 @@
             </form>
         </div>
     </div>
-
+    <div id="deletionPreviewModal" class="image-modal" style="display: none;">
+        <div class="modal-content deletion-preview-modal">
+            <div class="deletion-preview-header">
+                <h3>Confirm Frames for Deletion</h3>
+                <div class="modal-header-actions">
+                    <span id="deletionPreviewCount">0 frames</span>
+                    <button id="deletionSubmitBtn" class="queue-action-btn submit-btn">
+                        <i class="fas fa-shield-slash"></i> Submit
+                    </button>
+                    <button id="deletionCancelBtn" class="queue-action-btn cancel-btn">
+                        <i class="fas fa-times"></i> Cancel
+                    </button>
+                </div>
+            </div>
+            <div class="thumbnail-strip" id="deletionPreviewFrames">
+                <!-- Frames to be deleted will be rendered here -->
+            </div>
+        </div>
+        <div class="modal-overlay"></div>
+    </div>
+        <div id="deletionViewerPanel" class="image-modal" style="display: none;">
+        <div class="modal-content deletion-viewer-modal">
+            <div class="deletion-preview-header">
+                <h3>Deleted Frames</h3>
+                <div class="modal-header-actions">
+                    <button id="closeDeletionViewerBtn" class="queue-action-btn">×</button>
+                </div>
+            </div>
+            <div class="thumbnail-strip" id="deletionViewerClusters">
+                <!-- Cluster groups will be rendered here -->
+            </div>
+        </div>
+        <div class="modal-overlay"></div>
+    </div>
     <div id="qaInputModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
