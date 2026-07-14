@@ -1,43 +1,38 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, status, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from typing import List, Optional
-from milvus_indexing import MilvusManager
+from typing import Dict, List, Optional
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from db.milvus import MilvusManager
+from functools import lru_cache, wraps
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from threading import Lock
+from PIL import Image
 import tempfile
 import os
 import re
 import csv
-from PIL import Image
-from fastapi import HTTPException
 import time
 import uuid
-import asyncio  # Thêm import này
-from pydantic import BaseModel
-from fastapi.responses import FileResponse
-from functools import lru_cache
-import redis
-from functools import wraps
 import json
 import hashlib
-from fastapi import Depends, status
-from fastapi.security import HTTPBasic, HTTPBasicCredentials
 import secrets
-from fastapi import WebSocket, WebSocketDisconnect 
-from typing import Dict, List
-from fastapi.middleware.cors import CORSMiddleware
+import traceback
 import aioredis
 import asyncio
-import pickle
-import base64
-from fastapi.middleware.cors import CORSMiddleware
-
 FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
 
 app = FastAPI()
 # Kết nối Redis
 
 allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
-
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=allowed_origin_regex,
@@ -46,14 +41,12 @@ app.add_middleware(
     allow_headers=["*"],    
 )   
 
-# #aic
-redis_client = redis.Redis(host='192.168.20.170', port=6330, db=0)
+REDIS_URL = "redis://192.168.20.156:6060"
+redis_async_client = aioredis.from_url(REDIS_URL, decode_responses=True)
 keysframe_path_root = "/mlcv2/WorkingSpace/Personal/chinhnm/AIC25_Data/output"
-video_path_root = "/mlcv2/Datasets/HCMAI25/batch2/video"
+video_path_root = "/mlcv1/Datasets/HCMAI25/full"
 hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
 
-#acm
-# redis_client = redis.Redis(host='192.168.20.170', port=6300, db=0)
 """
 Available models:
 "google/siglip2-large-patch16-512"
@@ -64,15 +57,14 @@ Available models:
 
 model_paths=[
     "google/siglip2-large-patch16-512",
-    "google/siglip2-giant-opt-patch16-384"
 ]
 
 milvus = MilvusManager(
-                        host="192.168.20.156",
+                        host="192.168.20.150",
                         port='6050',
                         model_paths=model_paths,
                         mode = 'AIC',
-                        prefix='full'
+                        prefix=None
                     )
 
 # clear cache method
@@ -84,6 +76,104 @@ security = HTTPBasic()
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
+# CLUSTER DELETION DISABLED TEMPORARILY.
+# The full implementation is kept below for repair/reference. Search endpoints now
+# pass an empty cluster exclusion list so results are returned normally.
+'''
+CLUSTER_DELETION_FILE = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/deleted_clusters_200.json"
+
+class ClusterDeletionManager:
+    """
+    [MODIFIED] Manages the list of deleted cluster IDs and a detailed deletion log
+    with frame_name instead of frame_id. Also supports removing clusters.
+    """
+    def __init__(self, file_path):
+        self.file_path = file_path
+        self.deletion_log = {}
+        self._lock = Lock()
+        self.load_clusters()
+
+    def load_clusters(self):
+        try:
+            with self._lock:
+                if os.path.exists(self.file_path):
+                    with open(self.file_path, 'r') as f:
+                        data = json.load(f)
+                        self.deletion_log = data.get("deletion_log", {})
+                        print(f"[ClusterManager] Loaded {len(self.deletion_log)} deleted cluster IDs.")
+                else:
+                    self.deletion_log = {}
+                    print("[ClusterManager] Deletion file not found. Starting with empty sets.")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"[ClusterManager] Error loading cluster file: {e}")
+            self.deletion_log = {}
+
+    def add_clusters(self, frames_to_delete: List[dict]):
+        """
+        Adds new clusters, storing the correct descriptive frame_name
+        from the metadata.
+        """
+        with self._lock:
+            for frame in frames_to_delete:
+                cluster_id = frame.get("cluster_id")
+                video_name = frame.get("videoName")
+                path = frame.get("path", "")
+                frame_name = os.path.basename(path) if path else None
+
+                if not all([cluster_id, video_name, frame_name]):
+                    print(f"Skipping frame due to missing data: {frame}")
+                    continue
+
+                cluster_entry = self.deletion_log.setdefault(cluster_id, {})
+                video_entry = cluster_entry.setdefault(video_name, [])
+                
+                if frame_name not in video_entry:
+                    video_entry.append(frame_name)
+                    video_entry.sort()
+
+            return self._save_to_file()
+
+    def remove_cluster(self, cluster_id_to_remove: str):
+        with self._lock:
+            if cluster_id_to_remove not in self.deletion_log:
+                print(f"[ClusterManager] Undo failed: Cluster '{cluster_id_to_remove}' not found in deletion list.")
+                return False
+
+            self.deletion_log.pop(cluster_id_to_remove, None)
+            
+            print(f"[ClusterManager] Undid deletion for cluster '{cluster_id_to_remove}'.")
+            return self._save_to_file()
+
+    def _save_to_file(self):
+        try:
+            data_to_save = {
+                "deleted_clusters": sorted(self.deletion_log.keys()),
+                "deletion_log": self.deletion_log
+            }
+            with open(self.file_path, 'w') as f:
+                json.dump(data_to_save, f, indent=2)
+            print(f"[ClusterManager] Saved deletion file. Total deleted clusters: {len(self.deletion_log)}")
+            return True
+        except IOError as e:
+            print(f"[ClusterManager] CRITICAL ERROR saving cluster file: {e}")
+            return False
+
+# Instantiate the manager
+cluster_manager = ClusterDeletionManager(CLUSTER_DELETION_FILE)
+
+# Setup a scheduler for periodic reloading
+scheduler = AsyncIOScheduler()
+scheduler.add_job(cluster_manager.load_clusters, 'interval', seconds=30)
+'''
+
+@app.on_event("startup")
+async def startup_event():
+    pass
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    pass
+    
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     """Hàm xác thực admin qua Basic Auth"""
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
@@ -97,13 +187,15 @@ def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
         )
     return credentials.username
 
-def get_keys_by_pattern(pattern):
-       keys = []
-       cursor = '0'
-       while cursor != 0:
-           cursor, partial_keys = redis_client.scan(cursor=cursor, match=pattern, count=100)
-           keys.extend(partial_keys)
-       return keys
+async def get_keys_by_pattern(pattern):
+    keys = []
+    cursor = 0
+    while True:
+        cursor, partial_keys = await redis_async_client.scan(cursor=cursor, match=pattern, count=100)
+        keys.extend(partial_keys)
+        if cursor == 0:
+            break
+    return keys
 
 
 @app.get("/videos_hls/{video_name}/playlist.m3u8", tags=["HLS"])
@@ -144,40 +236,34 @@ async def clear_redis_cache(
     """
     try:
         if cache_type == "all":
-            # Cẩn thận: Sẽ xóa TẤT CẢ keys trong Redis
-            redis_client.flushall()
+            await redis_async_client.flushall()
             return {"success": True, "message": "All Redis cache cleared", "count": "all"}
         
         deleted_count = 0
         
         if cache_type == "temporal" or cache_type == "all":
-            # Xóa tất cả temporal chains
             pattern = "temporal_chain:*"
-            keys = get_keys_by_pattern(pattern)
+            keys = await get_keys_by_pattern(pattern)
             if keys:
-                deleted_count += redis_client.delete(*keys)
+                deleted_count += await redis_async_client.delete(*keys)
         
         if cache_type == "search" or cache_type == "all":
-            # Xóa tất cả cache tìm kiếm
-            # Giả định rằng các cache key của bạn đều có tiền tố "search_text:"
             pattern = "search_text:*"
-            keys = redis_client.keys(pattern)
+            keys = await redis_async_client.keys(pattern)
             if keys:
-                deleted_count += redis_client.delete(*keys)
+                deleted_count += await redis_async_client.delete(*keys)
                 
-            # Thêm các mẫu cache khác nếu cần
             for func_name in ["get_video_info", "search_image"]:
                 pattern = f"{func_name}:*"
-                keys = redis_client.keys(pattern)
+                keys = await redis_async_client.keys(pattern)
                 if keys:
-                    deleted_count += redis_client.delete(*keys)
+                    deleted_count += await redis_async_client.delete(*keys)
         
         if cache_type == "rate_limit" or cache_type == "all":
-            # Xóa tất cả rate limit counters
             pattern = "rate_limit:*"
-            keys = redis_client.keys(pattern)
+            keys = await redis_async_client.keys(pattern)
             if keys:
-                deleted_count += redis_client.delete(*keys)
+                deleted_count += await redis_async_client.delete(*keys)
         
         return {
             "success": True,
@@ -186,7 +272,7 @@ async def clear_redis_cache(
         }
     
     except Exception as e:
-        import traceback
+        
         traceback.print_exc()
         return {
             "success": False,
@@ -198,15 +284,12 @@ async def clear_redis_cache(
 async def redis_stats():
     """Lấy thống kê về dữ liệu trong Redis."""
     try:
-        # Lấy thông tin Redis
-        info = redis_client.info()
+        info = await redis_async_client.info()
         
-        # Đếm số lượng keys theo loại
-        temporal_keys = len(redis_client.keys("temporal_chain:*"))
-        search_cache_keys = len(redis_client.keys("search_text:*")) + len(redis_client.keys("get_video_info:*"))
-        rate_limit_keys = len(redis_client.keys("rate_limit:*"))
+        temporal_keys = len(await redis_async_client.keys("temporal_chain:*"))
+        search_cache_keys = len(await redis_async_client.keys("search_text:*")) + len(await redis_async_client.keys("get_video_info:*"))
+        rate_limit_keys = len(await redis_async_client.keys("rate_limit:*"))
         
-        # Tổng số keys
         total_keys = int(info.get("db0", {}).get("keys", 0))
         
         # Sử dụng bộ nhớ
@@ -237,45 +320,31 @@ async def redis_stats():
 # clear rate limit counters: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=rate_limit
 # get redis stats: curl http://192.168.20.156:8080/api/admin/redis-stats
 
-
-# Định nghĩa decorator cache_result trước khi sử dụng
-def cache_result(permanent=True, expire_time=300):  # Thêm tham số permanent
+ 
+def cache_result(permanent=True, expire_time=300):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
-            # Tạo cache key từ tên hàm và tham số
             cache_key = f"{func.__name__}:{hashlib.md5(str(args).encode() + str(kwargs).encode()).hexdigest()}"
             
-            # Kiểm tra cache
-            cached_result = redis_client.get(cache_key)
+            # NON-BLOCKING: await the async call
+            cached_result = await redis_async_client.get(cache_key)
             if cached_result:
-                return json.loads(cached_result)
+                # No need to decode here if you set decode_responses=True
+                return json.loads(cached_result) 
             
-            # Thực thi hàm nếu không có cache
             result = await func(*args, **kwargs)
             
-            # Lưu kết quả vào cache
+            # NON-BLOCKING: await the async call
             if permanent:
-                # Lưu vĩnh viễn, không có thời gian hết hạn
-                redis_client.set(
-                    cache_key,
-                    json.dumps(result, default=str)
-                )
+                await redis_async_client.set(cache_key, json.dumps(result, default=str))
             else:
-                # Lưu với thời gian hết hạn
-                redis_client.setex(
-                    cache_key,
-                    expire_time,
-                    json.dumps(result, default=str)
-                )
+                await redis_async_client.setex(cache_key, expire_time, json.dumps(result, default=str))
             
             return result
         return wrapper
     return decorator
 
-# websocker system
-
-REDIS_URL = "redis://192.168.20.170:6330" # Đảm bảo địa chỉ này đúng với Redis của bạn
 WEBSOCKET_CHANNEL = "submit_queue_channel"  # Tên kênh chung
 
 
@@ -335,16 +404,14 @@ class ConnectionManager:
             except Exception as e:
                 # Bắt các lỗi không lường trước khác, chờ và thử lại
                 print(f"An unexpected error occurred in pubsub listener: {e}. Restarting in 5 seconds...")
-                import traceback
+                
                 traceback.print_exc()
                 self.redis_pubsub_client = None # Reset để kết nối lại
                 await asyncio.sleep(5)
     
     async def publish_update(self, message: str):
         """Đăng (publish) một tin nhắn cập nhật lên kênh Redis."""
-        # Đây là client đồng bộ dùng cho các tác vụ ghi thông thường
-        sync_redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        sync_redis.publish(WEBSOCKET_CHANNEL, message)
+        await redis_async_client.publish(WEBSOCKET_CHANNEL, message)
 
 # Khởi tạo manager
 manager = ConnectionManager()
@@ -372,7 +439,7 @@ def get_color_for_user(username: str) -> str:
 # Models
 class TemporalStartRequest(BaseModel):
     query: str
-    top_k: int = 900
+    top_k: int = 650
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5 
@@ -384,11 +451,12 @@ class TemporalStartRequest(BaseModel):
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
+    user_filter: Optional[List[str]] = None  # <<< THÊM VÀO
 
 class TemporalContinueRequest(BaseModel):
     query: str
     chain_id: str
-    top_k: int = 1000
+    top_k: int = 500
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
@@ -399,19 +467,36 @@ class TemporalContinueRequest(BaseModel):
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
+    user_filter: Optional[List[str]] = None  # <<< THÊM VÀO
 
-class TextSearchRequest(BaseModel):
+class TextToImageRequest(BaseModel):
     query: str
-    top_k: int = 1000
-    search_in: str = "image"
-    start_temporal_chain: bool = False
+    top_k: int = 650
     model_name: Optional[str] = None
-    use_tag: Optional[bool] = False    # <<< THÊM VÀO
+    use_tag: Optional[bool] = False
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
     use_event_filter: Optional[bool] = False
+    user_filter: Optional[List[str]] = None
+
+class TextToTextRequest(BaseModel):
+    query: str
+    top_k: int = 650
+    model_name: Optional[str] = None
+    use_tag: Optional[bool] = False
+    top_k_tags: Optional[int] = 5
+    tags_filter: Optional[List[str]] = None
+    ocr: str = None
+    asr: str = None
+    use_event_filter: Optional[bool] = False
+    user_filter: Optional[List[str]] = None
+
+def log_search_debug(endpoint: str, **kwargs):
+    print(f"\n[SEARCH DEBUG] endpoint={endpoint}")
+    for key, value in kwargs.items():
+        print(f"  {key}: {value}")
 
 class FormSubmitRequest(BaseModel):
     video_name: str
@@ -422,16 +507,15 @@ class FormSubmitRequest(BaseModel):
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
     try:
-        # Test kết nối Redis
         test_key = "test_connection"
         test_value = "working"
-        redis_client.setex(test_key, 60, test_value)
-        retrieved = redis_client.get(test_key)
+        await redis_async_client.setex(test_key, 60, test_value)
+        retrieved = await redis_async_client.get(test_key)
         
         return {
             "status": "success",
             "message": "Redis connection is working",
-            "test_value": retrieved.decode() if retrieved else None
+            "test_value": retrieved
         }
     except Exception as e:
         return {
@@ -449,9 +533,8 @@ async def get_available_models():
 @app.get("/api/debug/temporal-chain/{chain_id}")
 async def debug_temporal_chain(chain_id: str):
     try:
-        # Kiểm tra chain trong Redis
         chain_key = f"temporal_chain:{chain_id}"
-        chain_data_str = redis_client.get(chain_key)
+        chain_data_str = await redis_async_client.get(chain_key)
         
         if not chain_data_str:
             return {
@@ -459,7 +542,6 @@ async def debug_temporal_chain(chain_id: str):
                 "message": "Chain not found in Redis"
             }
         
-        # Thử parse JSON
         try:
             chain_data = json.loads(chain_data_str)
             state_keys = list(chain_data.get("state", {}).keys())
@@ -474,7 +556,7 @@ async def debug_temporal_chain(chain_id: str):
             return {
                 "exists": True,
                 "parse_error": str(parse_err),
-                "raw_data_sample": chain_data_str[:100]  # First 100 chars
+                "raw_data_sample": chain_data_str[:100]
             }
     except Exception as e:
         return {
@@ -497,13 +579,6 @@ async def get_frame(video_name: str, frame_name: str):
             "ETag": f"\"{os.path.getmtime(frame_path)}\"",  # Thêm ETag
         }
     )
-
-@lru_cache(maxsize=100)
-def get_video_info_cached(video_path: str):
-    return {
-        "exists": os.path.exists(video_path),
-        "size": os.path.getsize(video_path) if os.path.exists(video_path) else 0
-    }
 
 @app.get("/videos/{video_name}")
 async def get_video(video_name: str):
@@ -547,35 +622,93 @@ def check_video(video_name: str):
             "available_files": files[:10]  # Show first 10 files
         }
 
-@app.post("/api/search/text")
-@cache_result(expire_time=60)  # Cache 1 phút
-async def search_text(req: TextSearchRequest):
-    query_lower = req.query.lower()
-    lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
-    lower_ocr = req.ocr.lower() if req.ocr else None
-    results = milvus.search(
-        query=query_lower,
+@app.post("/api/search/text-to-image")
+async def search_text_to_image(req: TextToImageRequest):
+    deleted_clusters = []
+    excluded_frames = req.user_filter or []
+    log_search_debug(
+        "text-to-image",
+        query=req.query,
         mode="text",
-        search_in=req.search_in,
-        top_k=min(req.top_k, 1000),  # Giới hạn top_k tối đa
+        search_in="image",
+        top_k=min(req.top_k, 1000),
+        requested_top_k=req.top_k,
+        model_name=req.model_name,
+        use_tag=req.use_tag,
+        top_k_tags=req.top_k_tags,
+        tags_filter=req.tags_filter,
+        ocr=req.ocr,
+        asr=req.asr,
+        use_event_filter=req.use_event_filter,
+        user_filter_count=len(excluded_frames),
+        cluster_deletion_enabled=False,
+    )
+    results = milvus.search(
+        query=req.query,
+        mode="text",
+        search_in="image",
+        top_k=min(req.top_k, 1000),
         start_temporal_chain=False,
         model_name=req.model_name,
-        use_tag=req.use_tag,           # <<< TRUYỀN THAM SỐ
+        use_tag=req.use_tag,
         top_k_tags=req.top_k_tags,
-        tags_filter=lower_tag,
-        ocr = lower_ocr,
-        use_event_filter=req.use_event_filter
+        tags_filter=req.tags_filter,
+        ocr=req.ocr,
+        asr=req.asr,
+        use_event_filter=req.use_event_filter,
+        cluster_expr=deleted_clusters,
+        user_filter=excluded_frames
+    )
+    return process_milvus_results_for_frontend(results)
+
+@app.post("/api/search/text-to-text")
+async def search_text_to_text(req: TextToTextRequest):
+    deleted_clusters = []
+    excluded_frames = req.user_filter or []
+    log_search_debug(
+        "text-to-text",
+        query=req.query,
+        mode="text",
+        search_in="text",
+        top_k=min(req.top_k, 1000),
+        requested_top_k=req.top_k,
+        model_name=req.model_name,
+        use_tag=req.use_tag,
+        top_k_tags=req.top_k_tags,
+        tags_filter=req.tags_filter,
+        ocr=req.ocr,
+        asr=req.asr,
+        use_event_filter=req.use_event_filter,
+        user_filter_count=len(excluded_frames),
+        cluster_deletion_enabled=False,
+    )
+    results = milvus.search(
+        query=req.query,
+        mode="text",
+        search_in="text",
+        top_k=min(req.top_k, 1000),
+        start_temporal_chain=False,
+        model_name=req.model_name,
+        use_tag=req.use_tag,
+        top_k_tags=req.top_k_tags,
+        tags_filter=req.tags_filter,
+        ocr=req.ocr,
+        asr=req.asr,
+        use_event_filter=req.use_event_filter,
+        cluster_expr=deleted_clusters,
+        user_filter=excluded_frames
     )
     return process_milvus_results_for_frontend(results)
 
 @app.post("/api/search/image")
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
-    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
+    top_k: int = Form(600, description="Số lượng kết quả trả về"),
     model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
     use_tag: bool = Form(False, description="Enable tag filtering"), 
     top_k_tags: int = Form(5, description="Top K tags to use"),
-    use_event_filter: bool = Form(False, description="Enable event filtering") 
+    use_event_filter: bool = Form(False, description="Enable event filtering"),
+    user_filter: Optional[str] = Form(None, description="JSON string of filtered frames")
 ):
     """
     Nhận một file ảnh, truyền nó vào Milvus để tìm kiếm các ảnh tương tự
@@ -583,6 +716,30 @@ async def search_image(
     """
     # Đọc nội dung của file ảnh dưới dạng bytes
     image_bytes = await file.read()
+    deleted_clusters = []
+    
+    # Parse user filter
+    excluded_frames = []
+    if user_filter:
+        try:
+            excluded_frames = json.loads(user_filter)
+        except (json.JSONDecodeError, TypeError):
+            excluded_frames = []
+    log_search_debug(
+        "image-to-image",
+        query=f"uploaded_file:{file.filename}",
+        mode="image",
+        search_in="image",
+        top_k=min(top_k, 1000),
+        requested_top_k=top_k,
+        model_name=model_name,
+        use_tag=use_tag,
+        top_k_tags=top_k_tags,
+        use_event_filter=use_event_filter,
+        user_filter_count=len(excluded_frames),
+        uploaded_bytes=len(image_bytes),
+        cluster_deletion_enabled=False,
+    )
     
     # Gọi hàm search của Milvus với mode="image"
     results = milvus.search(
@@ -593,7 +750,9 @@ async def search_image(
         model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags,
-        use_event_filter=use_event_filter
+        use_event_filter=use_event_filter,
+        cluster_expr=deleted_clusters,
+        user_filter=excluded_frames  # <<< THÊM THAM SỐ MỚI
     )
     
     return process_milvus_results_for_frontend(results)
@@ -618,11 +777,12 @@ async def cleanup_session(user_id: str = Form(...)):
 @app.post("/api/search/temporal/start_with_image")
 async def temporal_search_start_with_image(
     file: UploadFile = File(..., description="File ảnh để bắt đầu chuỗi tìm kiếm"),
-    top_k: int = Form(1000, description="Số lượng kết quả trả về"),
+    top_k: int = Form(600, description="Số lượng kết quả trả về"),
     model_name: Optional[str] = Form(None, description="Tên model để sử dụng"),
     user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
     query_id: str = Form(..., description="Query ID for this action"),
-    use_event_filter: bool = Form(False, description="Enable event filtering")
+    use_event_filter: bool = Form(False, description="Enable event filtering"),
+    user_filter: Optional[str] = Form(None, description="JSON string of filtered frames")
 ):
     """
     Bắt đầu một chuỗi tìm kiếm temporal mới bằng một hình ảnh.
@@ -634,8 +794,32 @@ async def temporal_search_start_with_image(
         
         # 2. Đọc nội dung ảnh
         image_bytes = await file.read()
+        deleted_clusters = []
         
-        # 3. Thực hiện tìm kiếm ban đầu với cờ start_temporal_chain=True
+        # Parse user filter
+        excluded_frames = []
+        if user_filter:
+            try:
+                excluded_frames = json.loads(user_filter)
+            except (json.JSONDecodeError, TypeError):
+                excluded_frames = []
+        log_search_debug(
+            "temporal-start-with-image",
+            query=f"uploaded_file:{file.filename}",
+            mode="image",
+            search_in="image",
+            top_k=min(top_k, 1000),
+            requested_top_k=top_k,
+            model_name=model_name,
+            user_id=user_id,
+            query_id=query_id,
+            chain_id=chain_id,
+            use_event_filter=use_event_filter,
+            user_filter_count=len(excluded_frames),
+            uploaded_bytes=len(image_bytes),
+            cluster_deletion_enabled=False,
+        )
+        
         initial_results = milvus.search(
             query=image_bytes,
             mode="image",
@@ -645,41 +829,18 @@ async def temporal_search_start_with_image(
             model_name=model_name,
             user_id=user_id,      # <<< THÊM VÀO
             query_id=query_id,
-            use_event_filter=use_event_filter
+            use_event_filter=use_event_filter,
+            cluster_expr=deleted_clusters,
+            user_filter=excluded_frames  # <<< THÊM THAM SỐ MỚI
         )
         
-        # 4. Lấy và lưu trạng thái temporal vào Redis (giống hệt logic của temporal/start)
-        temporal_state = milvus.get_user_temporal_state(user_id)
-        if not temporal_state:
-            raise HTTPException(
-                status_code=500, 
-                detail="Failed to initialize temporal chain state from image search."
-            )
-            
-        pickled_state = pickle.dumps(temporal_state)
-        base64_state = base64.b64encode(pickled_state).decode('utf-8')
-        
-        temporal_chain_data = {
-            "state_format": "pickle_base64",
-            "state": base64_state,
-            "last_update": time.time()
-        }
-        
-        redis_client.set(
-            f"temporal_chain:{chain_id}",
-            json.dumps(temporal_chain_data)
-        )
-        
-        print(f"Started new image-based temporal chain with ID: {chain_id}")
-        
-        # 5. Trả về kết quả và chain_id
         return {
             "chain_id": chain_id,
             "initial_results": process_milvus_results_for_frontend(initial_results)
         }
         
     except Exception as e:
-        import traceback
+        
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -809,13 +970,40 @@ async def temporal_search_start(req: TemporalStartRequest):
         
         chain_id = req.user_id # <<< THAY ĐỔI
 
-        lower_query = req.query.lower() if req.query else ""
-        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
-        lower_ocr = req.ocr.lower() if req.ocr else None
+        # Parse user filter
+        excluded_frames = []
+        if req.user_filter:
+            excluded_frames = req.user_filter
 
+        # lower_query = req.query.lower() if req.query else ""
+        # lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
+        # lower_ocr = req.ocr.lower() if req.ocr else None
+        deleted_clusters = []
+        log_search_debug(
+            "temporal-start",
+            query=req.query,
+            mode="text",
+            search_in="image",
+            top_k=min(req.top_k, 1000),
+            requested_top_k=req.top_k,
+            model_name=req.model_name,
+            user_id=req.user_id,
+            query_id=req.query_id,
+            chain_id=chain_id,
+            use_tag=req.use_tag,
+            top_k_tags=req.top_k_tags,
+            tags_filter=req.tags_filter,
+            ocr=req.ocr,
+            asr=req.asr,
+            use_event_filter=req.use_event_filter,
+            ocr_fuzzy=req.ocr_fuzzy,
+            asr_fuzzy=req.asr_fuzzy,
+            user_filter_count=len(excluded_frames),
+            cluster_deletion_enabled=False,
+        )
         # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
         initial_results = milvus.search(
-            query=lower_query,
+            query=req.query,
             mode="text",
             search_in="image",
             start_temporal_chain=True,
@@ -823,43 +1011,17 @@ async def temporal_search_start(req: TemporalStartRequest):
             model_name=req.model_name,
             use_tag=req.use_tag,    
             top_k_tags=req.top_k_tags,
-            tags_filter=lower_tag,
-            ocr = lower_ocr,
+            tags_filter=req.tags_filter,
+            ocr = req.ocr,
             asr = req.asr,
             user_id=req.user_id,    # <<< THÊM VÀO
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
             ocr_fuzzy=req.ocr_fuzzy,
-            asr_fuzzy=req.asr_fuzzy
+            asr_fuzzy=req.asr_fuzzy,
+            cluster_expr=deleted_clusters,
+            user_filter=excluded_frames  # <<< THÊM THAM SỐ MỚI
         )
-        
-        # 3. Lấy trạng thái temporal
-        temporal_state = milvus.get_user_temporal_state(req.user_id)
-        if not temporal_state:
-            raise HTTPException(
-                status_code=500, 
-                detail="Failed to initialize temporal chain state"
-            )
-        
-        # 4. Lưu trạng thái sử dụng pickle để giữ nguyên cấu trúc dữ liệu
-        # Chuyển đổi thành binary và sau đó encode base64 để lưu vào Redis
-        pickled_state = pickle.dumps(temporal_state)
-        base64_state = base64.b64encode(pickled_state).decode('utf-8')
-        
-        temporal_chain_data = {
-            "state_format": "pickle_base64",  # Đánh dấu định dạng dữ liệu
-            "state": base64_state,
-            "last_update": time.time()
-        }
-        
-        redis_client.set(
-            f"temporal_chain:{chain_id}",
-            json.dumps(temporal_chain_data)
-        )
-        
-        print(f"Started new temporal chain with ID: {chain_id}")
-        
-        # 5. Trả về kết quả và chain_id cho client
         return {
             "chain_id": chain_id,
             "initial_results": process_milvus_results_for_frontend(initial_results)
@@ -873,86 +1035,64 @@ async def temporal_search_start(req: TemporalStartRequest):
 async def temporal_search_continue(req: TemporalContinueRequest):
     try:
         # 1. Kiểm tra xem chain_id có tồn tại trong Redis không
-        chain_data_str = redis_client.get(f"temporal_chain:{req.chain_id}")
-        
-        if not chain_data_str:
-            raise HTTPException(
-                status_code=404, 
-                detail="Temporal chain ID not found or expired."
-            )
         
         # Parse JSON để lấy metadata
-        chain_data = json.loads(chain_data_str)
+        deleted_clusters = []
         
-        # 2. Khôi phục trạng thái temporal từ bộ nhớ lưu trữ
-        if chain_data.get("state_format") == "pickle_base64":
-            # Khôi phục từ pickle nếu dữ liệu được lưu dưới dạng pickle
-            base64_state = chain_data["state"]
-            pickled_state = base64.b64decode(base64_state)
-            saved_state = pickle.loads(pickled_state)
-        else:
-            # Backwards compatibility - nếu dữ liệu lưu theo cách cũ
-            saved_state = chain_data["state"]
-        
-        # 3. Cập nhật trạng thái temporal trong instance MilvusManager
-        with milvus._lock:  # Sử dụng lock để tránh race condition
-            milvus.temporal_state = saved_state
-        
-        lower_query = req.query.lower() if req.query else ""
-        lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
-        lower_ocr = req.ocr.lower() if req.ocr else None
+        # Parse user filter
+        excluded_frames = []
+        if req.user_filter:
+            excluded_frames = req.user_filter
+        log_search_debug(
+            "temporal-continue",
+            query=req.query,
+            mode="text",
+            search_in="image",
+            top_k=min(req.top_k, 1000),
+            requested_top_k=req.top_k,
+            chain_id=req.chain_id,
+            user_id=req.user_id,
+            query_id=req.query_id,
+            use_tag=req.use_tag,
+            top_k_tags=req.top_k_tags,
+            tags_filter=req.tags_filter,
+            ocr=req.ocr,
+            asr=req.asr,
+            use_event_filter=req.use_event_filter,
+            ocr_fuzzy=req.ocr_fuzzy,
+            asr_fuzzy=req.asr_fuzzy,
+            user_filter_count=len(excluded_frames),
+            cluster_deletion_enabled=False,
+        )
 
         # 4. Thực hiện temporal search sequence
         temporal_answer = milvus.temporal_search_sequence(
-            query=lower_query,
+            query=req.query,
             mode="text",
             top_k=min(req.top_k, 1000),
             use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
-            tags_filter=lower_tag,
-            ocr = lower_ocr,
+            tags_filter=req.tags_filter,
+            ocr = req.ocr,
             asr = req.asr,
             user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
             ocr_fuzzy=req.ocr_fuzzy,
-            asr_fuzzy=req.asr_fuzzy
+            asr_fuzzy=req.asr_fuzzy,
+            cluster_expr=deleted_clusters,
+            user_filter=excluded_frames  # <<< THÊM THAM SỐ MỚI
         )
         
-        # 5. Lưu lại trạng thái mới sau khi thực hiện tìm kiếm
-        with milvus._lock:
-            saved_state = milvus.temporal_state.copy()
-        
-        # 6. Cập nhật trạng thái và thời gian trong Redis
-        # Sử dụng pickle để lưu trạng thái
-        pickled_state = pickle.dumps(saved_state)
-        base64_state = base64.b64encode(pickled_state).decode('utf-8')
-        
-        temporal_chain_data = {
-            "state_format": "pickle_base64",
-            "state": base64_state,
-            "last_update": time.time()
-        }
-        
-        redis_client.set(
-            f"temporal_chain:{req.chain_id}",
-            json.dumps(temporal_chain_data)
-        )
-        
-        print(f"Continued temporal chain with ID: {req.chain_id}")
-        
-        # 7. Xử lý kết quả trả về
         reranked_list = temporal_answer.get("query_A_reranked", [])
         processed_reranked_list = process_milvus_results_for_frontend(reranked_list)
         
-        # 8. Tạo response cuối cùng
-        current_query_results = process_milvus_results_for_frontend(
-            temporal_answer.get("current_query_results", [])
-        )
+        # current_query_results = temporal_answer.get("current_query_results", [])
+        # )
         
         return {
             "query_idx": temporal_answer.get("query_idx"),
-            "current_query_results": current_query_results,
+            # "current_query_results": current_query_results,
             "query_A_reranked": processed_reranked_list
         }
     
@@ -962,6 +1102,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
 
 def process_milvus_results_for_frontend(results: list) -> list:
     processed_list = []
+    start = time.time()
     for res in results:
         metadata = res.get("metadata", {})
         frame_name = metadata.get("frame_name", "unknown_frame")
@@ -975,7 +1116,6 @@ def process_milvus_results_for_frontend(results: list) -> list:
         
         # THAY ĐỔI: Đường dẫn mới cho frames
         full_frame_name = frame_name if frame_name.endswith('.webp') else f"{frame_name}.webp"
-
         #normal
         path = f"/frames/{video_name}/{full_frame_name}"  # Đường dẫn URL mới
         # Đường dẫn video giữ nguyên
@@ -983,85 +1123,75 @@ def process_milvus_results_for_frontend(results: list) -> list:
         
         match = re.search(r'_(\d+)', frame_name)
         frame_id = int(match.group(1)) if match else 0
-        
+        temporal_chain_data = res.get("temporal_chain", {})
         frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
         frame_identifier = f"{video_name}_{frame_id_ori}"
         fps_value = metadata.get("fps", 1)
+        score = res.get("score", res.get("temporal_score", res.get("original_score", res.get("sim_score", 0))))
         processed_list.append({
             "frame_id_ori": frame_id_ori,  # Thêm frame_id_ori
-            "id": frame_id,
             "path": path,  # Đường dẫn mới
             "videoName": video_name,
-            "videoPath": video_path,
             "timestamp": metadata.get("timestamp", "00:00.000"),
-            "score": res.get("score", res.get("sim_score", 0)),
-            "temporal_score": res.get("temporal_score", 0),
+            "score": score,
+            "temporal_score": res.get("temporal_score"),
             "frameIdentifier": frame_identifier,
-            "fps": fps_value
+            "cluster_id": res.get("cluster_id", ""),
+            "has_temporal_chain": True if temporal_chain_data and len(temporal_chain_data) > 0 else False
         })
+    end = time.time()
+    print(f"Processed {len(results)} results in {end - start:.4f} seconds")
+    print("Top 5 frontend search results:")
+    for index, item in enumerate(processed_list[:5], start=1):
+        print(
+            f"  {index}. frameIdentifier={item.get('frameIdentifier')} "
+            f"videoName={item.get('videoName')} "
+            f"timestamp={item.get('timestamp')} "
+            f"score={item.get('score')} "
+            f"path={item.get('path')}"
+        )
     return processed_list
 
-# Thêm rate limiting đơn giản
-def rate_limit(limit=10, period=60):  # 10 requests/minute
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(request: Request, *args, **kwargs):
-            client_ip = request.client.host
-            key = f"rate_limit:{client_ip}:{func.__name__}"
-            
-            # Lấy số lượng request hiện tại
-            current = redis_client.get(key)
-            current = int(current) if current else 0
-            
-            if current >= limit:
-                raise HTTPException(status_code=429, detail="Too many requests")
-            
-            # Tăng số lượng request và set TTL nếu chưa có
-            pipe = redis_client.pipeline()
-            pipe.incr(key)
-            pipe.expire(key, period)
-            pipe.execute()
-            
-            return await func(request, *args, **kwargs)
-        return wrapper
-    return decorator
-
-
+@app.get("/api/temporal-chain/{user_id}/{frame_identifier}")
+async def get_single_frame_temporal_chain(user_id: str, frame_identifier: str):
+    # This logic is conceptual. You need to implement how to retrieve
+    # the specific chain data from your MilvusManager/Redis state.
+    try:
+        chain_data = milvus.get_temporal_chain_for_frame(user_id, frame_identifier)
+        if not chain_data:
+             raise HTTPException(status_code=404, detail="Temporal chain not found for this frame.")
+        return chain_data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 @app.websocket("/ws/queue/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     await manager.connect(websocket, username)
 
-    # 1. Khi user mới kết nối, xử lý thông tin user và màu sắc
     user_color = get_color_for_user(username)
-    redis_client.hset(QUEUE_USERS_KEY, username, user_color)
+    await redis_async_client.hset(QUEUE_USERS_KEY, username, user_color)
     
-    # 2. Lấy trạng thái hiện tại của queue (từ SORTED SET) và users
-    # Lấy theo thứ tự điểm số giảm dần (vote cao nhất lên trước)
-    sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+    sorted_identifiers = await redis_async_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
     current_queue_items = []
     if sorted_identifiers:
-        # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
-        frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+        frame_data_list = await redis_async_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
         for item_json in frame_data_list:
-            if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+            if item_json:
                 current_queue_items.append(json.loads(item_json))
 
-    current_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
-    current_users = {name.decode(): color.decode() for name, color in current_users_raw.items()}
-    wrong_ids_bytes = redis_client.smembers("dres:wrong_submissions")
-    wrong_ids = [id_bytes.decode('utf-8') for id_bytes in wrong_ids_bytes]
-    # 3. Gửi trạng thái đầy đủ cho user vừa kết nối
+    current_users_raw = await redis_async_client.hgetall(QUEUE_USERS_KEY)
+    current_users = dict(current_users_raw)
+    wrong_ids = await redis_async_client.smembers("dres:wrong_submissions")
     initial_state = {
         "action": "init_state",
         "payload": {
             "queue": current_queue_items,
             "users": current_users,
-            "wrongSubmissionIds": wrong_ids
+            "wrongSubmissionIds": list(wrong_ids)
         }
     }
     await websocket.send_text(json.dumps(initial_state))
 
-    # 4. Thông báo cho tất cả user khác rằng có người mới tham gia (hoặc quay lại)
     join_notification = {
         "action": "user_update",
         "payload": {"users": current_users}
@@ -1069,51 +1199,35 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
     await manager.publish_update(json.dumps(join_notification))
     await broadcast_trake_queue_update(send_to_specific_connection=websocket)
     try:
-        # 5. Vòng lặp chính: Lắng nghe tin nhắn từ client
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
             action = message.get("action")
             payload = message.get("payload")
-
-            # --- Xử lý các hành động ---
             
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
-                
-                # Hằng số lớn để ưu tiên vote
-                VOTE_PRIORITY_MULTIPLIER = 10**10 
-
-                # Sử dụng pipeline để các lệnh được thực hiện cùng lúc
-                pipe = redis_client.pipeline()
+                VOTE_PRIORITY_MULTIPLIER = 10**10
+                pipe = redis_async_client.pipeline()
                 special_frame_found = False
                 for frame in frames_to_add:
                     identifier = frame.get("frameIdentifier")
                     if not identifier:
-                        continue # Bỏ qua nếu frame không có định danh
+                        continue
                     if frame.get("isSpecial") is True:
                         special_frame_found = True
 
-                    # >>> LOGIC MỚI: Chỉ thêm nếu frame chưa tồn tại <<<
-                    # hsetnx: chỉ set nếu field chưa tồn tại. Trả về 1 nếu set thành công, 0 nếu đã tồn tại.
-                    if redis_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
-                        # Nếu thêm dữ liệu thành công (frame này là mới)
-                        # thì mới thêm vào sorted set để sắp xếp
+                    if await redis_async_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
                         frame['added_by'] = username
                         frame['user_color'] = user_color
-                        frame['voters'] = [] 
+                        frame['voters'] = []
                         frame['vote_count'] = 0
                         frame['creation_time'] = time.time()
-                        
                         score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
-                        
-                        # Thêm dữ liệu đã cập nhật (có user, vote...) vào lại Hash
                         pipe.hset(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame))
-                        # Thêm vào Sorted Set để sắp xếp
                         pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier: score})
-                
-                # Thực thi tất cả các lệnh đã thêm vào pipeline
-                pipe.execute()
+
+                await pipe.execute()
                 if special_frame_found:
                     alert_message = {
                         "action": "special_submission_alert",
@@ -1123,18 +1237,14 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
             elif action == "report_dres_result":
                 result_payload = payload
-                submission_status = result_payload.get("status")  # "CORRECT" hoặc "WRONG"
+                submission_status = result_payload.get("status")
                 frame_identifiers = result_payload.get("frameIdentifiers", [])
 
-                # Chỉ xử lý nếu có danh sách frame
                 if not frame_identifiers:
                     continue
 
                 if submission_status == "WRONG":
-                    # Thêm tất cả các frame trong submission sai vào Set của Redis
-                    redis_client.sadd("dres:wrong_submissions", *frame_identifiers)
-                    
-                    # Tạo tin nhắn để phát đi cho mọi người
+                    await redis_async_client.sadd("dres:wrong_submissions", *frame_identifiers)
                     broadcast_message = {
                         "action": "dres_submission_wrong",
                         "payload": {
@@ -1145,8 +1255,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     await manager.publish_update(json.dumps(broadcast_message))
 
                 elif submission_status == "CORRECT":
-                    redis_client.delete("dres:wrong_submissions")
-                    
+                    await redis_async_client.delete("dres:wrong_submissions")
                     broadcast_message = {
                         "action": "dres_submission_correct",
                         "payload": {
@@ -1157,90 +1266,70 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     await manager.publish_update(json.dumps(broadcast_message))
 
             elif action == "remove_frame":
-                # Payload từ client vẫn là một đối tượng JSON đầy đủ
-                frame_to_remove = payload 
+                frame_to_remove = payload
                 identifier_to_remove = frame_to_remove.get("frameIdentifier")
                 if identifier_to_remove:
-                    # >>> LOGIC MỚI: Xóa ở cả 2 nơi <<<
-                    pipe = redis_client.pipeline()
-                    pipe.zrem(QUEUE_SORTED_SET_KEY, identifier_to_remove) # Xóa khỏi Sorted Set
-                    pipe.hdel(QUEUE_DATA_HASH_KEY, identifier_to_remove)  # Xóa dữ liệu khỏi Hash
-                    pipe.execute()
+                    pipe = redis_async_client.pipeline()
+                    pipe.zrem(QUEUE_SORTED_SET_KEY, identifier_to_remove)
+                    pipe.hdel(QUEUE_DATA_HASH_KEY, identifier_to_remove)
+                    await pipe.execute()
 
             elif action == "clear_all":
-                # >>> LOGIC MỚI: Xóa cả 3 key <<<
-                redis_client.delete(QUEUE_SORTED_SET_KEY, QUEUE_DATA_HASH_KEY, QUEUE_USERS_KEY)
-                
+                await redis_async_client.delete(QUEUE_SORTED_SET_KEY, QUEUE_DATA_HASH_KEY, QUEUE_USERS_KEY)
+
             elif action == "vote_frame":
                 identifier_to_vote = payload.get("frameIdentifier")
                 if not identifier_to_vote:
                     continue
 
-                # >>> LOGIC MỚI: Lấy trực tiếp dữ liệu từ Hash <<<
-                item_json_str = redis_client.hget(QUEUE_DATA_HASH_KEY, identifier_to_vote)
+                item_json_str = await redis_async_client.hget(QUEUE_DATA_HASH_KEY, identifier_to_vote)
 
                 if item_json_str:
                     item = json.loads(item_json_str)
-                    
-                    # Logic toggle vote giữ nguyên
                     voters = set(item.get("voters", []))
                     if username in voters:
                         voters.remove(username)
                     else:
                         voters.add(username)
-                    
                     item["voters"] = list(voters)
                     item["vote_count"] = len(voters)
 
-                    # Hằng số lớn phải giống hệt như ở trên
                     VOTE_PRIORITY_MULTIPLIER = 10**10
                     creation_time = item.get('creation_time', time.time())
                     new_score = (item['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + creation_time
-                    
-                    # Cập nhật trong Redis
-                    pipe = redis_client.pipeline()
-                    # 1. Cập nhật dữ liệu mới trong Hash
-                    pipe.hset(QUEUE_DATA_HASH_KEY, identifier_to_vote, json.dumps(item))
-                    # 2. Cập nhật điểm trong Sorted Set
-                    pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
-                    pipe.execute()
 
+                    pipe = redis_async_client.pipeline()
+                    pipe.hset(QUEUE_DATA_HASH_KEY, identifier_to_vote, json.dumps(item))
+                    pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
+                    await pipe.execute()
 
             if action == "add_or_override_trake_frame":
                 frame_data = payload
                 event_number = str(frame_data.get("eventNumber"))
 
                 if event_number:
-                    # Gán thêm thông tin người nộp
                     frame_data['submitted_by'] = username
                     frame_data['user_color'] = get_color_for_user(username)
-                    # Ghi đè hoặc thêm mới vào Redis Hash
-                    redis_client.hset(TRAKE_QUEUE_STATE_KEY, event_number, json.dumps(frame_data))
-                    # Sau khi cập nhật, broadcast trạng thái mới cho mọi người
+                    await redis_async_client.hset(TRAKE_QUEUE_STATE_KEY, event_number, json.dumps(frame_data))
                     await broadcast_trake_queue_update()
 
-            elif action == "clear_trake_event": # Dùng khi user xác nhận xóa frame override
+            elif action == "clear_trake_event":
                 event_number_to_clear = str(payload.get("eventNumber"))
                 if event_number_to_clear:
-                    redis_client.hdel(TRAKE_QUEUE_STATE_KEY, event_number_to_clear)
+                    await redis_async_client.hdel(TRAKE_QUEUE_STATE_KEY, event_number_to_clear)
                     await broadcast_trake_queue_update()
 
-            # --- Phát sóng trạng thái mới cho TẤT CẢ client sau mỗi hành động ---
-        
-            # Lấy lại toàn bộ queue đã được sắp xếp
-            sorted_identifiers = redis_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
+            sorted_identifiers = await redis_async_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
             updated_queue_items = []
             if sorted_identifiers:
-                # >>> Lấy dữ liệu chi tiết cho các identifier này từ Hash <<<
-                frame_data_list = redis_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
+                frame_data_list = await redis_async_client.hmget(QUEUE_DATA_HASH_KEY, sorted_identifiers)
                 for item_json in frame_data_list:
-                    if item_json: # Kiểm tra xem dữ liệu có tồn tại không
+                    if item_json:
                         updated_queue_items.append(json.loads(item_json))
 
-            updated_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
-            updated_users = {name.decode(): color.decode() for name, color in updated_users_raw.items()}
+            updated_users_raw = await redis_async_client.hgetall(QUEUE_USERS_KEY)
+            updated_users = dict(updated_users_raw)
 
-            # Gửi message `init_state` để frontend chỉ cần 1 logic render duy nhất
             full_update_message = {
                 "action": "init_state",
                 "payload": {
@@ -1252,41 +1341,22 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
     except WebSocketDisconnect:
         manager.disconnect(username)
-        # redis_client.hdel(QUEUE_USERS_KEY, username) # Xóa user khỏi danh sách
         
-        # # Lấy danh sách user mới nhất
-        # remaining_users_raw = redis_client.hgetall(QUEUE_USERS_KEY)
-        # remaining_users = {name.decode(): color.decode() for name, color in remaining_users_raw.items()}
-
-        # # Thông báo cho những người còn lại
-        # leave_notification = {
-        #     "action": "user_update",
-        #     "payload": {"users": remaining_users}
-        # }
-        # await manager.publish_update(json.dumps(leave_notification))
-
+        
 async def broadcast_trake_queue_update(send_to_specific_connection: Optional[WebSocket] = None):
-    """
-    Lấy trạng thái hiện tại của TRAKE Queue từ Redis, sắp xếp và gửi tới client.
-    """
-    all_trake_frames_raw = redis_client.hgetall(TRAKE_QUEUE_STATE_KEY)
+    all_trake_frames_raw = await redis_async_client.hgetall(TRAKE_QUEUE_STATE_KEY)
     
-    # Chuyển đổi dữ liệu từ Redis (bytes) thành list các object
     trake_queue_items = []
-    for event_num_bytes, frame_json_bytes in all_trake_frames_raw.items():
+    for event_num, frame_json in all_trake_frames_raw.items():
         try:
-            frame_data = json.loads(frame_json_bytes)
-            # eventNumber có thể đã có trong frame_data, nhưng chúng ta ghi đè lại
-            # từ key của hash để đảm bảo tính nhất quán.
-            frame_data['eventNumber'] = int(event_num_bytes)
+            frame_data = json.loads(frame_json)
+            frame_data['eventNumber'] = int(event_num)
             trake_queue_items.append(frame_data)
         except (json.JSONDecodeError, ValueError):
-            continue # Bỏ qua nếu dữ liệu không hợp lệ
+            continue
 
-    # Sắp xếp các frame theo eventNumber
     trake_queue_items.sort(key=lambda x: x.get('eventNumber', 0))
 
-    # Tạo message cuối cùng
     update_message = {
         "action": "trake_queue_update",
         "payload": trake_queue_items
@@ -1295,10 +1365,8 @@ async def broadcast_trake_queue_update(send_to_specific_connection: Optional[Web
     message_str = json.dumps(update_message)
 
     if send_to_specific_connection:
-        # Chỉ gửi cho 1 người dùng (khi họ mới kết nối)
         await send_to_specific_connection.send_text(message_str)
     else:
-        # Gửi cho tất cả mọi người qua Pub/Sub
         await manager.publish_update(message_str)
 
 class TrakeSubmitRequest(BaseModel):
@@ -1314,8 +1382,7 @@ async def handle_trake_submit(request: TrakeSubmitRequest):
     for frame in submitted_frames:
         print(f"  Event {frame.get('eventNumber')}: {frame.get('frameIdentifier')}")
     
-    # Sau khi submit thành công, có thể xóa trạng thái trong Redis
-    redis_client.delete(TRAKE_QUEUE_STATE_KEY)
+    await redis_async_client.delete(TRAKE_QUEUE_STATE_KEY)
     # Và broadcast một queue rỗng để cập nhật UI của mọi người
     await broadcast_trake_queue_update()
 
@@ -1358,12 +1425,76 @@ async def handle_form_submit(request: FormSubmitRequest):
 
     except Exception as e:
         print(f"ERROR saving form submit data: {e}")
-        import traceback
+        
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save data: {str(e)}")
+# CLUSTER DELETION API DISABLED TEMPORARILY.
+# Kept here for repair/reference; normal search no longer uses cluster deletion.
+'''
+class ClusterSubmitRequest(BaseModel):
+    frames: List[dict]
+@app.get("/api/clusters/deleted-list")
+async def get_deleted_frames_list():
+    """
+    Returns the detailed deletion log directly from the manager.
+    Format: {"cluster_id": {"video_name": ["frame_name_1", ...], ...}, ...}
+    """
+    return cluster_manager.deletion_log
+
+class UndoClusterRequest(BaseModel):
+    cluster_id: str 
+
+@app.post("/api/clusters/undo-deletion")
+async def undo_cluster_deletion(request: UndoClusterRequest):
+    """
+    Removes a cluster from the deletion list, effectively "undoing" the deletion.
+    """
+    cluster_id = request.cluster_id
+    if not cluster_id:
+        raise HTTPException(status_code=400, detail="cluster_id is required.")
+
+    success = cluster_manager.remove_cluster(cluster_id)
+
+    if success:
+        return {"status": "success", "message": f"Cluster '{cluster_id}' has been restored."}
+    else:
+        # This could happen if the cluster wasn't in the list to begin with.
+        return {"status": "noop", "message": f"Cluster '{cluster_id}' was not found in the deletion list."}
+
+@app.post("/api/clusters/delete")
+async def handle_cluster_deletion_submit(request: ClusterSubmitRequest):
+    """
+    [MODIFIED] Receives frames, and passes the full frame data to the manager
+    to be logged and added to the deletion list.
+    """
+    try:
+        frames_to_process = request.frames
+        if not frames_to_process:
+            return {"status": "noop", "message": "No frames provided."}
+
+        # The manager now handles all the logic of extracting IDs and logging
+        success = cluster_manager.add_clusters(frames_to_process)
+        
+        if success:
+            # The manager now saves the file, so we just return success.
+            # No WebSocket update is needed for this workflow.
+            return {"status": "success", "message": f"Processed {len(frames_to_process)} frames for deletion."}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to save cluster deletion data.")
+
+    except Exception as e:
+        
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+'''
+
+# --- Add new WebSocket logic ---
+
+# Add a new Redis key at the top
+CLUSTER_DELETION_QUEUE_KEY = "cluster_deletion_queue:data"
 
 
 # Mount static files
-# app.mount("/", StaticFiles(directory="web", html=True), name="static")
+app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
 
 # usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
