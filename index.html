@@ -25,7 +25,7 @@
             </div>
 
             <div class="header-buttons">
-                
+
                 <button id="textToImageBtn" class="header-btn active" title="Search in Image" data-mode="text-to-image">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-search-icon lucide-search"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
                 </button>
@@ -37,10 +37,10 @@
                 </button>
                 <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F5)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-tags"><path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z"/><path d="M6 9.01V9"/><path d="m15 5 6.3 6.3a2.69 2.69 0 0 1 0 3.79L18.02 18"/><path d="m13.5 15.5 5-5"/></svg>
-                </button>  
+                </button>
                  <button id="asrFilterBtn" class="header-btn" title="Enable/Disable ASR Filter (F4)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-mic"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></svg>
-                </button>         
+                </button>
                 <button id="eventFilterBtn" class="header-btn" title="Enable/Disable Event Filter (F4)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-calendar-heart-icon lucide-calendar-heart"><path d="M12.127 22H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5.125"/><path d="M14.62 18.8A2.25 2.25 0 1 1 18 15.836a2.25 2.25 0 1 1 3.38 2.966l-2.626 2.856a.998.998 0 0 1-1.507 0z"/><path d="M16 2v4"/><path d="M3 10h18"/><path d="M8 2v4"/></svg>
                 </button>
@@ -50,10 +50,12 @@
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
                 </button>
+                <!-- CLUSTER DELETION VIEWER DISABLED TEMPORARILY.
                 <button id="deletionViewerBtn" class="header-btn" title="View Deleted Frames">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
                 </button>
-                
+                -->
+
                 <button id="toggleLayoutBtn" class="header-btn" title="Chuyển sang layout Gom nhóm (Tab)">
                     <i class="fas fa-list"></i>
                 </button>
@@ -84,9 +86,9 @@
                 <div class="search-inputs-container" id="searchInputsContainer">
                     <div class="search-input-group" data-search-id="1">
                         <div class="search-box">
-                            <textarea 
-                                class="search-input" 
-                                placeholder="Search" 
+                            <textarea
+                                class="search-input"
+                                placeholder="Search"
                                 rows="1"
                                 data-mode="text-to-image"
                             ></textarea>
@@ -94,7 +96,7 @@
                              <div class="autocorrect-suggestion-display"></div>
                              <div class="tag-filter-container">
                                 <input type="text" class="tag-input" placeholder="Enter tags">
-                            </div> 
+                            </div>
                             <div class="ocr-filter-container">
                                 <input type="text" class="ocr-input" placeholder="Enter OCR">
                                 <div class="fuzzy-switch-wrapper">
@@ -157,6 +159,7 @@
             </div>
         </div>
 
+        <!-- CLUSTER DELETION QUEUE DISABLED TEMPORARILY.
         <div id="clusterDeletionQueue" class="submit-queue deletion-queue">
             <div class="submit-queue-header">
                 <h3>Cluster Deletion</h3>
@@ -170,14 +173,20 @@
                 </div>
             </div>
             <div id="clusterDeletionQueueFrames" class="submit-queue-frames">
-                <!-- Frames for deletion will be added here -->
+                Frames for deletion will be added here
             </div>
         </div>
+        -->
     </div>
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-content">
             <div id="modalFrameInfo" class="modal-frame-info"></div>
-            <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
+            <div id="mainPreviewContainer" class="main-preview-container">
+                <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
+                <div id="mainPreviewOverlay" class="main-preview-overlay">
+                    <i class="fas fa-play"></i>
+                </div>
+            </div>
             <div class="thumbnail-strip" id="thumbnailStrip"></div>
         </div>
         <div class="modal-overlay"></div>
@@ -201,7 +210,7 @@
                     Trình duyệt của bạn không hỗ trợ thẻ video.
                 </video>
             </div>
-            
+
             <!-- === KHU VỰC ĐIỀU KHIỂN TÙY CHỈNH MỚI === -->
             <div class="video-custom-controls">
                 <div class="controls-top-row">
@@ -290,7 +299,7 @@
                 <div class="shortcut-item">
                     <span class="shortcut-description">On/Off Translate</span>
                     <span class="shortcut-key">F3</span>
-                </div> 
+                </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">Model Setting</span>
                     <span class="shortcut-key">F9</span>
@@ -369,6 +378,24 @@
         <ul>
             <!-- Nội dung sẽ được thêm bằng JavaScript -->
         </ul>
+
+        <h4 style="margin-top: 15px;">DRES Session ID</h4>
+        <div class="setting-input-group">
+            <input type="text" id="dresSessionIdInput" placeholder="Enter DRES Session ID...">
+            <button id="applyDresSessionBtn" class="apply-btn">Apply</button>
+        </div>
+
+    </div>
+
+    <div id="evaluationSelectionModal" class="vqa-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button class="close-btn">×</button>
+            <h3>Select an Active Evaluation</h3>
+            <div id="evaluationListContainer" class="evaluation-list-container">
+                <!-- Danh sách evaluation sẽ được render vào đây -->
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>
@@ -465,6 +492,7 @@
             </form>
         </div>
     </div>
+    <!-- CLUSTER DELETION MODALS DISABLED TEMPORARILY.
     <div id="deletionPreviewModal" class="image-modal" style="display: none;">
         <div class="modal-content deletion-preview-modal">
             <div class="deletion-preview-header">
@@ -480,7 +508,7 @@
                 </div>
             </div>
             <div class="thumbnail-strip" id="deletionPreviewFrames">
-                <!-- Frames to be deleted will be rendered here -->
+                Frames to be deleted will be rendered here
             </div>
         </div>
         <div class="modal-overlay"></div>
@@ -494,11 +522,12 @@
                 </div>
             </div>
             <div class="thumbnail-strip" id="deletionViewerClusters">
-                <!-- Cluster groups will be rendered here -->
+                Cluster groups will be rendered here
             </div>
         </div>
         <div class="modal-overlay"></div>
     </div>
+    -->
     <div id="qaInputModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
@@ -510,13 +539,32 @@
                     <label for="qaAnswerTextInput">Answer Text</label>
                     <input type="text" id="qaAnswerTextInput" name="answerText" placeholder="Enter your text answer here" required>
                 </div>
-                <button type="submit" class="submit-form-btn">Submit QA</button>
+                <button type="button" class="submit-form-btn">Submit QA</button>
             </form>
         </div>
     </div>
+
+    <div id="semanticSearchModal" class="image-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content deletion-viewer-modal">
+            <div class="deletion-preview-header">
+                <h3>Semantic Search Results</h3>
+                <div class="modal-header-actions">
+                    <button id="modalToggleLayoutBtn" class="queue-action-btn" title="Chuyển Layout (Tab)">
+                        <i class="fas fa-list"></i> <!-- Bắt đầu với icon của layout Grouped -->
+                    </button>
+                    <button id="closeSemanticSearchModalBtn" class="queue-action-btn cancel-btn">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+            <div id="semanticSearchResultsContainer">
+                <!-- Kết quả sẽ được render vào đây -->
+            </div>
+        </div>
+    </div>
+
     <canvas id="frameCaptureCanvas" style="display: none;"></canvas>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </body>
 </html>
-
-
