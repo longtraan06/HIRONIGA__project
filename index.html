@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=cluster-viewer-2">
 </head>
 <body>
     <header class="header">
@@ -50,11 +50,9 @@
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
                 </button>
-                <!-- CLUSTER DELETION VIEWER DISABLED TEMPORARILY.
                 <button id="deletionViewerBtn" class="header-btn" title="View Deleted Frames">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
                 </button>
-                -->
 
                 <button id="toggleLayoutBtn" class="header-btn" title="Chuyển sang layout Gom nhóm (Tab)">
                     <i class="fas fa-list"></i>
@@ -159,24 +157,6 @@
             </div>
         </div>
 
-        <!-- CLUSTER DELETION QUEUE DISABLED TEMPORARILY.
-        <div id="clusterDeletionQueue" class="submit-queue deletion-queue">
-            <div class="submit-queue-header">
-                <h3>Cluster Deletion</h3>
-                <div class="queue-actions">
-                    <button id="submitClusterDeletionBtn" class="queue-action-btn submit-btn" disabled>
-                        <i class="fas fa-shield-slash"></i> Submit
-                    </button>
-                    <button id="clearClusterDeletionBtn" class="queue-action-btn">
-                        <i class="fas fa-trash"></i> Clear
-                    </button>
-                </div>
-            </div>
-            <div id="clusterDeletionQueueFrames" class="submit-queue-frames">
-                Frames for deletion will be added here
-            </div>
-        </div>
-        -->
     </div>
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-content">
@@ -398,7 +378,7 @@
         </div>
     </div>
 
-    <script src="script.js"></script>
+    <script src="script.js?v=cluster-viewer-2"></script>
     <div id="queueContainer" class="queue-container">
         <div id="submitQueue" class="submit-queue">
             <div class="submit-queue-header">
@@ -492,7 +472,6 @@
             </form>
         </div>
     </div>
-    <!-- CLUSTER DELETION MODALS DISABLED TEMPORARILY.
     <div id="deletionPreviewModal" class="image-modal" style="display: none;">
         <div class="modal-content deletion-preview-modal">
             <div class="deletion-preview-header">
@@ -513,7 +492,7 @@
         </div>
         <div class="modal-overlay"></div>
     </div>
-        <div id="deletionViewerPanel" class="image-modal" style="display: none;">
+    <div id="deletionViewerPanel" class="image-modal" style="display: none;">
         <div class="modal-content deletion-viewer-modal">
             <div class="deletion-preview-header">
                 <h3>Deleted Frames</h3>
@@ -527,7 +506,6 @@
         </div>
         <div class="modal-overlay"></div>
     </div>
-    -->
     <div id="qaInputModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
