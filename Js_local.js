@@ -57,21 +57,8 @@ function getNewTopZIndex() {
 }
 
 let allImages = [];
-// CLUSTER DELETION DISABLED TEMPORARILY.
-// Normal search/result behavior is preserved while the cluster workflow is repaired.
 const framesToDeleteManager = {
-    add() {},
-    remove() {},
-    toggle() {},
-    clearAll() {},
-    getSelectionCount() { return 0; },
-    getAllSelectedData() { return []; },
-    updateUI() {}
-};
-
-/*
-const framesToDeleteManager = {
-    _selection: new Set(), // Private set of frameIdentifiers
+    _selection: new Set(),
 
     add(frameData) {
         if (frameData && frameData.frameIdentifier) {
@@ -103,19 +90,7 @@ const framesToDeleteManager = {
     },
 
     getAllSelectedData() {
-        const allFrames = document.querySelectorAll('.image-item');
-        const selectedData = [];
-        allFrames.forEach(el => {
-            const frameId = el.getAttribute('data-frame-identifier');
-            if (this._selection.has(frameId)) {
-                // Reconstruct data from the element if needed, or find from `allImages`
-                const frameObject = allImages.find(img => img.frameIdentifier === frameId);
-                if (frameObject) {
-                    selectedData.push(frameObject);
-                }
-            }
-        });
-        return selectedData;
+        return allImages.filter(frame => this._selection.has(frame.frameIdentifier));
     },
 
     updateUI() {
@@ -125,7 +100,6 @@ const framesToDeleteManager = {
         });
     }
 };
-*/
 
 document.addEventListener('DOMContentLoaded', function() {
     let searchIdCounter = 1;
@@ -528,38 +502,199 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
 
-        /* CLUSTER DELETION UI DISABLED TEMPORARILY.
-        const submitClusterDeletionBtn = document.getElementById('submitClusterDeletionBtn');
-        const clearClusterDeletionBtn = document.getElementById('clearClusterDeletionBtn');
         const deletionViewerBtn = document.getElementById('deletionViewerBtn');
-        deletionViewerBtn.addEventListener('click', toggleDeletionViewer);
-
-        // Add event listeners for deletion viewer modal
         const closeDeletionViewerBtn = document.getElementById('closeDeletionViewerBtn');
         const deletionViewerPanel = document.getElementById('deletionViewerPanel');
+        const deletionPreviewModal = document.getElementById('deletionPreviewModal');
 
-        if (closeDeletionViewerBtn) {
-            closeDeletionViewerBtn.addEventListener('click', () => {
-                deletionViewerPanel.style.display = 'none';
-            });
-        }
+        const closeDeletionViewer = () => {
+            if (!deletionViewerPanel) return;
+            deletionViewerPanel.classList.remove('visible');
+            deletionViewerPanel.style.display = 'none';
+            registerModalClose(deletionViewerPanel);
+        };
 
-        // Close modal when clicking overlay
-        if (deletionViewerPanel) {
-            const overlay = deletionViewerPanel.querySelector('.modal-overlay');
-            if (overlay) {
-                overlay.addEventListener('click', () => {
-                    deletionViewerPanel.style.display = 'none';
+        const renderDeletionViewer = (deletionLog) => {
+            const container = document.getElementById('deletionViewerClusters');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const entries = Object.entries(deletionLog || {}).sort(([left], [right]) =>
+                left.localeCompare(right, undefined, { numeric: true })
+            );
+            if (entries.length === 0) {
+                container.textContent = 'No deleted clusters found.';
+                return;
+            }
+
+            for (const [clusterId, clusterData] of entries) {
+                const frames = Array.isArray(clusterData?.frames)
+                    ? clusterData.frames
+                    : Object.entries(clusterData || {}).flatMap(([videoName, frameNames]) =>
+                        Array.isArray(frameNames)
+                            ? frameNames.map(frameName => ({ video_name: videoName, frame_name: frameName }))
+                            : []
+                    );
+                const group = document.createElement('div');
+                group.className = 'deleted-cluster-group';
+                const header = document.createElement('div');
+                header.className = 'deleted-cluster-header';
+                const title = document.createElement('strong');
+                title.textContent = `Cluster ${clusterId} (${frames.length} frames)`;
+                const undoButton = document.createElement('button');
+                undoButton.className = 'queue-action-btn cluster-undo-btn';
+                undoButton.textContent = 'Undo';
+                undoButton.addEventListener('click', async () => {
+                    try {
+                        if (!confirm(`Restore cluster ${clusterId} to search results?`)) return;
+                        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/undo-deletion`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ cluster_id: clusterId })
+                        });
+                        const result = await response.json();
+                        if (!response.ok || result.status !== 'success') {
+                            throw new Error(result.detail || result.message || 'Failed to restore cluster.');
+                        }
+                        showToastNotification(result.message, 'success');
+                        await toggleDeletionViewer(true);
+                    } catch (error) {
+                        showToastNotification(`Error: ${error.message}`, 'error');
+                    }
                 });
+                header.append(title, undoButton);
+                group.appendChild(header);
+
+                for (const frame of frames) {
+                    const videoName = frame.video_name;
+                    const frameName = frame.frame_name;
+                    if (!videoName || !frameName) continue;
+                    const image = document.createElement('img');
+                    const filename = frameName.endsWith('.webp') ? frameName : `${frameName}.webp`;
+                    image.src = `/frames/${videoName}/${filename}`;
+                    image.alt = `${videoName}/${frameName}`;
+                    image.className = 'cluster-frame-thumb';
+                    group.appendChild(image);
+                }
+                container.appendChild(group);
+            }
+        };
+
+        async function toggleDeletionViewer(refresh = false) {
+            if (!deletionViewerPanel) return;
+            if (!refresh && deletionViewerPanel.style.display === 'flex') {
+                closeDeletionViewer();
+                return;
+            }
+
+            const container = document.getElementById('deletionViewerClusters');
+            if (deletionViewerPanel.style.display !== 'flex') {
+                deletionViewerPanel.style.zIndex = getNewTopZIndex();
+                deletionViewerPanel.style.display = 'flex';
+                registerModalOpen(deletionViewerPanel, closeDeletionViewer);
+                setTimeout(() => deletionViewerPanel.classList.add('visible'), 10);
+            }
+            if (container) {
+                container.textContent = 'Loading deleted clusters...';
+            }
+
+            try {
+                const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/deleted-list`);
+                const deletionLog = await response.json();
+                if (!response.ok) throw new Error(deletionLog.detail || 'Failed to load deleted clusters.');
+                renderDeletionViewer(deletionLog);
+            } catch (error) {
+                if (container) {
+                    container.textContent = 'Unable to load deleted clusters.';
+                }
+                showToastNotification(`Error: ${error.message}`, 'error');
             }
         }
 
-        // Wire up the new buttons
-        submitClusterDeletionBtn.addEventListener('click', handleSubmitClusterDeletion);
-        clearClusterDeletionBtn.addEventListener('click', () => {
-            sendWebSocketMessage('clear_deletion_queue', {});
-        });
-        */
+        function showDeletionConfirmation() {
+            const frames = framesToDeleteManager.getAllSelectedData();
+            if (!deletionPreviewModal || frames.length === 0) return;
+
+            const frameContainer = document.getElementById('deletionPreviewFrames');
+            const countSpan = document.getElementById('deletionPreviewCount');
+            const submitBtn = document.getElementById('deletionSubmitBtn');
+            const cancelBtn = document.getElementById('deletionCancelBtn');
+            const overlay = deletionPreviewModal.querySelector('.modal-overlay');
+
+            const closeModal = () => {
+                deletionPreviewModal.classList.remove('visible');
+                deletionPreviewModal.style.display = 'none';
+                registerModalClose(deletionPreviewModal);
+            };
+            const renderModal = () => {
+                const selectedFrames = framesToDeleteManager.getAllSelectedData();
+                frameContainer.innerHTML = '';
+                countSpan.textContent = `${selectedFrames.length} frame(s)`;
+                for (const frame of selectedFrames) {
+                    const image = document.createElement('img');
+                    image.src = frame.path;
+                    image.alt = frame.frameIdentifier;
+                    image.title = 'Click to remove from deletion';
+                    image.addEventListener('click', () => {
+                        framesToDeleteManager.remove(frame.frameIdentifier);
+                        renderModal();
+                    });
+                    frameContainer.appendChild(image);
+                }
+                submitBtn.disabled = selectedFrames.length === 0;
+                if (selectedFrames.length === 0) closeModal();
+            };
+
+            submitBtn.onclick = async () => {
+                await handleDeletionSubmit();
+                closeModal();
+            };
+            cancelBtn.onclick = closeModal;
+            overlay.onclick = closeModal;
+            renderModal();
+            deletionPreviewModal.style.zIndex = getNewTopZIndex();
+            deletionPreviewModal.style.display = 'flex';
+            registerModalOpen(deletionPreviewModal, closeModal);
+            setTimeout(() => deletionPreviewModal.classList.add('visible'), 10);
+        }
+
+        async function handleDeletionSubmit() {
+            const framesToSubmit = framesToDeleteManager.getAllSelectedData();
+            if (framesToSubmit.length === 0) return;
+
+            const deletedClusterIds = new Set(framesToSubmit.map(frame => String(frame.cluster_id)));
+            try {
+                const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/delete`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ frames: framesToSubmit })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.detail || 'Failed to delete clusters.');
+
+                framesToDeleteManager.clearAll();
+                allImages = allImages.filter(frame => !deletedClusterIds.has(String(frame.cluster_id)));
+                await handleSearchResults(allImages, currentResultsAreReranked);
+                showToastNotification(result.message, 'success');
+            } catch (error) {
+                showToastNotification(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        if (deletionViewerBtn) {
+            deletionViewerBtn.addEventListener('click', () => toggleDeletionViewer());
+        }
+
+        if (closeDeletionViewerBtn) {
+            closeDeletionViewerBtn.addEventListener('click', closeDeletionViewer);
+        }
+
+        if (deletionViewerPanel) {
+            const overlay = deletionViewerPanel.querySelector('.modal-overlay');
+            if (overlay) {
+                overlay.addEventListener('click', closeDeletionViewer);
+            }
+        }
         if (shortcutsBtn && shortcutsModal) {
             // Hàm để mở modal
             const openShortcutsModal = () => {
@@ -1433,11 +1568,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     showGlobalAlert(payload.username, 'special');
                 }
                 break;
-            /* CLUSTER DELETION DISABLED TEMPORARILY.
-            case 'cluster_deletion_queue_update':
-                renderClusterDeletionQueue(payload);
-                break;
-            */
         }
     }
 
@@ -2620,6 +2750,7 @@ async function openTemporalChainModal(baseFrame, temporalChain) {
         if (window.currentInfiniteScrollObserver) {
             window.currentInfiniteScrollObserver.disconnect();
         }
+        framesToDeleteManager.clearAll();
 
         if (!images || images.length === 0) {
             contentArea.innerHTML = `<div class="content-placeholder"><h2>Không tìm thấy kết quả</h2><p>Vui lòng thử lại.</p></div>`;
@@ -3870,7 +4001,6 @@ async function openTemporalChainModal(baseFrame, temporalChain) {
                     addFramesToQueue(selectedFramesData);
                 }
             }
-            /* CLUSTER DELETION HOTKEY DISABLED TEMPORARILY.
             if (e.key === 'Backspace') {
                 const anyModalOpen = document.getElementById('imageModal').style.display === 'flex' ||
                 document.getElementById('videoModal').style.display === 'flex';
@@ -3882,7 +4012,7 @@ async function openTemporalChainModal(baseFrame, temporalChain) {
                     const selectedFrames = frameSelectionManager.getAllSelectedFrames();
                     let toggledCount = 0;
                     selectedFrames.forEach(frame => {
-                        if (frame.data.cluster_id) {
+                        if (frame.data.cluster_id !== undefined && frame.data.cluster_id !== null && frame.data.cluster_id !== '') {
                             framesToDeleteManager.toggle(frame.data);
                             toggledCount++;
                         }
@@ -3897,7 +4027,6 @@ async function openTemporalChainModal(baseFrame, temporalChain) {
                     frameSelectionManager.clearAllSelections();
                 }
             }
-            */
 
             // Add new 'Enter' key logic for submission
             if (e.key === 'Enter') {
@@ -3908,13 +4037,11 @@ async function openTemporalChainModal(baseFrame, temporalChain) {
                 document.getElementById('qaInputModal').style.display === 'flex';
                 const isTyping = document.activeElement.tagName === 'INPUT' || document.activeElement.tagName === 'TEXTAREA';
 
-                /* CLUSTER DELETION CONFIRMATION DISABLED TEMPORARILY.
                 // Check if any frames are marked yellow for deletion
                 if (!anyModalOpen && !isTyping && framesToDeleteManager.getSelectionCount() > 0) {
                     e.preventDefault();
                     showDeletionConfirmation();
                 }
-                */
             }
 
 
@@ -5785,407 +5912,6 @@ showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
     }
 
 });
-/* CLUSTER DELETION FUNCTIONS DISABLED TEMPORARILY.
-function renderClusterDeletionQueue(frames = []) {
-    clusterDeletionQueueState = frames;
-    const mainContainer = document.querySelector('.main-container');
-    const queueFramesContainer = document.getElementById('clusterDeletionQueueFrames');
-    const submitBtn = document.getElementById('submitClusterDeletionBtn');
-
-    mainContainer.classList.toggle('deletion-queue-active', frames.length > 0);
-
-    queueFramesContainer.innerHTML = '';
-    frames.forEach(frameData => {
-        const frameElement = document.createElement('div');
-        frameElement.className = 'queue-frame-item';
-        frameElement.dataset.frameId = frameData.frameIdentifier;
-
-        frameElement.innerHTML = `
-        <div class="queue-frame-image-container">
-        <img src="${frameData.path}" alt="Deletion candidate">
-        <div class="queue-frame-user">${frameData.added_by}</div>
-        <button class="remove-queue-item-btn" title="Remove from this queue">×</button>
-        </div>
-        <div class="queue-frame-info-bar">${frameData.cluster_id}</div>
-        `;
-
-        frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', () => {
-            sendWebSocketMessage('remove_from_deletion_queue', { frameIdentifier: frameData.frameIdentifier });
-        });
-
-        queueFramesContainer.appendChild(frameElement);
-    });
-
-    submitBtn.disabled = frames.length === 0;
-}
-
-async function handleSubmitClusterDeletion() {
-    if (clusterDeletionQueueState.length === 0) return;
-
-    const submitBtn = document.getElementById('submitClusterDeletionBtn');
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
-
-    try {
-        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/delete`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frames: clusterDeletionQueueState })
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-            showToastNotification(result.message || 'Clusters submitted successfully!', 'success');
-            // The server will trigger a WebSocket update to clear the queue UI
-        } else {
-            throw new Error(result.detail || 'Failed to submit clusters.');
-        }
-
-    } catch (error) {
-        showToastNotification(`Error: ${error.message}`, 'error');
-    } finally {
-        submitBtn.disabled = false; // Re-enabled by WebSocket update, but good fallback
-        submitBtn.innerHTML = '<i class="fas fa-shield-slash"></i> Submit';
-    }
-}
-async function toggleDeletionViewer() {
-    console.log('Toggle deletion viewer clicked!'); // Debug log
-    const panel = document.getElementById('deletionViewerPanel');
-    console.log('Panel found:', panel); // Debug log
-
-    // Toggle modal visibility
-    panel.style.zIndex = getNewTopZIndex();
-    if (panel.style.display === 'flex') {
-        panel.style.display = 'none';
-    } else {
-        // Force modal visibility with explicit styling
-        panel.style.display = 'flex';
-        panel.style.position = 'fixed';
-        panel.style.top = '0';
-        panel.style.left = '0';
-        panel.style.width = '100%';
-        panel.style.height = '100%';
-        panel.style.zIndex = '1000';
-        panel.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
-        console.log('Panel display set to flex with debug styling'); // Debug log
-
-        try {
-            // Fetch and display deletion log
-            console.log('Fetching deletion log...'); // Debug log
-            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/deleted-list`);
-            console.log('Response status:', response.status); // Debug log
-            if (response.ok) {
-                const deletionLog = await response.json();
-                console.log('Deletion log received:', deletionLog); // Debug log
-                renderDeletionViewer(deletionLog);
-                setupDeletionViewerEventListeners();
-            } else {
-                console.error('Failed to fetch deletion log:', response.statusText);
-                // Show empty state even if API fails
-                renderDeletionViewer([]);
-            }
-        } catch (error) {
-            console.error('Error fetching deletion log:', error);
-            // Show empty state even if API fails
-            renderDeletionViewer([]);
-            setupDeletionViewerEventListeners();
-        }
-    }
-}
-
-function renderDeletionViewer(deletionLog) {
-    console.log('renderDeletionViewer called with:', deletionLog); // Debug log
-    const container = document.getElementById('deletionViewerClusters');
-    console.log('Container found:', container); // Debug log
-
-    // Handle both array and object formats
-    let deletionsArray = [];
-
-    if (Array.isArray(deletionLog)) {
-        deletionsArray = deletionLog;
-    } else if (deletionLog && typeof deletionLog === 'object') {
-        // Convert object format {cluster_94: {...}, cluster_194: {...}} to array
-        deletionsArray = Object.entries(deletionLog).map(([clusterId, clusterData]) => {
-            console.log('Processing cluster:', clusterId, clusterData); // Debug log
-
-            // Extract frames from the cluster data structure
-            let allFramesInCluster = [];
-            Object.entries(clusterData).forEach(([videoName, frameNames]) => {
-                if (Array.isArray(frameNames)) {
-                    frameNames.forEach(frameName => {
-                        allFramesInCluster.push({
-                            video_name: videoName,
-                            frame_name: frameName,
-                            cluster_id: clusterId
-                        });
-                    });
-                }
-            });
-
-            return {
-                cluster_id: clusterId,
-                frames: allFramesInCluster
-            };
-        });
-    }
-
-    if (!deletionsArray || deletionsArray.length === 0) {
-        console.log('No deletion data, showing empty state'); // Debug log
-        container.innerHTML = '<p style="padding: 10px; text-align: center; color: #666;">No deleted frames found</p>';
-        return;
-    }
-
-    console.log('Processing deletions array:', deletionsArray);
-
-    // Collect all frames from all deletions and group by cluster
-    let framesByCluster = new Map();
-
-    deletionsArray.forEach(deletion => {
-        console.log('Processing deletion:', deletion); // Debug log
-
-        if (deletion.frames && Array.isArray(deletion.frames)) {
-            // Handle new structure
-            deletion.frames.forEach(frameInfo => {
-                const videoName = frameInfo.video_name || 'Unknown Video';
-                const frameName = frameInfo.frame_name;
-                const clusterId = frameInfo.cluster_id;
-                const fullFrameName = String(frameName).endsWith('.webp') ? String(frameName) : `${String(frameName)}.webp`;
-                const imagePath = `${APP_CONFIG.REMOTE_BASE_URL}/frames/${videoName}/${fullFrameName}`;
-
-                if (!framesByCluster.has(clusterId)) {
-                    framesByCluster.set(clusterId, []);
-                }
-
-                framesByCluster.get(clusterId).push({
-                    src: imagePath,
-                    alt: frameName,
-                    title: `${videoName} - ${frameName}`,
-                    clusterId: clusterId,
-                    videoName: videoName,
-                    frameName: frameName
-                });
-            });
-        } else {
-            // Handle old structure (fallback)
-            const videoName = deletion.video_name || 'Unknown Video';
-            const frameNames = deletion.frame_names || [];
-            const clusterId = deletion.cluster_id;
-
-            if (!framesByCluster.has(clusterId)) {
-                framesByCluster.set(clusterId, []);
-            }
-
-            frameNames.forEach(frameName => {
-                const fullFrameName = String(frameName).endsWith('.webp') ? String(frameName) : `${String(frameName)}.webp`;
-                const imagePath = `${APP_CONFIG.REMOTE_BASE_URL}/frames/${videoName}/${fullFrameName}`;
-                framesByCluster.get(clusterId).push({
-                    src: imagePath,
-                    alt: frameName,
-                    title: `${videoName} - ${frameName}`,
-                    clusterId: clusterId,
-                    videoName: videoName,
-                    frameName: frameName,
-                    deletedAt: deletion.deleted_at
-                });
-            });
-        }
-    });
-
-    console.log('Frames grouped by cluster:', framesByCluster);
-
-    if (framesByCluster.size === 0) {
-        container.innerHTML = '<p style="padding: 10px; text-align: center; color: #666;">No frames found in deleted clusters</p>';
-        return;
-    }
-
-    // Sort clusters by cluster_id
-    const sortedClusters = Array.from(framesByCluster.entries()).sort((a, b) => {
-        const clusterA = a[0];
-        const clusterB = b[0];
-
-        // Extract numeric part from cluster_id (e.g., "cluster_94" -> 94)
-        const numA = parseInt(clusterA.replace(/\D/g, '')) || 0;
-        const numB = parseInt(clusterB.replace(/\D/g, '')) || 0;
-
-        return numA - numB;
-    });
-
-    // Create HTML for each cluster's frames
-    let htmlContent = '';
-    let totalFramesCount = 0;
-
-    sortedClusters.forEach(([clusterId, frames]) => {
-        totalFramesCount += frames.length;
-
-        frames.forEach(frame => {
-            htmlContent += `
-            <div class="cluster-frame-container" data-cluster-id="${frame.clusterId}">
-            <div class="cluster-frame-wrapper">
-            <img src="${frame.src}" alt="${frame.alt}" title="${frame.title}"
-            class="cluster-frame-thumb"
-            data-cluster-id="${frame.clusterId}"
-            data-video-name="${frame.videoName}"
-            data-frame-name="${frame.frameName}">
-            <button class="cluster-undo-btn"
-            data-cluster-id="${frame.clusterId}"
-            title="Undo deletion for cluster ${frame.clusterId}">×</button>
-            </div>
-            <div class="cluster-id-label">${frame.clusterId}</div>
-            </div>
-            `;
-        });
-    });
-
-    container.innerHTML = htmlContent;
-
-    console.log('Generated HTML for', totalFramesCount, 'frames in', sortedClusters.length, 'clusters');
-    console.log('Container HTML preview:', container.innerHTML.substring(0, 200) + '...');
-}
-
-function setupDeletionViewerEventListeners() {
-    const container = document.getElementById('deletionViewerClusters');
-
-    // Use event delegation to handle clicks on dynamically created elements
-    container.addEventListener('click', async (e) => {
-        // Handle X button clicks for undoing cluster deletion
-        if (e.target.classList.contains('cluster-undo-btn')) {
-            e.preventDefault();
-            e.stopPropagation();
-
-            const clusterId = e.target.getAttribute('data-cluster-id');
-            console.log('Undo button clicked for cluster:', clusterId);
-
-            if (clusterId) {
-                await handleUndoDeletion(clusterId);
-            }
-        }
-
-        // Handle frame clicks (could be used for preview in the future)
-        else if (e.target.classList.contains('cluster-frame-thumb')) {
-            console.log('Frame clicked:', {
-                clusterId: e.target.getAttribute('data-cluster-id'),
-                        videoName: e.target.getAttribute('data-video-name'),
-                        frameName: e.target.getAttribute('data-frame-name')
-            });
-            // Future: Could open frame preview modal here
-        }
-    });
-}
-
-async function handleUndoDeletion(clusterId) {
-    const clusterFrames = document.querySelectorAll(`[data-cluster-id="${clusterId}"]`);
-    const frameCount = clusterFrames.length;
-
-    if (!confirm(`Are you sure you want to undo the deletion for ${clusterId}? This will restore ${frameCount} frame(s) and they will reappear in search results.`)) {
-        return;
-    }
-
-    try {
-        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/undo-deletion`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ cluster_id: clusterId })
-        });
-        const result = await response.json();
-        if (response.ok && result.status === 'success') {
-            showToastNotification(result.message, 'success');
-
-            // Animate removal of all frames from this cluster
-            clusterFrames.forEach((frameContainer, index) => {
-                frameContainer.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
-                frameContainer.style.opacity = '0';
-                frameContainer.style.transform = 'scale(0.8) translateY(-10px)';
-
-                // Stagger the removal slightly for visual effect
-                setTimeout(() => {
-                    frameContainer.remove();
-                }, 100 + (index * 50));
-            });
-
-            // Check if no frames left and show empty state
-            setTimeout(() => {
-                const remainingFrames = document.querySelectorAll('.cluster-frame-container');
-                if (remainingFrames.length === 0) {
-                    const container = document.getElementById('deletionViewerClusters');
-                    container.innerHTML = '<p style="padding: 10px; text-align: center; color: #666;">No deleted frames found</p>';
-                }
-            }, 400);
-
-        } else {
-            throw new Error(result.detail || result.message || 'Failed to undo deletion.');
-        }
-    } catch (error) {
-        showToastNotification(`Error: ${error.message}`, 'error');
-    }
-}
-*/
-
-/* CLUSTER DELETION CONFIRMATION DISABLED TEMPORARILY.
-function showDeletionConfirmation() {
-    const modal = document.getElementById('deletionPreviewModal');
-    if (!modal) return;
-
-    const frameContainer = document.getElementById('deletionPreviewFrames');
-    const countSpan = document.getElementById('deletionPreviewCount');
-    const submitBtn = document.getElementById('deletionSubmitBtn');
-    const cancelBtn = document.getElementById('deletionCancelBtn');
-    const overlay = modal.querySelector('.modal-overlay');
-
-    // Get a mutable copy of the frames to delete
-    let framesInModal = framesToDeleteManager.getAllSelectedData();
-
-    // This function will re-render the contents of the modal
-    function renderModalContent() {
-        frameContainer.innerHTML = ''; // Clear previous content
-        countSpan.textContent = `${framesInModal.length} frames`;
-
-        if (framesInModal.length === 0) {
-            closeModal(); // Automatically close if no frames are left
-            return;
-        }
-
-        framesInModal.forEach(frameData => {
-            const thumb = document.createElement('img');
-            thumb.src = frameData.path;
-            thumb.title = `Click to remove: ${frameData.frameIdentifier}`;
-
-            // Add click listener to remove the frame
-            thumb.addEventListener('click', () => {
-                // Remove from the modal's temporary list
-                framesInModal = framesInModal.filter(f => f.frameIdentifier !== frameData.frameIdentifier);
-                // ALSO remove from the global manager to update main UI
-                framesToDeleteManager.remove(frameData.frameIdentifier);
-                // Re-render the modal with the updated list
-                renderModalContent();
-            });
-
-            frameContainer.appendChild(thumb);
-        });
-
-        submitBtn.disabled = framesInModal.length === 0;
-    }
-
-    const closeModal = () => {
-        modal.classList.remove('visible');
-        setTimeout(() => modal.style.display = 'none', 300);
-    };
-
-    submitBtn.onclick = () => {
-        // The manager has already been updated, so we can just call the submit handler
-        handleDeletionSubmit();
-        closeModal();
-    };
-    cancelBtn.onclick = closeModal;
-    overlay.onclick = closeModal;
-
-    // Initial render
-    renderModalContent();
-    modal.style.zIndex = getNewTopZIndex();
-    // Show the modal
-    modal.style.display = 'flex';
-    setTimeout(() => modal.classList.add('visible'), 10);
-}
-*/
 function showToastNotification(message, type = 'success', duration = 2000) {
     const toast = document.createElement('div');
     toast.className = `toast-notification ${type}`;
@@ -6203,27 +5929,3 @@ function showToastNotification(message, type = 'success', duration = 2000) {
         toast.addEventListener('transitionend', () => toast.remove());
     }, duration);
 }
-/* CLUSTER DELETION SUBMIT DISABLED TEMPORARILY.
-async function handleDeletionSubmit() {
-    const framesToSubmit = framesToDeleteManager.getAllSelectedData();
-    if (framesToSubmit.length === 0) return;
-
-    try {
-        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/clusters/delete`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ frames: framesToSubmit })
-        });
-
-        const result = await response.json();
-        if (response.ok) {
-            showToastNotification(result.message || 'Frames marked for deletion!', 'success');
-            framesToDeleteManager.clearAll();
-        } else {
-            throw new Error(result.detail || 'Failed to submit deletion.');
-        }
-    } catch (error) {
-        showToastNotification(`Error: ${error.message}`, 'error');
-    }
-}
-*/
