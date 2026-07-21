@@ -5,11 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from db.milvus import MilvusManager
+from src.core.database.milvus import MilvusManager
 from functools import lru_cache, wraps
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from threading import Lock
@@ -26,6 +26,8 @@ import secrets
 import traceback
 import aioredis
 import asyncio
+import fcntl
+from contextlib import contextmanager
 FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
 
 app = FastAPI()
@@ -62,10 +64,12 @@ model_paths=[
 milvus = MilvusManager(
                         host="192.168.20.150",
                         port='6050',
+                        es_host=os.getenv("ES_HOST", "http://192.168.20.150:9250"),
                         model_paths=model_paths,
                         mode = 'AIC',
                         prefix=None
                     )
+
 
 # clear cache method
 
@@ -76,95 +80,188 @@ security = HTTPBasic()
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
-# CLUSTER DELETION DISABLED TEMPORARILY.
-# The full implementation is kept below for repair/reference. Search endpoints now
-# pass an empty cluster exclusion list so results are returned normally.
-'''
-CLUSTER_DELETION_FILE = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/deleted_clusters_200.json"
+CLUSTER_CATALOG_FILE = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json"
+CLUSTER_DELETION_FILE = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json"
+
+class ClusterCatalog:
+    """Maps durable cluster IDs to the primary keys expected by Milvus filtering."""
+    def __init__(self, file_path: str, active_collection_names: Set[str]):
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Unable to load cluster catalog '{file_path}': {error}") from error
+
+        source = data.get("source", {})
+        source_collection = source.get("collection")
+        if source.get("id_field") != "id" or source_collection not in active_collection_names:
+            raise RuntimeError(
+                "Cluster catalog does not match the active Milvus collection: "
+                f"catalog={source_collection!r}, active={sorted(active_collection_names)!r}"
+            )
+
+        frame_ids_by_cluster = {}
+        frames_by_cluster = {}
+        for cluster in data.get("clusters", []):
+            cluster_id = str(cluster.get("cluster_id", ""))
+            if not cluster_id:
+                continue
+            frame_ids = set()
+            frames = []
+            for frame in cluster.get("frames", []):
+                try:
+                    frame_ids.add(int(frame["id"]))
+                except (KeyError, TypeError, ValueError):
+                    continue
+                video_name = frame.get("video_name")
+                frame_name = frame.get("frame_name")
+                if video_name and frame_name:
+                    frames.append({
+                        "video_name": video_name,
+                        "frame_name": frame_name,
+                        "frame_id": frame.get("frame_id"),
+                        "timestamp": frame.get("timestamp"),
+                    })
+            if frame_ids:
+                frame_ids_by_cluster[cluster_id] = tuple(sorted(frame_ids))
+                frames_by_cluster[cluster_id] = tuple(frames)
+
+        if not frame_ids_by_cluster:
+            raise RuntimeError("Cluster catalog has no valid cluster assignments.")
+
+        self.frame_ids_by_cluster = frame_ids_by_cluster
+        self.frames_by_cluster = frames_by_cluster
+        self.source_collection = source_collection
+
+    @property
+    def cluster_ids(self) -> Set[str]:
+        return set(self.frame_ids_by_cluster)
+
+    def frame_ids_for(self, cluster_ids: tuple[str, ...]) -> tuple[int, ...]:
+        return tuple(sorted({
+            frame_id
+            for cluster_id in cluster_ids
+            for frame_id in self.frame_ids_by_cluster.get(cluster_id, ())
+        }))
+
+    def frames_for(self, cluster_id: str) -> list[dict]:
+        return list(self.frames_by_cluster.get(cluster_id, ()))
 
 class ClusterDeletionManager:
-    """
-    [MODIFIED] Manages the list of deleted cluster IDs and a detailed deletion log
-    with frame_name instead of frame_id. Also supports removing clusters.
-    """
-    def __init__(self, file_path):
+    """Persists deleted cluster IDs and a representative-frame audit log."""
+    def __init__(self, file_path: str):
         self.file_path = file_path
-        self.deletion_log = {}
+        self.lock_path = f"{file_path}.lock"
         self._lock = Lock()
-        self.load_clusters()
 
-    def load_clusters(self):
+    @contextmanager
+    def _file_lock(self):
+        os.makedirs(os.path.dirname(self.file_path), exist_ok=True)
+        with open(self.lock_path, "a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def _read_log_unlocked(self) -> dict:
+        if not os.path.exists(self.file_path):
+            return {}
         try:
-            with self._lock:
-                if os.path.exists(self.file_path):
-                    with open(self.file_path, 'r') as f:
-                        data = json.load(f)
-                        self.deletion_log = data.get("deletion_log", {})
-                        print(f"[ClusterManager] Loaded {len(self.deletion_log)} deleted cluster IDs.")
-                else:
-                    self.deletion_log = {}
-                    print("[ClusterManager] Deletion file not found. Starting with empty sets.")
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"[ClusterManager] Error loading cluster file: {e}")
-            self.deletion_log = {}
+            with open(self.file_path, "r", encoding="utf-8") as file:
+                deletion_log = json.load(file).get("deletion_log", {})
+        except (OSError, json.JSONDecodeError) as error:
+            raise RuntimeError(f"Unable to read cluster deletion log: {error}") from error
+        return deletion_log if isinstance(deletion_log, dict) else {}
 
-    def add_clusters(self, frames_to_delete: List[dict]):
-        """
-        Adds new clusters, storing the correct descriptive frame_name
-        from the metadata.
-        """
-        with self._lock:
+    def _write_log_unlocked(self, deletion_log: dict):
+        temporary_path = None
+        try:
+            fd, temporary_path = tempfile.mkstemp(
+                prefix=".deleted-clusters-",
+                suffix=".json",
+                dir=os.path.dirname(self.file_path),
+            )
+            with os.fdopen(fd, "w", encoding="utf-8") as file:
+                json.dump(
+                    {
+                        "deleted_clusters": sorted(deletion_log),
+                        "deletion_log": deletion_log,
+                    },
+                    file,
+                    indent=2,
+                )
+                file.flush()
+                os.fsync(file.fileno())
+            os.replace(temporary_path, self.file_path)
+        except OSError as error:
+            raise RuntimeError(f"Unable to save cluster deletion log: {error}") from error
+        finally:
+            if temporary_path and os.path.exists(temporary_path):
+                os.unlink(temporary_path)
+
+    def snapshot(self) -> dict:
+        with self._lock, self._file_lock():
+            return self._read_log_unlocked()
+
+    def add_clusters(self, frames_to_delete: List[dict], valid_cluster_ids: Set[str]) -> dict:
+        accepted_cluster_ids = set()
+        ignored_frames = 0
+        with self._lock, self._file_lock():
+            deletion_log = self._read_log_unlocked()
             for frame in frames_to_delete:
-                cluster_id = frame.get("cluster_id")
+                cluster_id = str(frame.get("cluster_id", ""))
                 video_name = frame.get("videoName")
                 path = frame.get("path", "")
                 frame_name = os.path.basename(path) if path else None
 
-                if not all([cluster_id, video_name, frame_name]):
-                    print(f"Skipping frame due to missing data: {frame}")
+                if cluster_id not in valid_cluster_ids or not video_name or not frame_name:
+                    ignored_frames += 1
                     continue
 
-                cluster_entry = self.deletion_log.setdefault(cluster_id, {})
+                accepted_cluster_ids.add(cluster_id)
+                cluster_entry = deletion_log.setdefault(cluster_id, {})
                 video_entry = cluster_entry.setdefault(video_name, [])
-                
                 if frame_name not in video_entry:
                     video_entry.append(frame_name)
                     video_entry.sort()
 
-            return self._save_to_file()
+            if accepted_cluster_ids:
+                self._write_log_unlocked(deletion_log)
+
+        return {
+            "cluster_ids": sorted(accepted_cluster_ids),
+            "ignored_frames": ignored_frames,
+        }
 
     def remove_cluster(self, cluster_id_to_remove: str):
-        with self._lock:
-            if cluster_id_to_remove not in self.deletion_log:
-                print(f"[ClusterManager] Undo failed: Cluster '{cluster_id_to_remove}' not found in deletion list.")
+        with self._lock, self._file_lock():
+            deletion_log = self._read_log_unlocked()
+            if cluster_id_to_remove not in deletion_log:
                 return False
-
-            self.deletion_log.pop(cluster_id_to_remove, None)
-            
-            print(f"[ClusterManager] Undid deletion for cluster '{cluster_id_to_remove}'.")
-            return self._save_to_file()
-
-    def _save_to_file(self):
-        try:
-            data_to_save = {
-                "deleted_clusters": sorted(self.deletion_log.keys()),
-                "deletion_log": self.deletion_log
-            }
-            with open(self.file_path, 'w') as f:
-                json.dump(data_to_save, f, indent=2)
-            print(f"[ClusterManager] Saved deletion file. Total deleted clusters: {len(self.deletion_log)}")
+            deletion_log.pop(cluster_id_to_remove)
+            self._write_log_unlocked(deletion_log)
             return True
-        except IOError as e:
-            print(f"[ClusterManager] CRITICAL ERROR saving cluster file: {e}")
-            return False
 
-# Instantiate the manager
+cluster_catalog = ClusterCatalog(
+    CLUSTER_CATALOG_FILE,
+    {collection.name for collection in milvus.collections.values()},
+)
 cluster_manager = ClusterDeletionManager(CLUSTER_DELETION_FILE)
 
-# Setup a scheduler for periodic reloading
-scheduler = AsyncIOScheduler()
-scheduler.add_job(cluster_manager.load_clusters, 'interval', seconds=30)
-'''
+@lru_cache(maxsize=64)
+def _expand_deleted_cluster_ids(cluster_ids: tuple[str, ...]) -> tuple[int, ...]:
+    return cluster_catalog.frame_ids_for(cluster_ids)
+
+def get_deleted_cluster_frame_ids() -> list[int]:
+    deleted_cluster_ids = tuple(sorted(cluster_manager.snapshot()))
+    frame_ids = _expand_deleted_cluster_ids(deleted_cluster_ids)
+    if deleted_cluster_ids:
+        print(
+            f"[ClusterManager] Excluding {len(frame_ids)} frames from "
+            f"{len(deleted_cluster_ids)} deleted clusters."
+        )
+    return list(frame_ids)
 
 @app.on_event("startup")
 async def startup_event():
@@ -172,7 +269,7 @@ async def startup_event():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    pass
+    milvus.close()
     
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     """Hàm xác thực admin qua Basic Auth"""
@@ -624,7 +721,7 @@ def check_video(video_name: str):
 
 @app.post("/api/search/text-to-image")
 async def search_text_to_image(req: TextToImageRequest):
-    deleted_clusters = []
+    deleted_clusters = get_deleted_cluster_frame_ids()
     excluded_frames = req.user_filter or []
     log_search_debug(
         "text-to-image",
@@ -641,7 +738,8 @@ async def search_text_to_image(req: TextToImageRequest):
         asr=req.asr,
         use_event_filter=req.use_event_filter,
         user_filter_count=len(excluded_frames),
-        cluster_deletion_enabled=False,
+        cluster_deletion_enabled=bool(deleted_clusters),
+        deleted_cluster_frame_count=len(deleted_clusters),
     )
     results = milvus.search(
         query=req.query,
@@ -663,7 +761,7 @@ async def search_text_to_image(req: TextToImageRequest):
 
 @app.post("/api/search/text-to-text")
 async def search_text_to_text(req: TextToTextRequest):
-    deleted_clusters = []
+    deleted_clusters = get_deleted_cluster_frame_ids()
     excluded_frames = req.user_filter or []
     log_search_debug(
         "text-to-text",
@@ -680,7 +778,8 @@ async def search_text_to_text(req: TextToTextRequest):
         asr=req.asr,
         use_event_filter=req.use_event_filter,
         user_filter_count=len(excluded_frames),
-        cluster_deletion_enabled=False,
+        cluster_deletion_enabled=bool(deleted_clusters),
+        deleted_cluster_frame_count=len(deleted_clusters),
     )
     results = milvus.search(
         query=req.query,
@@ -716,7 +815,7 @@ async def search_image(
     """
     # Đọc nội dung của file ảnh dưới dạng bytes
     image_bytes = await file.read()
-    deleted_clusters = []
+    deleted_clusters = get_deleted_cluster_frame_ids()
     
     # Parse user filter
     excluded_frames = []
@@ -738,7 +837,8 @@ async def search_image(
         use_event_filter=use_event_filter,
         user_filter_count=len(excluded_frames),
         uploaded_bytes=len(image_bytes),
-        cluster_deletion_enabled=False,
+        cluster_deletion_enabled=bool(deleted_clusters),
+        deleted_cluster_frame_count=len(deleted_clusters),
     )
     
     # Gọi hàm search của Milvus với mode="image"
@@ -794,7 +894,7 @@ async def temporal_search_start_with_image(
         
         # 2. Đọc nội dung ảnh
         image_bytes = await file.read()
-        deleted_clusters = []
+        deleted_clusters = get_deleted_cluster_frame_ids()
         
         # Parse user filter
         excluded_frames = []
@@ -817,7 +917,8 @@ async def temporal_search_start_with_image(
             use_event_filter=use_event_filter,
             user_filter_count=len(excluded_frames),
             uploaded_bytes=len(image_bytes),
-            cluster_deletion_enabled=False,
+            cluster_deletion_enabled=bool(deleted_clusters),
+            deleted_cluster_frame_count=len(deleted_clusters),
         )
         
         initial_results = milvus.search(
@@ -978,7 +1079,7 @@ async def temporal_search_start(req: TemporalStartRequest):
         # lower_query = req.query.lower() if req.query else ""
         # lower_tag = [s.lower() for s in req.tags_filter] if req.tags_filter else None
         # lower_ocr = req.ocr.lower() if req.ocr else None
-        deleted_clusters = []
+        deleted_clusters = get_deleted_cluster_frame_ids()
         log_search_debug(
             "temporal-start",
             query=req.query,
@@ -999,7 +1100,8 @@ async def temporal_search_start(req: TemporalStartRequest):
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
             user_filter_count=len(excluded_frames),
-            cluster_deletion_enabled=False,
+            cluster_deletion_enabled=bool(deleted_clusters),
+            deleted_cluster_frame_count=len(deleted_clusters),
         )
         # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
         initial_results = milvus.search(
@@ -1037,7 +1139,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         # 1. Kiểm tra xem chain_id có tồn tại trong Redis không
         
         # Parse JSON để lấy metadata
-        deleted_clusters = []
+        deleted_clusters = get_deleted_cluster_frame_ids()
         
         # Parse user filter
         excluded_frames = []
@@ -1062,7 +1164,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
             user_filter_count=len(excluded_frames),
-            cluster_deletion_enabled=False,
+            cluster_deletion_enabled=bool(deleted_clusters),
+            deleted_cluster_frame_count=len(deleted_clusters),
         )
 
         # 4. Thực hiện temporal search sequence
@@ -1428,73 +1531,72 @@ async def handle_form_submit(request: FormSubmitRequest):
         
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save data: {str(e)}")
-# CLUSTER DELETION API DISABLED TEMPORARILY.
-# Kept here for repair/reference; normal search no longer uses cluster deletion.
-'''
 class ClusterSubmitRequest(BaseModel):
     frames: List[dict]
+
 @app.get("/api/clusters/deleted-list")
 async def get_deleted_frames_list():
-    """
-    Returns the detailed deletion log directly from the manager.
-    Format: {"cluster_id": {"video_name": ["frame_name_1", ...], ...}, ...}
-    """
-    return cluster_manager.deletion_log
+    deletion_log = cluster_manager.snapshot()
+    deleted_clusters = {}
+    for cluster_id, selected_frames in deletion_log.items():
+        frames = cluster_catalog.frames_for(cluster_id)
+        if not frames:
+            frames = [
+                {
+                    "video_name": video_name,
+                    "frame_name": os.path.splitext(frame_name)[0],
+                }
+                for video_name, frame_names in selected_frames.items()
+                for frame_name in frame_names
+            ]
+        deleted_clusters[cluster_id] = {
+            "frames": frames,
+            "selected_frames": selected_frames,
+        }
+    return deleted_clusters
 
 class UndoClusterRequest(BaseModel):
-    cluster_id: str 
+    cluster_id: str
 
 @app.post("/api/clusters/undo-deletion")
 async def undo_cluster_deletion(request: UndoClusterRequest):
-    """
-    Removes a cluster from the deletion list, effectively "undoing" the deletion.
-    """
-    cluster_id = request.cluster_id
+    cluster_id = request.cluster_id.strip()
     if not cluster_id:
         raise HTTPException(status_code=400, detail="cluster_id is required.")
 
     success = cluster_manager.remove_cluster(cluster_id)
-
     if success:
         return {"status": "success", "message": f"Cluster '{cluster_id}' has been restored."}
-    else:
-        # This could happen if the cluster wasn't in the list to begin with.
-        return {"status": "noop", "message": f"Cluster '{cluster_id}' was not found in the deletion list."}
+    return {"status": "noop", "message": f"Cluster '{cluster_id}' was not found in the deletion list."}
 
 @app.post("/api/clusters/delete")
 async def handle_cluster_deletion_submit(request: ClusterSubmitRequest):
-    """
-    [MODIFIED] Receives frames, and passes the full frame data to the manager
-    to be logged and added to the deletion list.
-    """
-    try:
-        frames_to_process = request.frames
-        if not frames_to_process:
-            return {"status": "noop", "message": "No frames provided."}
+    if not request.frames:
+        raise HTTPException(status_code=400, detail="At least one frame is required.")
 
-        # The manager now handles all the logic of extracting IDs and logging
-        success = cluster_manager.add_clusters(frames_to_process)
-        
-        if success:
-            # The manager now saves the file, so we just return success.
-            # No WebSocket update is needed for this workflow.
-            return {"status": "success", "message": f"Processed {len(frames_to_process)} frames for deletion."}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to save cluster deletion data.")
+    result = cluster_manager.add_clusters(request.frames, cluster_catalog.cluster_ids)
+    if not result["cluster_ids"]:
+        raise HTTPException(
+            status_code=422,
+            detail="No submitted frame belongs to a known cluster.",
+        )
 
-    except Exception as e:
-        
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
-'''
-
-# --- Add new WebSocket logic ---
-
-# Add a new Redis key at the top
-CLUSTER_DELETION_QUEUE_KEY = "cluster_deletion_queue:data"
+    return {
+        "status": "success",
+        "message": f"Deleted {len(result['cluster_ids'])} cluster(s).",
+        "cluster_ids": result["cluster_ids"],
+        "ignored_frames": result["ignored_frames"],
+    }
 
 
-# Mount static files
-app.mount("/", StaticFiles(directory="frontend", html=True), name="static")
+# Mount static files relative to this module, not Uvicorn's working directory.
+static_dir = os.path.join(os.path.dirname(__file__), "frontend")
+if not os.path.isdir(static_dir):
+    static_dir = os.path.join(os.path.dirname(__file__), "web")
+
+if os.path.isdir(static_dir):
+    app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+else:
+    print("Static frontend directory not found; serving API endpoints only.")
 
 # usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
