@@ -1,8 +1,8 @@
 @font-face {
-  font-family: 'PoppinsVH';
-  src: url('./public/fonts/FZ Poppins-Regular.ttf') format('truetype');
-  font-weight: 400;
-  font-style: normal;
+    font-family: 'PoppinsVH';
+    src: url('./public/fonts/FZ Poppins-Regular.ttf') format('truetype');
+    font-weight: 400;
+    font-style: normal;
 }
 
 :root {
@@ -24,7 +24,7 @@
     --border-light: rgba(139, 195, 115, 0.3);
     --shadow-soft: 0 4px 15px rgba(139, 195, 115, 0.15);
     --shadow-medium: 0 6px 20px rgba(139, 195, 115, 0.25);
-    
+
     --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -224,12 +224,12 @@ button:focus, input:focus, textarea:focus {
     transform: translateY(-3px);
 }
 #settingsBtn {
-    color: var(--matcha-dark);
-    background-color: var(--matcha-pale);
+color: var(--matcha-dark);
+background-color: var(--matcha-pale);
 }
 #shortcutsBtn {
-    margin-left: auto;
-    color: var(--matcha-cream);
+margin-left: auto;
+color: var(--matcha-cream);
 }
 
 .search-mode-buttons {
@@ -416,7 +416,7 @@ button:focus, input:focus, textarea:focus {
 }
 
 .image-item {
-    position: relative; 
+    position: relative;
     display: flex; /* <-- Sử dụng Flexbox để xếp ảnh và text theo chiều dọc */
     flex-direction: column; /* <-- Xếp theo cột */
     border-radius: 12px;
@@ -864,10 +864,10 @@ button:focus, input:focus, textarea:focus {
     background-size: 400% 400%;
     animation: rainbow-border 6s linear infinite;
     -webkit-mask:
-        linear-gradient(#fff 0 0) content-box,
-        linear-gradient(#fff 0 0);
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
     -webkit-mask-composite: xor;
-            mask-composite: exclude;
+    mask-composite: exclude;
     z-index: -2;
 }
 
@@ -1091,7 +1091,7 @@ button:focus, input:focus, textarea:focus {
 .close-btn {
     position: absolute;
     /* top: 3vh;
-    right: 1vh; */
+     *   right: 1vh; */
     background: rgb(0, 0, 0);
     color: black;
     border: none;
@@ -1125,15 +1125,15 @@ button:focus, input:focus, textarea:focus {
     padding: 25px 50px;
     border-radius: 15px;
     border: 3px solid #fff;
-    z-index: 99999; 
-    font-size: 2.5em; 
-    font-weight: 800; 
+    z-index: 99999;
+    font-size: 2.5em;
+    font-weight: 800;
     text-align: center;
     text-transform: uppercase;
     letter-spacing: 1px;
     text-shadow: 2px 2px 5px rgba(0, 0, 0, 0.3);
     opacity: 0;
-    pointer-events: none; 
+    pointer-events: none;
     transition: opacity 0.3s ease-in-out, transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 
@@ -1160,7 +1160,7 @@ button:focus, input:focus, textarea:focus {
 
 .global-alert-notification.is-correct span {
     color: #f8f9fa; /* Màu trắng sáng hơn một chút */
-    display: block; 
+    display: block;
     margin-bottom: 5px;
 }
 
@@ -1188,7 +1188,7 @@ button:focus, input:focus, textarea:focus {
     padding: 5px;
     max-width: 90%;
     max-height: 90%;
-    z-index: 1;
+    z-index: 2; 
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1614,59 +1614,59 @@ button:focus, input:focus, textarea:focus {
 }
 
 #submissionForm .form-group {
-    margin-bottom: 20px;
+margin-bottom: 20px;
 }
 
 #submissionForm label {
-    display: block;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--matcha-dark);
-    margin-bottom: 8px;
+display: block;
+font-size: 15px;
+font-weight: 600;
+color: var(--matcha-dark);
+margin-bottom: 8px;
 }
 
 #submissionForm input[type="text"],
 #submissionForm textarea {
-    width: 100%;
-    padding: 12px 15px;
-    border: 2px solid var(--matcha-light);
-    border-radius: 10px;
-    font-size: 15px;
-    font-family: inherit;
-    transition: var(--transition-smooth);
-    background-color: white;
+width: 100%;
+padding: 12px 15px;
+border: 2px solid var(--matcha-light);
+border-radius: 10px;
+font-size: 15px;
+font-family: inherit;
+transition: var(--transition-smooth);
+background-color: white;
 }
 
 #submissionForm input[type="text"]:focus,
 #submissionForm textarea:focus {
-    outline: none;
-    border-color: var(--matcha-primary);
-    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
+outline: none;
+border-color: var(--matcha-primary);
+box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
 #submissionForm textarea {
-    resize: vertical;
-    min-height: 100px;
+resize: vertical;
+min-height: 100px;
 }
 
 #submissionForm .submit-form-btn {
-    width: 100%;
-    padding: 12px;
-    font-size: 16px;
-    font-weight: 600;
-    background-color: var(--matcha-primary);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: var(--transition-smooth);
-    box-shadow: var(--shadow-soft);
+width: 100%;
+padding: 12px;
+font-size: 16px;
+font-weight: 600;
+background-color: var(--matcha-primary);
+color: white;
+border: none;
+border-radius: 10px;
+cursor: pointer;
+transition: var(--transition-smooth);
+box-shadow: var(--shadow-soft);
 }
 
 #submissionForm .submit-form-btn:hover {
-    background-color: var(--matcha-dark);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-medium);
+background-color: var(--matcha-dark);
+transform: translateY(-2px);
+box-shadow: var(--shadow-medium);
 }
 
 
@@ -1739,73 +1739,73 @@ button:focus, input:focus, textarea:focus {
 }
 
 #vqaForm .form-group {
-    margin-bottom: 20px;
+margin-bottom: 20px;
 }
 
 #vqaForm label {
-    display: block;
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--matcha-dark);
-    margin-bottom: 8px;
+display: block;
+font-size: 15px;
+font-weight: 600;
+color: var(--matcha-dark);
+margin-bottom: 8px;
 }
 
 #vqaForm input[type="text"],
 #vqaForm textarea {
-    width: 100%;
-    padding: 12px 15px;
-    border: 2px solid var(--matcha-light);
-    border-radius: 10px;
-    font-size: 15px;
-    font-family: inherit;
-    transition: var(--transition-smooth);
-    background-color: white;
+width: 100%;
+padding: 12px 15px;
+border: 2px solid var(--matcha-light);
+border-radius: 10px;
+font-size: 15px;
+font-family: inherit;
+transition: var(--transition-smooth);
+background-color: white;
 }
 
 #vqaForm input[type="text"]:focus,
 #vqaForm textarea:focus {
-    outline: none;
-    border-color: var(--matcha-primary);
-    box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
+outline: none;
+border-color: var(--matcha-primary);
+box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
 #vqaForm textarea {
-    resize: vertical;
-    min-height: 80px;
+resize: vertical;
+min-height: 80px;
 }
 
 #vqaForm .submit-form-btn {
-    width: 100%;
-    padding: 12px;
-    font-size: 16px;
-    font-weight: 600;
-    background-color: var(--matcha-primary);
-    color: black;
-    border: none;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: var(--transition-smooth);
-    box-shadow: var(--shadow-soft);
+width: 100%;
+padding: 12px;
+font-size: 16px;
+font-weight: 600;
+background-color: var(--matcha-primary);
+color: black;
+border: none;
+border-radius: 10px;
+cursor: pointer;
+transition: var(--transition-smooth);
+box-shadow: var(--shadow-soft);
 }
 
 #vqaForm .submit-form-btn:hover {
-    background-color: var(--matcha-dark);
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-medium);
+background-color: var(--matcha-dark);
+transform: translateY(-2px);
+box-shadow: var(--shadow-medium);
 }
 
 #frameVqaAnswerDisplay {
-    background-color: var(--matcha-pale);
-    border: 2px solid var(--matcha-light);
-    border-radius: 10px;
-    padding: 10px;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 13px;
-    color: var(--matcha-dark);
-    max-height: 200px; /* Giới hạn chiều cao */
-    overflow-y: auto;   /* Thêm thanh cuộn khi nội dung quá dài */
-    white-space: pre-wrap; /* Đảm bảo xuống dòng */
-    word-break: break-all;
+background-color: var(--matcha-pale);
+border: 2px solid var(--matcha-light);
+border-radius: 10px;
+padding: 10px;
+font-family: 'Courier New', Courier, monospace;
+font-size: 13px;
+color: var(--matcha-dark);
+max-height: 200px; /* Giới hạn chiều cao */
+overflow-y: auto;   /* Thêm thanh cuộn khi nội dung quá dài */
+white-space: pre-wrap; /* Đảm bảo xuống dòng */
+word-break: break-all;
 }
 
 .mini-modal {
@@ -1821,7 +1821,7 @@ button:focus, input:focus, textarea:focus {
     justify-content: center;
     z-index: 10002; /* Đảm bảo nổi trên cả submit queue */
     backdrop-filter: blur(3px);
-    
+
     /* Điều khiển hiển thị */
     opacity: 0;
     pointer-events: none;
@@ -1852,7 +1852,7 @@ button:focus, input:focus, textarea:focus {
     width: 90%;
     max-width: 420px; /* Giới hạn độ rộng để nó nhỏ gọn */
     z-index: 1; /* Nổi trên lớp phủ */
-    
+
     /* Hiệu ứng xuất hiện */
     transform: scale(0.9) translateY(20px);
     transition: transform 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
@@ -1983,7 +1983,7 @@ button:focus, input:focus, textarea:focus {
     transform: translateY(-10px);
     transition: opacity 0.2s ease, transform 0.2s ease;
     pointer-events: none; /* Không thể tương tác khi đang ẩn */
-    
+
     display: flex;
     flex-direction: column;
 }
@@ -2092,7 +2092,7 @@ button:focus, input:focus, textarea:focus {
     margin-top: 5px; /* Thêm khoảng cách với ô search */
     border-left: 3px solid #007bff;
     cursor: pointer; /* Cho người dùng biết có thể click vào */
-    
+
     /* Các thuộc tính để làm hiệu ứng ẩn/hiện */
     opacity: 0;
     max-height: 0;
@@ -2396,8 +2396,8 @@ button:focus, input:focus, textarea:focus {
 }
 
 .video-group-row {
-    margin-bottom: 20px;
-    padding: 10px;
+    margin-bottom: 5px;
+    padding: 5px;
     background: rgba(0, 0, 0, 0.15);
     border-radius: 12px;
     border: 1px solid rgba(238, 211, 177, 0.2);
@@ -2431,7 +2431,7 @@ button:focus, input:focus, textarea:focus {
     flex-shrink: 1;
     flex-basis: calc(16.66% - 10px);
     min-width: 150px;
-    height: auto; 
+    height: auto;
 }
 
 .frame-strip .image-item img {
@@ -2490,12 +2490,12 @@ button:focus, input:focus, textarea:focus {
     left: 0;
     width: 100%;
     height: 100%;
-    z-index: 1000; 
+    z-index: 1000;
 }
 .video-modal .modal-content {
     position: relative;
-    z-index: 1001; 
-}                                                                                                                                           
+    z-index: 1001;
+}
 
 .form-submit-header {
     display: flex;
@@ -2506,20 +2506,20 @@ button:focus, input:focus, textarea:focus {
 }
 
 #formSubmitText {
-    /* flex-grow: 1; Cho phép ô input chiếm hết không gian còn lại */
-    padding: 8px 12px;
-    font-size: 15px;
-    border: 2px solid var(--matcha-light);
-    border-radius: 8px;
-    background-color: white;
-    color: var(--matcha-dark);
-    transition: all 0.2s ease;
+/* flex-grow: 1; Cho phép ô input chiếm hết không gian còn lại */
+padding: 8px 12px;
+font-size: 15px;
+border: 2px solid var(--matcha-light);
+border-radius: 8px;
+background-color: white;
+color: var(--matcha-dark);
+transition: all 0.2s ease;
 }
 
 #formSubmitText:focus {
-    outline: none;
-    border-color: var(--matcha-primary);
-    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
+outline: none;
+border-color: var(--matcha-primary);
+box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.3);
 }
 
 .form-submit-actions {
@@ -2529,16 +2529,16 @@ button:focus, input:focus, textarea:focus {
 }
 
 #formSubmitBtn:disabled {
-    background-color: #ccc;
-    cursor: not-allowed;
-    opacity: 0.6;
+background-color: #ccc;
+cursor: not-allowed;
+opacity: 0.6;
 }
 
 /* Style cho nút chuyển đổi chế độ */
 #toggleQueueModeBtn.active {
-    background: var(--matcha-pale);
-    color: var(--matcha-dark);
-    box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
+background: var(--matcha-pale);
+color: var(--matcha-dark);
+box-shadow: inset 0 2px 4px rgba(0,0,0,0.2);
 }
 
 .form-submit-header {
@@ -2554,9 +2554,9 @@ button:focus, input:focus, textarea:focus {
 
 #formSubmitFilename,
 #formSubmitText {
-    border-color: var(--matcha-border);
-    border-radius: 10px;
-    width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
+border-color: var(--matcha-border);
+border-radius: 10px;
+width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
 }
 
 .fuzzy-switch-wrapper {
@@ -2631,14 +2631,14 @@ input:checked + .slider:before {
     left: 0;
     width: 100%;
     height: 100%;
-    
+
     /* Bỏ background và backdrop-filter để không làm mờ video */
     background: none;
     backdrop-filter: none;
 
     /* Rất quan trọng: Cho phép sự kiện chuột đi xuyên qua lớp phủ này */
-    pointer-events: none; 
-    
+    pointer-events: none;
+
     opacity: 0;
     transition: opacity 0.3s ease;
     z-index: 10;
@@ -2712,56 +2712,56 @@ input:checked + .slider:before {
 }
 
 #trakeSeekGap {
-    background-color: rgba(0, 0, 0, 0.5);
-    border: 1px solid #555;
-    color: white;
-    border-radius: 5px;
-    width: 60px;
-    text-align: center;
-    font-size: 14px;
-    padding: 5px;
+background-color: rgba(0, 0, 0, 0.5);
+border: 1px solid #555;
+color: white;
+border-radius: 5px;
+width: 60px;
+text-align: center;
+font-size: 14px;
+padding: 5px;
 }
 
-#trakeSubmitQueue, #deletionViewerPanel {
-    position: relative;
-    transform: none;
-    bottom: auto;
-    left: auto;
-    opacity: 1;
-    max-height: none;
-    pointer-events: auto;
-    display: none; /* All panels are hidden by default */
-    flex-direction: column;
-    flex-shrink: 0;
-    width: 200px;
-    height: 94vh;
-    margin: 0.5%;
-    border-radius: 10px;
-    border: 1px solid var(--matcha-border);
-    background-color: var(--matcha-pale);
-    transition: all 0.3s ease;
+#trakeSubmitQueue {
+position: relative;
+transform: none;
+bottom: auto;
+left: auto;
+opacity: 1;
+max-height: none;
+pointer-events: auto;
+display: none; /* All panels are hidden by default */
+flex-direction: column;
+flex-shrink: 0;
+width: 200px;
+height: 94vh;
+margin: 0.5%;
+border-radius: 10px;
+border: 1px solid var(--matcha-border);
+background-color: var(--matcha-pale);
+transition: all 0.3s ease;
 }
 
 /* Container for frames inside the panels */
 #trakeSubmitQueueFrames, #deletionViewerClusters {
-    display: flex;
-    flex: 1; /* <<< CRITICAL FIX: Allows this container to fill available space */
-    flex-direction: column;
-    overflow-x: hidden;
-    overflow-y: auto;
-    gap: 15px;
-    padding: 10px;
+display: flex;
+flex: 1; /* <<< CRITICAL FIX: Allows this container to fill available space */
+flex-direction: column;
+overflow-x: hidden;
+overflow-y: auto;
+gap: 15px;
+padding: 10px;
 }
 
 /* Individual items within the panels */
 #trakeSubmitQueue .queue-frame-item, #deletionViewerPanel .cluster-group {
-    width: 100%;
-    height: auto;
+width: 100%;
+height: auto;
 }
 
 #trakeSubmitQueue .queue-frame-item img {
-    width: 100%;
-    height: auto;
+width: 100%;
+height: auto;
 }
 
 /* Logic to show the TRAKE panel */
@@ -2826,7 +2826,7 @@ input:checked + .slider:before {
 }
 
 .image-item.is-in-queue {
-    border: 2px solid #35e54c; 
+    border: 2px solid #35e54c;
 }
 
 .image-item.is-in-queue::after {
@@ -2836,12 +2836,12 @@ input:checked + .slider:before {
     left: 0;
     width: 100%;
     height: 100%;
-    
-    background-color: rgba(0, 0, 0, 0.4); 
+
+    background-color: rgba(0, 0, 0, 0.4);
     backdrop-filter: blur(1.5px);
-    z-index: 2; 
+    z-index: 2;
     border-radius: 10px;
-    pointer-events: none; 
+    pointer-events: none;
 }
 .image-item.is-in-queue::before {
     content: "O"; /* Hoặc bạn có thể dùng icon FontAwesome */
@@ -2863,13 +2863,13 @@ input:checked + .slider:before {
 }
 .image-item.is-wrong-submission,
 .queue-frame-item.is-wrong-submission {
-    border: 3px solid #E53935 !important; 
-    box-shadow: 0 0 15px rgba(229, 57, 53, 0.8) !important; 
+    border: 3px solid #E53935 !important;
+    box-shadow: 0 0 15px rgba(229, 57, 53, 0.8) !important;
 }
 
 /* Thêm một nhãn "WRONG" nhỏ ở góc */
 .image-item.is-wrong-submission::before,
-.queue-frame-item.is-wrong-submission 
+.queue-frame-item.is-wrong-submission
 .queue-frame-image-container::after {
     content: "WRONG";
     position: absolute;
@@ -2923,35 +2923,35 @@ input:checked + .slider:before {
 }
 
 #deletionViewerClusters {
-    flex: 1;
-    width: 100%;
-    padding: 10px;
-    background-color: rgba(0,0,0,0.05);
-    border-radius: 8px;
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    grid-gap: 10px;
-    overflow-y: auto;
-    max-height: 60vh;
-    align-content: start;
+flex: 1;
+width: 100%;
+padding: 10px;
+background-color: rgba(0,0,0,0.05);
+border-radius: 8px;
+display: grid;
+grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+grid-gap: 10px;
+overflow-y: auto;
+max-height: 60vh;
+align-content: start;
 }
 
 /* Override thumbnail-strip img styles for deletion viewer */
 .deletion-viewer-modal .thumbnail-strip img,
 #deletionViewerClusters img {
-    width: 100% !important;
-    height: 100px !important;
-    border: 2px solid var(--matcha-primary);
-    border-radius: 4px;
-    cursor: pointer;
-    object-fit: cover;
-    transition: all 0.2s ease;
+width: 100% !important;
+height: 100px !important;
+border: 2px solid var(--matcha-primary);
+border-radius: 4px;
+cursor: pointer;
+object-fit: cover;
+transition: all 0.2s ease;
 }
 
 .deletion-viewer-modal .thumbnail-strip img:hover,
 #deletionViewerClusters img:hover {
-    border-color: var(--matcha-dark);
-    transform: scale(1.05);
+border-color: var(--matcha-dark);
+transform: scale(1.05);
 }
 
 /* Cluster frame container styles */
@@ -3047,19 +3047,6 @@ input:checked + .slider:before {
     opacity: 0;
     transform: scale(0.8) translateY(-10px);
     transition: all 0.3s ease;
-}
-
-/* Debug styles to ensure the deletion viewer panel is visible */
-#deletionViewerPanel {
-    z-index: 9999 !important;
-}
-
-#deletionViewerPanel.image-modal {
-    display: none !important; /* Will be overridden by JavaScript */
-}
-
-#deletionViewerPanel[style*="display: flex"] {
-    display: flex !important;
 }
 
 /* --- Mark for Deletion State --- */
@@ -3166,44 +3153,44 @@ input:checked + .slider:before {
 }
 
 #deletionPreviewFrames {
-    width: 100%;
-    height: 100%;
-    padding: 10px;
-    background-color: rgba(0,0,0,0.05);
-    border-radius: 8px;
-    flex-wrap: wrap; /* Allow frames to wrap to the next line */
-    justify-content: flex-start;
-    align-content: flex-start;
+width: 100%;
+height: 100%;
+padding: 10px;
+background-color: rgba(0,0,0,0.05);
+border-radius: 8px;
+flex-wrap: wrap; /* Allow frames to wrap to the next line */
+justify-content: flex-start;
+align-content: flex-start;
 }
 
 #deletionPreviewFrames img {
-    height: 100px; /* Same size as keyframe preview */
-    border: 2px solid var(--matcha-primary);
-    position: relative;
+height: 100px; /* Same size as keyframe preview */
+border: 2px solid var(--matcha-primary);
+position: relative;
 }
 
 /* Style for unselecting frames in the preview */
 #deletionPreviewFrames img:hover {
-    cursor: pointer;
-    border-color: #E53935; /* Red border on hover */
-    box-shadow: 0 0 10px rgba(229, 57, 53, 0.7);
+cursor: pointer;
+border-color: #E53935; /* Red border on hover */
+box-shadow: 0 0 10px rgba(229, 57, 53, 0.7);
 }
 
 #deletionPreviewFrames img:hover::after {
-    content: '×';
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(229, 57, 53, 0.5); /* Red overlay */
-    color: white;
-    font-size: 48px;
-    font-weight: bold;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 6px; /* Match the image's border-radius */
+content: '×';
+position: absolute;
+top: 0;
+left: 0;
+width: 100%;
+height: 100%;
+background-color: rgba(229, 57, 53, 0.5); /* Red overlay */
+color: white;
+font-size: 48px;
+font-weight: bold;
+display: flex;
+align-items: center;
+justify-content: center;
+border-radius: 6px; /* Match the image's border-radius */
 }
 
 .cluster-group {
@@ -3290,4 +3277,283 @@ input:checked + .slider:before {
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
     z-index: 10;
     position: relative;
+}
+.setting-input-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 0 5px;
+}
+
+.setting-input-group input {
+    flex-grow: 1;
+    padding: 8px 10px;
+    border: 1px solid var(--matcha-light);
+    border-radius: 6px;
+    font-size: 13px;
+}
+
+.setting-input-group .apply-btn {
+    padding: 8px 12px;
+    border: none;
+    background-color: var(--matcha-primary);
+    color: white;
+    font-weight: 500;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.setting-input-group .apply-btn:hover {
+    background-color: var(--matcha-dark);
+}
+
+/* Style cho danh sách Evaluation trong Modal */
+.evaluation-list-container {
+    margin-top: 15px;
+    max-height: 40vh;
+    overflow-y: auto;
+    border: 1px solid var(--matcha-light);
+    border-radius: 8px;
+    padding: 5px;
+}
+
+.evaluation-item {
+    padding: 12px 15px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    border-bottom: 1px solid var(--matcha-pale);
+}
+
+.evaluation-item:last-child {
+    border-bottom: none;
+}
+
+.evaluation-item:hover {
+    background-color: var(--matcha-accent);
+}
+
+.evaluation-item.selected {
+    background-color: var(--matcha-primary);
+    color: white;
+    font-weight: 600;
+}
+
+.evaluation-item-name {
+    display: block;
+    font-size: 15px;
+}
+
+.evaluation-item-id {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.evaluation-item.selected .evaluation-item-id {
+    color: rgba(255, 255, 255, 0.8);
+}
+
+
+#semanticSearchModal .modal-content {
+    width: 85vw;
+    max-width: 1600px;
+    height: 90vh;
+    /* Thêm flexbox để dễ quản lý header và container kết quả */
+    display: flex;
+    flex-direction: column;
+}
+
+#semanticSearchResultsContainer {
+    flex-grow: 1; /* Cho phép container chiếm hết không gian còn lại */
+    overflow-y: auto; /* Thêm thanh cuộn dọc */
+    padding: 5px;
+    background-color: rgba(0,0,0,0.05); /* Nền nhẹ để phân biệt */
+    border-radius: 8px;
+
+    /* Đây là phần quan trọng nhất: Định nghĩa layout lưới */
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    grid-gap: 5px;
+    align-content: start; /* Ngăn các item bị kéo giãn ra */
+}
+
+/* Style cho các frame kết quả bên trong modal */
+#semanticSearchResultsContainer .image-item {
+    width: 100%;
+    border: 2px solid var(--matcha-border);
+    height: fit-content;
+}
+
+/* Style đặc biệt cho frame nguồn (frame dùng để tìm kiếm) */
+#semanticSearchResultsContainer .image-item.query-frame {
+    border: 3px solid #00d0ff;
+    box-shadow: 0 0 15px rgba(0, 208, 255, 0.7);
+    transform: scale(1.05);
+    z-index: 10; /* Đảm bảo nó nổi lên trên */
+}
+
+/* Style cho chỉ báo loading BÊN TRONG modal */
+#semanticSearchResultsContainer .loading-indicator,
+#semanticSearchResultsContainer .content-placeholder {
+    /* Cho phép chỉ báo chiếm toàn bộ lưới để căn giữa */
+    grid-column: 1 / -1;
+    height: 60vh; /* Chiều cao đủ để căn giữa */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+#semanticSearchResultsContainer > .loading-indicator {
+    grid-column: 1 / -1; /* Rất quan trọng */
+}
+/* Style cho toolbar bên trong modal */
+#modalSelectionToolbar {
+    position: relative; /* Định vị tương đối trong modal */
+    bottom: unset; /* Hủy các thuộc tính của toolbar chính */
+    left: unset;
+    transform: none;
+    width: 100%; /* Chiếm toàn bộ chiều rộng modal */
+    margin-bottom: 10px; /* Tạo khoảng cách với lưới ảnh */
+    border-radius: 8px; /* Bo góc nhẹ */
+    display: none; /* Ban đầu ẩn đi */
+    animation: fadeInDown 0.3s ease; /* Hiệu ứng xuất hiện */
+}
+
+@keyframes fadeInDown {
+    from { opacity: 0; transform: translateY(-10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Style cho layout gom nhóm BÊN TRONG modal */
+#semanticSearchResultsContainer.grouped-layout {
+    display: block; /* Chuyển về block để các group xếp chồng lên nhau */
+}
+
+#semanticSearchResultsContainer.grouped-layout .video-group-row {
+    margin-bottom: 2px;
+    padding: 5px;
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 12px;
+}
+
+#semanticSearchResultsContainer.grouped-layout .video-group-title {
+    font-size: 16px;
+    color: #333; /* Chỉnh màu cho dễ đọc trên nền sáng */
+    margin-bottom: 5px;
+}
+
+#semanticSearchResultsContainer.grouped-layout .frame-strip {
+    display: flex;
+    overflow-x: auto; /* Cho phép cuộn ngang trong mỗi nhóm */
+    gap: 10px;
+    padding-bottom: 10px; /* Thêm padding để thanh cuộn không quá sát */
+    scrollbar-width: thin;
+}
+
+#semanticSearchResultsContainer.grouped-layout .frame-strip::-webkit-scrollbar {
+    height: 6px;
+}
+#semanticSearchResultsContainer.grouped-layout .frame-strip::-webkit-scrollbar-thumb {
+    background-color: var(--matcha-primary);
+    border-radius: 3px;
+}
+
+#semanticSearchResultsContainer.grouped-layout .image-item {
+    width: 160px; /* Cố định chiều rộng */
+    flex-shrink: 0; /* Ngăn co lại */
+}
+
+.main-preview-container {
+    position: relative; /* Nền tảng để định vị lớp phủ */
+    display: block; /* Đảm bảo nó hoạt động như một khối */
+    /* Giữ lại các thuộc tính của ảnh gốc để không phá vỡ layout */
+    max-width: 100%;
+    max-height: 65vh;
+    margin-bottom: 5px;
+}
+
+/* 2. Lớp phủ (overlay) */
+.main-preview-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    /* background-color: rgba(255, 255, 255, 0.2); Nền tối mờ */
+    border-radius: 10px; /* Bo góc giống với ảnh */
+    
+    /* Căn giữa icon Play */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    
+    /* Hiệu ứng ẩn/hiện */
+    opacity: 0; /* Mặc định ẩn đi */
+    transition: opacity 0.25s ease-in-out;
+    cursor: pointer; /* Đổi con trỏ thành hình bàn tay */
+    pointer-events: none; /* Mặc định không thể click */
+}
+
+/* 3. Hiệu ứng khi di chuột vào container */
+.main-preview-container:hover .main-preview-overlay {
+    opacity: 1; /* Hiện lớp phủ lên */
+    pointer-events: auto; /* Cho phép click */
+}
+
+/* 4. Icon Play */
+.main-preview-overlay i {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 50px; /* Kích thước icon */
+    text-shadow: 0 2px 8px rgba(0, 0, 0, 0.5); /* Thêm bóng đổ cho nổi bật */
+    transition: transform 0.2s ease;
+}
+
+/* Hiệu ứng nhỏ khi hover vào chính lớp phủ */
+.main-preview-overlay:hover i {
+    transform: scale(1.1);
+}
+
+.setting-toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--matcha-dark);
+}
+.setting-toggle input[type="checkbox"] {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 34px;
+    height: 20px;
+    background: #ccc;
+    border-radius: 10px;
+    position: relative;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.2s;
+}
+.setting-toggle input[type="checkbox"]::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.2s;
+}
+.setting-toggle input[type="checkbox"]:checked {
+    background: var(--accent-green, #4CAF50);
+}
+.setting-toggle input[type="checkbox"]:checked::after {
+    transform: translateX(14px);
+}
+.setting-toggle .toggle-label {
+    user-select: none;
 }
