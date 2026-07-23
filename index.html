@@ -6,7 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css?v=cluster-viewer-2">
+    <link rel="stylesheet" href="style.css?v=cluster-deletion-2">
 </head>
 <body>
     <header class="header">
@@ -50,10 +50,6 @@
                 <button id="shortcutsBtn" class="header-btn" title="Xem phím tắt">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-keyboard"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 8h.01"/><path d="M10 8h.01"/><path d="M14 8h.01"/><path d="M18 8h.01"/><path d="M8 12h.01"/><path d="M12 12h.01"/><path d="M16 12h.01"/><path d="M6 16h12"/></svg>
                 </button>
-                <button id="deletionViewerBtn" class="header-btn" title="View Deleted Frames">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trash-2"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>
-                </button>
-
                 <button id="toggleLayoutBtn" class="header-btn" title="Chuyển sang layout Gom nhóm (Tab)">
                     <i class="fas fa-list"></i>
                 </button>
@@ -62,6 +58,9 @@
                 </button>
                 <button id="historyBtn" class="header-btn" title="Search History">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-history"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>
+                </button>
+                <button id="deletedClustersBtn" class="header-btn" title="Deleted clusters">
+                    <i class="fas fa-trash"></i>
                 </button>
                 <button id="settingsBtn" class="header-btn" title="Settings (F9)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-settings-icon lucide-settings"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -359,6 +358,20 @@
             <!-- Nội dung sẽ được thêm bằng JavaScript -->
         </ul>
 
+        <h4 style="margin-top: 15px;">Frame Serve Location</h4>
+        <label class="serve-location-toggle" for="frameServeLocationToggle">
+            <span id="frameServeLocationLabel">Remote serve</span>
+            <input id="frameServeLocationToggle" type="checkbox" checked>
+            <span class="serve-location-switch" aria-hidden="true"></span>
+        </label>
+
+        <h4 style="margin-top: 15px;">Cluster Filtering</h4>
+        <label class="serve-location-toggle" for="clusterModeToggle">
+            <span id="clusterModeLabel">Enabled</span>
+            <input id="clusterModeToggle" type="checkbox" checked>
+            <span class="serve-location-switch" aria-hidden="true"></span>
+        </label>
+
         <h4 style="margin-top: 15px;">DRES Session ID</h4>
         <div class="setting-input-group">
             <input type="text" id="dresSessionIdInput" placeholder="Enter DRES Session ID...">
@@ -378,7 +391,6 @@
         </div>
     </div>
 
-    <script src="script.js?v=cluster-viewer-2"></script>
     <div id="queueContainer" class="queue-container">
         <div id="submitQueue" class="submit-queue">
             <div class="submit-queue-header">
@@ -472,40 +484,6 @@
             </form>
         </div>
     </div>
-    <div id="deletionPreviewModal" class="image-modal" style="display: none;">
-        <div class="modal-content deletion-preview-modal">
-            <div class="deletion-preview-header">
-                <h3>Confirm Frames for Deletion</h3>
-                <div class="modal-header-actions">
-                    <span id="deletionPreviewCount">0 frames</span>
-                    <button id="deletionSubmitBtn" class="queue-action-btn submit-btn">
-                        <i class="fas fa-shield-slash"></i> Submit
-                    </button>
-                    <button id="deletionCancelBtn" class="queue-action-btn cancel-btn">
-                        <i class="fas fa-times"></i> Cancel
-                    </button>
-                </div>
-            </div>
-            <div class="thumbnail-strip" id="deletionPreviewFrames">
-                Frames to be deleted will be rendered here
-            </div>
-        </div>
-        <div class="modal-overlay"></div>
-    </div>
-    <div id="deletionViewerPanel" class="image-modal" style="display: none;">
-        <div class="modal-content deletion-viewer-modal">
-            <div class="deletion-preview-header">
-                <h3>Deleted Frames</h3>
-                <div class="modal-header-actions">
-                    <button id="closeDeletionViewerBtn" class="queue-action-btn">×</button>
-                </div>
-            </div>
-            <div class="thumbnail-strip" id="deletionViewerClusters">
-                Cluster groups will be rendered here
-            </div>
-        </div>
-        <div class="modal-overlay"></div>
-    </div>
     <div id="qaInputModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
@@ -524,8 +502,8 @@
 
     <div id="semanticSearchModal" class="image-modal" style="display: none;">
         <div class="modal-overlay"></div>
-        <div class="modal-content deletion-viewer-modal">
-            <div class="deletion-preview-header">
+        <div class="modal-content semantic-search-modal">
+            <div class="modal-section-header">
                 <h3>Semantic Search Results</h3>
                 <div class="modal-header-actions">
                     <button id="modalToggleLayoutBtn" class="queue-action-btn" title="Chuyển Layout (Tab)">
@@ -542,7 +520,42 @@
         </div>
     </div>
 
+    <div id="clusterDeletionConfirmModal" class="mini-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button id="closeClusterDeletionConfirmBtn" class="close-btn">&times;</button>
+            <h3>Delete Cluster</h3>
+            <p id="clusterDeletionConfirmText"></p>
+            <div class="confirmation-buttons">
+                <button id="cancelClusterDeletionBtn" class="confirmation-btn cancel">No</button>
+                <button id="confirmClusterDeletionBtn" class="confirmation-btn confirm">Yes, delete cluster</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="deletedClustersModal" class="image-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content cluster-deletion-modal">
+            <div class="modal-section-header">
+                <button id="deletedClustersBackBtn" class="queue-action-btn cancel-btn" style="display: none;">
+                    <i class="fas fa-arrow-left"></i> Back
+                </button>
+                <h3 id="deletedClustersTitle">Deleted Clusters</h3>
+                <div class="modal-header-actions">
+                    <button id="undoDeletedClusterBtn" class="queue-action-btn" style="display: none;">
+                        <i class="fas fa-undo"></i> Undo
+                    </button>
+                    <button id="closeDeletedClustersBtn" class="queue-action-btn cancel-btn">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+            <div id="deletedClustersContent" class="cluster-deletion-grid"></div>
+        </div>
+    </div>
+
     <canvas id="frameCaptureCanvas" style="display: none;"></canvas>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="script.js?v=cluster-deletion-2"></script>
 </body>
 </html>
