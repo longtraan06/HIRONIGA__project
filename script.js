@@ -1,22 +1,144 @@
+DRES_IP =  'http://192.168.28.151:5000/api';
+const APP_CONFIG = {
+    REMOTE_BASE_URL: 'https://aic.mealsretrieval.site',
+    WEBSOCKET_URL: 'wss://aic.mealsretrieval.site'
+};
+
+async function fetchDresJson(url) {
+    const response = await fetch(url, {
+        headers: { Accept: 'application/json' }
+    });
+    const contentType = response.headers.get('content-type') || '';
+    const responseText = await response.text();
+
+    if (!response.ok) {
+        throw new Error(`DRES API Error ${response.status} at ${url}: ${responseText.slice(0, 300)}`);
+    }
+
+    if (!contentType.includes('application/json')) {
+        throw new Error(`DRES returned non-JSON response at ${url}: ${responseText.slice(0, 300)}`);
+    }
+
+    return JSON.parse(responseText);
+}
+
+
+let zIndexCounter = 10000; // Bắt đầu từ một số lớn để tránh xung đột
+const activeModalStack = [];
+
+function registerModalOpen(modalElement, closeFunction) {
+    zIndexCounter++;
+    modalElement.style.zIndex = zIndexCounter;
+    
+    // Lưu lại thông tin modal và hàm đóng của nó
+    activeModalStack.push({
+        element: modalElement,
+        close: closeFunction
+    });
+}
+
+function registerModalClose(modalElement) {
+    const index = activeModalStack.findIndex(modal => modal.element === modalElement);
+    if (index > -1) {
+        activeModalStack.splice(index, 1);
+    }
+}
+
+function getTopActiveModal() {
+    if (activeModalStack.length > 0) {
+        return activeModalStack[activeModalStack.length - 1];
+    }
+    return null;
+}
+
+function getNewTopZIndex() {
+    zIndexCounter++;
+    return zIndexCounter;
+}
+
+// Keeps the page usable if a stale HTML document loads a newer script.
+function ensureClusterDeletionMarkup() {
+    const headerButtons = document.querySelector('.header-buttons');
+    const settingsButton = document.getElementById('settingsBtn');
+    if (headerButtons && settingsButton && !document.getElementById('deletedClustersBtn')) {
+        settingsButton.insertAdjacentHTML('beforebegin', `
+            <button id="deletedClustersBtn" class="header-btn" title="Deleted clusters">
+                <i class="fas fa-trash"></i>
+            </button>
+        `);
+    }
+
+    if (!document.getElementById('clusterDeletionConfirmModal')) {
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="clusterDeletionConfirmModal" class="mini-modal" style="display: none;">
+                <div class="modal-overlay"></div>
+                <div class="modal-content">
+                    <button id="closeClusterDeletionConfirmBtn" class="close-btn">&times;</button>
+                    <h3>Delete Cluster</h3>
+                    <p id="clusterDeletionConfirmText"></p>
+                    <div class="confirmation-buttons">
+                        <button id="cancelClusterDeletionBtn" class="confirmation-btn cancel">No</button>
+                        <button id="confirmClusterDeletionBtn" class="confirmation-btn confirm">Yes, delete cluster</button>
+                    </div>
+                </div>
+            </div>
+        `);
+    }
+
+    if (!document.getElementById('deletedClustersModal')) {
+        document.body.insertAdjacentHTML('beforeend', `
+            <div id="deletedClustersModal" class="image-modal" style="display: none;">
+                <div class="modal-overlay"></div>
+                <div class="modal-content cluster-deletion-modal">
+                    <div class="modal-section-header">
+                        <button id="deletedClustersBackBtn" class="queue-action-btn cancel-btn" style="display: none;">
+                            <i class="fas fa-arrow-left"></i> Back
+                        </button>
+                        <h3 id="deletedClustersTitle">Deleted Clusters</h3>
+                        <div class="modal-header-actions">
+                            <button id="undoDeletedClusterBtn" class="queue-action-btn" style="display: none;">
+                                <i class="fas fa-undo"></i> Undo
+                            </button>
+                            <button id="closeDeletedClustersBtn" class="queue-action-btn cancel-btn">
+                                <i class="fas fa-times"></i> Close
+                            </button>
+                        </div>
+                    </div>
+                    <div id="deletedClustersContent" class="cluster-deletion-grid"></div>
+                </div>
+            </div>
+        `);
+    }
+}
+
+let allImages = [];
+
 document.addEventListener('DOMContentLoaded', function() {
+    ensureClusterDeletionMarkup();
     let searchIdCounter = 1;
     let currentUserId = null;
     let currentSearchMode = 'text-to-image';
     let currentHeaderFocus = null;
-    let isTranslationEnabled = false;
+    let selectedQueueFrameIds = new Set(); 
+    let isTranslationEnabled = localStorage.getItem('aic_translation_enabled') === 'true';
     let availableModels = [];
     let currentSelectedModel = 'all';
+    let frameServeLocation = 'remote';
+    let clusterModeEnabled = true;
+    let pendingClusterDeletion = null;
+    let activeDeletedClusterId = null;
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
-    const DEFAULT_DRES_SESSION_ID = 'oHfUbRafSuofjaBLTYWDUDdaS2tdtCUU'; // !!! THAY THẾ BẰNG SESSION ID THẬT CỦA BẠN
+    let lastAddedFrameId = null;
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
     let isEventFilterEnabled = false;
+    // Biến zcho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
-    const GROUPS_PER_BATCH = 5; 
+    const GROUPS_PER_BATCH = 10;
     let hlsPlayerInstance = null;
     const mainContent = document.querySelector('.main-content');
     let isTrakeMode = false;
@@ -24,13 +146,15 @@ document.addEventListener('DOMContentLoaded', function() {
     let currentVideoModalData = {}; // Lưu thông tin video đang mở
     let queuedFramesSet = new Set();
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
-    let selectedQueueFrameIds = new Set(); // Dùng Set để quản lý các frame được chọn trong queue.
-    let resolveInitialStatePromise;
-    let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
+    let currentDresSessionId = null; // Biến để lưu session ID sẽ được sử dụng
+    const DEFAULT_DRES_SESSION_ID = 'b-X-ZFRzfwNURvU_234NB6P2LvELU7LA';
+
+    // let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
 
     let currentUser = null;
     let ws = null;
+    let currentResultsAreReranked = false;
     let wsRetryDelayMs = 3000;
     let userColors = {}; // Lưu màu của tất cả user
 
@@ -39,17 +163,29 @@ document.addEventListener('DOMContentLoaded', function() {
     const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
     let hasReachedEnd = false; // Flag để kiểm tra đã đến cuối danh sách chưa
-    
+
     let formSubmitQueue = [];
     let formSubmitLockedVideoId = null;
     let isFormSubmitMode = false; // Mặc định là chế độ cộng tác
+    let wrongSubmissionIds = new Set();
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
-
+    let resolveInitialStatePromise;
     const initialStateReady = new Promise(resolve => {
         resolveInitialStatePromise = resolve;
     });
 
+    const MODAL_IMAGES_PER_BATCH = 60; // Số ảnh tải mỗi đợt trong modal
+    let modalAllImages = [];
+    let modalDisplayedImagesCount = 0;
+    let isModalLoading = false;
+    let modalHasReachedEnd = false;
+    let modalObserver = null;
+    let modalCurrentLayout = 'grid'; // 'grid' hoặc 'grouped'
+    let modalAllGroupedData = [];
+    let modalDisplayedGroupsCount = 0;
+    const MODAL_GROUPS_PER_BATCH = 10;
+    let modalQueryFrame = null;
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
     const imageToImageBtn = document.getElementById('imageToImageBtn');
@@ -58,7 +194,7 @@ document.addEventListener('DOMContentLoaded', function() {
     const contentArea = document.getElementById('contentArea');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsMenu = document.getElementById('settingsMenu');
-    const tagFilterBtn = document.getElementById('tagFilterBtn'); 
+    const tagFilterBtn = document.getElementById('tagFilterBtn');
     const shortcutsBtn = document.getElementById('shortcutsBtn');
     const shortcutsModal = document.getElementById('shortcutsModal');
     const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
@@ -106,11 +242,36 @@ document.addEventListener('DOMContentLoaded', function() {
     const trakeSubmitQueueContainer = document.getElementById('trakeSubmitQueue');
     const trakeSubmitQueueFramesContainer = document.getElementById('trakeSubmitQueueFrames');
     const submitTrakeBtn = document.getElementById('submitTrakeBtn');
+    const dresSessionIdInput = document.getElementById('dresSessionIdInput');
+    const frameServeLocationToggle = document.getElementById('frameServeLocationToggle');
+    const frameServeLocationLabel = document.getElementById('frameServeLocationLabel');
+    const clusterModeToggle = document.getElementById('clusterModeToggle');
+    const clusterModeLabel = document.getElementById('clusterModeLabel');
+    const deletedClustersBtn = document.getElementById('deletedClustersBtn');
+    const clusterDeletionConfirmModal = document.getElementById('clusterDeletionConfirmModal');
+    const clusterDeletionConfirmText = document.getElementById('clusterDeletionConfirmText');
+    const closeClusterDeletionConfirmBtn = document.getElementById('closeClusterDeletionConfirmBtn');
+    const cancelClusterDeletionBtn = document.getElementById('cancelClusterDeletionBtn');
+    const confirmClusterDeletionBtn = document.getElementById('confirmClusterDeletionBtn');
+    const deletedClustersModal = document.getElementById('deletedClustersModal');
+    const deletedClustersContent = document.getElementById('deletedClustersContent');
+    const deletedClustersTitle = document.getElementById('deletedClustersTitle');
+    const deletedClustersBackBtn = document.getElementById('deletedClustersBackBtn');
+    const undoDeletedClusterBtn = document.getElementById('undoDeletedClusterBtn');
+    const closeDeletedClustersBtn = document.getElementById('closeDeletedClustersBtn');
+    // ADD THESE TWO NEW FUNCTIONS INSIDE the DOMContentLoaded listener
 
+    const applyDresSessionBtn = document.getElementById('applyDresSessionBtn');
+    const evaluationModal = document.getElementById('evaluationSelectionModal');
+    const evaluationListContainer = document.getElementById('evaluationListContainer');
+    const closeEvaluationModalBtn = evaluationModal.querySelector('.close-btn');
+    const evaluationModalOverlay = evaluationModal.querySelector('.modal-overlay');
+
+    const semanticSearchModal = document.getElementById('semanticSearchModal');
+    const closeSemanticSearchModalBtn = document.getElementById('closeSemanticSearchModalBtn');
+    const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
 
     initializeEventListeners();
-
-
     function getOrCreateUserId() {
         let userId = localStorage.getItem('aic_lunch_user_id');
         if (!userId) {
@@ -121,13 +282,278 @@ document.addEventListener('DOMContentLoaded', function() {
         return userId;
     }
 
+    function getUserScopedStorageKey(key) {
+        const userScope = currentUser || currentUserId || getOrCreateUserId();
+        return `aic_lunch:${userScope}:${key}`;
+    }
+
+    function getUserScopedSetting(key, fallback = null, legacyKey = null) {
+        const scopedValue = localStorage.getItem(getUserScopedStorageKey(key));
+        if (scopedValue !== null) return scopedValue;
+
+        // One-time compatibility for values saved before settings were user-scoped.
+        if (legacyKey) {
+            const legacyValue = localStorage.getItem(legacyKey);
+            if (legacyValue !== null) return legacyValue;
+        }
+
+        return fallback;
+    }
+
+    function setUserScopedSetting(key, value) {
+        localStorage.setItem(getUserScopedStorageKey(key), value);
+    }
+
+    function getFrameUrl(videoName, frameName) {
+        const baseUrl = frameServeLocation === 'remote' ? APP_CONFIG.REMOTE_BASE_URL : '';
+        return `${baseUrl}/frames/${encodeURIComponent(videoName)}/${encodeURIComponent(frameName)}`;
+    }
+
+    function getFrameMetadataUrl(videoName, cacheBuster = '') {
+        return `${getFrameUrl(videoName, 'metadata.json')}${cacheBuster}`;
+    }
+
+    function resolveFrameUrl(path) {
+        if (!path || path.startsWith('data:') || path.startsWith('blob:')) return path;
+
+        try {
+            const url = new URL(path, window.location.origin);
+            if (!url.pathname.startsWith('/frames/')) return path;
+
+            const baseUrl = frameServeLocation === 'remote' ? APP_CONFIG.REMOTE_BASE_URL : '';
+            return `${baseUrl}${url.pathname}${url.search}`;
+        } catch {
+            return path;
+        }
+    }
+
+    function setFrameImageSource(imageElement, path) {
+        imageElement.dataset.frameSource = path;
+        imageElement.src = resolveFrameUrl(path);
+    }
+
+    function updateFrameServeLocationUI() {
+        const remoteServeEnabled = frameServeLocation === 'remote';
+        frameServeLocationToggle.checked = remoteServeEnabled;
+        frameServeLocationLabel.textContent = remoteServeEnabled ? 'Remote serve' : 'Local serve';
+    }
+
+    function updateClusterModeUI() {
+        clusterModeToggle.checked = clusterModeEnabled;
+        clusterModeLabel.textContent = clusterModeEnabled ? 'Enabled' : 'Disabled';
+    }
+
+    async function fetchClusterApi(path, options = {}) {
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}${path}`, options);
+        if (!response.ok) {
+            const payload = await response.json().catch(() => ({}));
+            throw new Error(payload.detail || `Cluster API failed with status ${response.status}`);
+        }
+        return response.json();
+    }
+
+    function openClusterModal(modal, closeFunction) {
+        modal.style.zIndex = getNewTopZIndex();
+        modal.style.display = 'flex';
+        registerModalOpen(modal, closeFunction);
+        setTimeout(() => modal.classList.add('visible'), 10);
+    }
+
+    function closeClusterDeletionConfirmation() {
+        pendingClusterDeletion = null;
+        clusterDeletionConfirmModal.classList.remove('visible');
+        registerModalClose(clusterDeletionConfirmModal);
+        setTimeout(() => (clusterDeletionConfirmModal.style.display = 'none'), 200);
+    }
+
+    function openClusterDeletionConfirmation(cluster) {
+        pendingClusterDeletion = cluster;
+        clusterDeletionConfirmText.textContent = `Delete cluster ${cluster.cluster_id}? This removes ${cluster.count} frame(s) from future searches for every user while cluster filtering is enabled.`;
+        openClusterModal(clusterDeletionConfirmModal, closeClusterDeletionConfirmation);
+    }
+
+    async function requestClusterDeletion(frame) {
+        if (!frame.frame_specify) {
+            showToastNotification('Frame is missing the cluster lookup identifier.', 'error');
+            return;
+        }
+
+        try {
+            const result = await fetchClusterApi('/api/clusters/resolve-frame', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ frame_specify: frame.frame_specify })
+            });
+
+            if (!result.found) {
+                showToastNotification('Frame không thuộc cluster nào.', 'info');
+                return;
+            }
+            if (result.already_deleted) {
+                showToastNotification(`Cluster ${result.cluster_id} is already deleted globally.`, 'info');
+                return;
+            }
+            openClusterDeletionConfirmation(result);
+        } catch (error) {
+            console.error('Failed to resolve frame cluster:', error);
+            showToastNotification('Không thể kiểm tra cluster của frame.', 'error');
+        }
+    }
+
+    async function confirmClusterDeletion() {
+        if (!pendingClusterDeletion) return;
+
+        confirmClusterDeletionBtn.disabled = true;
+        try {
+            const result = await fetchClusterApi('/api/clusters/delete', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cluster_id: pendingClusterDeletion.cluster_id })
+            });
+            closeClusterDeletionConfirmation();
+            frameSelectionManager.clearAllSelections();
+            showToastNotification(
+                result.added
+                    ? `Cluster ${result.cluster.cluster_id} deleted globally.`
+                    : `Cluster ${result.cluster.cluster_id} was already deleted globally.`,
+                'success'
+            );
+        } catch (error) {
+            console.error('Failed to delete cluster:', error);
+            showToastNotification('Không thể xóa cluster.', 'error');
+        } finally {
+            confirmClusterDeletionBtn.disabled = false;
+        }
+    }
+
+    function closeDeletedClustersModal() {
+        activeDeletedClusterId = null;
+        deletedClustersModal.classList.remove('visible');
+        registerModalClose(deletedClustersModal);
+        setTimeout(() => (deletedClustersModal.style.display = 'none'), 200);
+    }
+
+    function createClusterImage(frame) {
+        const image = document.createElement('img');
+        image.src = resolveFrameUrl(frame.path);
+        image.alt = frame.frame_specify;
+        image.loading = 'lazy';
+        return image;
+    }
+
+    async function renderDeletedClusterList() {
+        activeDeletedClusterId = null;
+        deletedClustersTitle.textContent = 'Deleted Clusters';
+        deletedClustersBackBtn.style.display = 'none';
+        undoDeletedClusterBtn.style.display = 'none';
+        deletedClustersContent.replaceChildren();
+
+        try {
+            const result = await fetchClusterApi('/api/clusters/deleted');
+            if (result.clusters.length === 0) {
+                const emptyState = document.createElement('p');
+                emptyState.className = 'cluster-empty-state';
+                emptyState.textContent = 'No clusters have been deleted.';
+                deletedClustersContent.appendChild(emptyState);
+                return;
+            }
+
+            result.clusters.forEach(cluster => {
+                const card = document.createElement('button');
+                card.type = 'button';
+                card.className = 'deleted-cluster-card';
+                card.appendChild(createClusterImage(cluster.representative));
+
+                const clusterId = document.createElement('strong');
+                clusterId.textContent = `Cluster ${cluster.cluster_id}`;
+                const count = document.createElement('span');
+                count.textContent = `${cluster.count} frame(s)`;
+                card.append(clusterId, count);
+                card.addEventListener('click', () => renderDeletedClusterDetail(cluster.cluster_id));
+                deletedClustersContent.appendChild(card);
+            });
+        } catch (error) {
+            console.error('Failed to load deleted clusters:', error);
+            const emptyState = document.createElement('p');
+            emptyState.className = 'cluster-empty-state';
+            emptyState.textContent = 'Unable to load deleted clusters.';
+            deletedClustersContent.appendChild(emptyState);
+        }
+    }
+
+    async function renderDeletedClusterDetail(clusterId) {
+        deletedClustersContent.replaceChildren();
+        const loading = document.createElement('p');
+        loading.className = 'cluster-empty-state';
+        loading.textContent = 'Loading cluster frames...';
+        deletedClustersContent.appendChild(loading);
+
+        try {
+            const cluster = await fetchClusterApi(`/api/clusters/${encodeURIComponent(clusterId)}`);
+            activeDeletedClusterId = cluster.cluster_id;
+            deletedClustersTitle.textContent = `Cluster ${cluster.cluster_id} (${cluster.count} frames)`;
+            deletedClustersBackBtn.style.display = 'inline-flex';
+            undoDeletedClusterBtn.style.display = 'inline-flex';
+            deletedClustersContent.replaceChildren();
+
+            cluster.frames.forEach(frame => {
+                const card = document.createElement('div');
+                card.className = 'cluster-member-card';
+                card.appendChild(createClusterImage(frame));
+                const label = document.createElement('span');
+                label.textContent = frame.frame_specify;
+                card.appendChild(label);
+                deletedClustersContent.appendChild(card);
+            });
+        } catch (error) {
+            console.error('Failed to load deleted cluster detail:', error);
+            showToastNotification('Không thể tải danh sách frame của cluster.', 'error');
+            renderDeletedClusterList();
+        }
+    }
+
+    async function openDeletedClustersModal() {
+        if (deletedClustersModal.style.display !== 'flex') {
+            openClusterModal(deletedClustersModal, closeDeletedClustersModal);
+        }
+        await renderDeletedClusterList();
+    }
+
+    async function undoActiveDeletedCluster() {
+        if (!activeDeletedClusterId) return;
+
+        try {
+            const result = await fetchClusterApi('/api/clusters/undo', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ cluster_id: activeDeletedClusterId })
+            });
+            showToastNotification(
+                result.removed
+                    ? `Cluster ${activeDeletedClusterId} restored.`
+                    : `Cluster ${activeDeletedClusterId} was already restored.`,
+                'success'
+            );
+            await renderDeletedClusterList();
+        } catch (error) {
+            console.error('Failed to undo cluster deletion:', error);
+            showToastNotification('Không thể undo cluster.', 'error');
+        }
+    }
+
+    function refreshVisibleFrameSources() {
+        document.querySelectorAll('img[data-frame-source]').forEach(image => {
+            image.src = resolveFrameUrl(image.dataset.frameSource);
+        });
+    }
+
     function setupUnloadHandler() {
-        window.addEventListener('unload', function() {
+        window.addEventListener('pagehide', function() {
             if (currentUserId) {
                 const formData = new FormData();
                 formData.append('user_id', currentUserId);
                 // Dùng sendBeacon để đảm bảo request được gửi đi ngay cả khi trang đang đóng
-                navigator.sendBeacon('/api/session/cleanup', formData);
+                navigator.sendBeacon(`${APP_CONFIG.REMOTE_BASE_URL}/api/session/cleanup`, formData);
             }
         });
     }
@@ -136,15 +562,74 @@ document.addEventListener('DOMContentLoaded', function() {
     function initializeEventListeners() {
 
         currentUserId = getOrCreateUserId(); // <<< THÊM VÀO
-        setupUnloadHandler(); 
+        currentUser = getUsername();
+        const savedFrameServeLocation = getUserScopedSetting('frame_serve_location', 'remote');
+        frameServeLocation = savedFrameServeLocation === 'local' ? 'local' : 'remote';
+        updateFrameServeLocationUI();
+        clusterModeEnabled = getUserScopedSetting('cluster_mode_enabled', 'true') !== 'false';
+        updateClusterModeUI();
+        setupUnloadHandler();
 
-        const savedModel = localStorage.getItem('user_selected_model');
+        frameServeLocationToggle.addEventListener('change', () => {
+            frameServeLocation = frameServeLocationToggle.checked ? 'remote' : 'local';
+            setUserScopedSetting('frame_serve_location', frameServeLocation);
+            updateFrameServeLocationUI();
+            refreshVisibleFrameSources();
+            showToastNotification(`Frame source: ${frameServeLocation === 'remote' ? 'Remote serve' : 'Local serve'}.`);
+        });
+
+        clusterModeToggle.addEventListener('change', () => {
+            clusterModeEnabled = clusterModeToggle.checked;
+            setUserScopedSetting('cluster_mode_enabled', String(clusterModeEnabled));
+            updateClusterModeUI();
+            showToastNotification(`Cluster filtering ${clusterModeEnabled ? 'enabled' : 'disabled'} for new searches.`);
+        });
+
+        deletedClustersBtn.addEventListener('click', openDeletedClustersModal);
+        closeClusterDeletionConfirmBtn.addEventListener('click', closeClusterDeletionConfirmation);
+        cancelClusterDeletionBtn.addEventListener('click', closeClusterDeletionConfirmation);
+        confirmClusterDeletionBtn.addEventListener('click', confirmClusterDeletion);
+        clusterDeletionConfirmModal.querySelector('.modal-overlay').addEventListener('click', closeClusterDeletionConfirmation);
+        closeDeletedClustersBtn.addEventListener('click', closeDeletedClustersModal);
+        deletedClustersModal.querySelector('.modal-overlay').addEventListener('click', closeDeletedClustersModal);
+        deletedClustersBackBtn.addEventListener('click', renderDeletedClusterList);
+        undoDeletedClusterBtn.addEventListener('click', undoActiveDeletedCluster);
+
+        currentDresSessionId = getUserScopedSetting('dres_session_id', DEFAULT_DRES_SESSION_ID, 'dres_session_id');
+        dresEvaluationId = getUserScopedSetting('dres_evaluation_id', null, 'dres_evaluation_id'); // Tải evaluationId đã chọn
+
+        if (dresSessionIdInput) {
+            dresSessionIdInput.value = currentDresSessionId;
+        }
+
+        // Thay đổi event listener từ 'input' sang 'click' trên nút Apply
+        if (applyDresSessionBtn) {
+            applyDresSessionBtn.addEventListener('click', handleApplyDresSession);
+        }
+
+        // Thêm event listener để đóng modal evaluation
+        if (closeEvaluationModalBtn) {
+            closeEvaluationModalBtn.addEventListener('click', closeEvaluationModal);
+            evaluationModalOverlay.addEventListener('click', closeEvaluationModal);
+            if (closeSemanticSearchModalBtn) {
+                closeSemanticSearchModalBtn.addEventListener('click', closeSemanticSearchModal);
+                semanticSearchModal.querySelector('.modal-overlay').addEventListener('click', closeSemanticSearchModal);
+            }
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && semanticSearchModal.style.display === 'flex') {
+                    closeSemanticSearchModal();
+                }
+            });
+        }
+
+
+        const savedModel = getUserScopedSetting('selected_model', null, 'user_selected_model');
         if (savedModel) {
             currentSelectedModel = savedModel;
         } else {
             currentSelectedModel = 'all'; // Giá trị mặc định nếu chưa có gì được lưu
         }
-        
+
         setupKeyboardNavigation();
         connectWebSocket();
 
@@ -173,13 +658,13 @@ document.addEventListener('DOMContentLoaded', function() {
         imageToImageBtn.addEventListener('click', function() {
             switchSearchMode('image-to-image');
         });
-        
+
         window.addEventListener('popstate', (event) => {
             // Chỉ xử lý nếu có state hợp lệ do chúng ta tạo ra
             if (event.state && event.state.description === 'AIC_LUNCH_SEARCH') {
                 // Đặt cờ để hàm restore không đẩy state mới vào history
                 isRestoringState = true;
-                
+
                 restoreStateFromHistory(event.state).finally(() => {
                     // Sau khi khôi phục xong, reset cờ
                     isRestoringState = false;
@@ -192,6 +677,25 @@ document.addEventListener('DOMContentLoaded', function() {
                 createNewSearchInput(); // Tạo lại một thanh tìm kiếm trống
             }
         });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const topModal = getTopActiveModal();
+                if (topModal) {
+                    // Ngăn chặn các trình xử lý khác bắt được sự kiện này
+                    e.preventDefault();
+                    e.stopPropagation();
+
+                    // Gọi hàm đóng của modal trên cùng
+                    topModal.close();
+                }
+            }
+        }, true);
+
+        const modalToggleLayoutBtn = document.getElementById('modalToggleLayoutBtn');
+        if (modalToggleLayoutBtn) {
+            modalToggleLayoutBtn.addEventListener('click', toggleModalLayout);
+        }
 
         ocrFilterBtn.addEventListener('click', function() {
             toggleFilter('ocr');
@@ -222,25 +726,26 @@ document.addEventListener('DOMContentLoaded', function() {
             localStorage.setItem('trake_seek_gap', trakeSeekGapInput.value);
         });
 
+        document.addEventListener('click', function(e) {
+            // Kiểm tra xem có frame nào đang được chọn trong queue không
+            if (selectedQueueFrameIds.size > 0) {
+                // Nếu click vào một nơi KHÔNG phải là queue, thì bỏ chọn
+                // Chúng ta cũng không muốn bỏ chọn khi click vào một frame trong kết quả tìm kiếm
+                if (!e.target.closest('#submitQueue') && !e.target.closest('.image-item')) {
+                    clearQueueSelection();
+                }
+            }
+        }, true);
+
         // Gắn sự kiện cho nút submit của TRAKE queue
-        submitTrakeBtn.addEventListener('click', () => {
-            if (trakeQueueState.length === 5) {
-                // Gọi API placeholder
-                fetch('/api/trake-submit', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ frames: trakeQueueState })
-                })
-                .then(res => res.json())
-                .then(data => {
-                    if (data.status === 'success') {
-                        showToastNotification('TRAKE submission thành công!', 'success');
-                    }
-                })
-                .catch(err => {
-                    showToastNotification('Lỗi khi submit TRAKE queue.', 'error');
-                    console.error(err);
-                });
+        submitTrakeBtn.addEventListener('click', async () => {
+            if (trakeQueueState) {
+                const success = await submitTrakeToDres(trakeQueueState);
+
+                if (success) {
+                    sendWebSocketMessage('clear_trake_queue', {});
+                    showToastNotification('TRAKE submission thành công!', 'success');
+                }
             }
         });
 
@@ -260,16 +765,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const historyItem = e.target.closest('.history-item');
             if (historyItem) {
                 const query = historyItem.dataset.query;
-                
+
                 copyQueryToClipboard(query)
-                    .then(() => {
-                        showToastNotification(`Đã sao chép: "${query}"`, 'success');
-                        closeHistoryMenu();
-                    })
-                    .catch(err => {
-                        console.error('Lỗi khi sao chép: ', err);
-                        showToastNotification('Không thể sao chép!', 'error');
-                    });
+                .then(() => {
+                    showToastNotification(`Đã sao chép: "${query}"`, 'success');
+                    closeHistoryMenu();
+                })
+                .catch(err => {
+                    console.error('Lỗi khi sao chép: ', err);
+                    showToastNotification('Không thể sao chép!', 'error');
+                });
             }
         });
 
@@ -302,11 +807,11 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        
 
         if (shortcutsBtn && shortcutsModal) {
             // Hàm để mở modal
             const openShortcutsModal = () => {
+                shortcutsModal.style.zIndex = getNewTopZIndex();
                 shortcutsModal.style.display = 'flex';
                 setTimeout(() => shortcutsModal.classList.add('visible'), 10); // Thêm class để kích hoạt animation
             };
@@ -315,7 +820,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const closeShortcutsModal = () => {
                 shortcutsModal.classList.remove('visible');
                 // Đợi animation kết thúc rồi mới ẩn đi
-                setTimeout(() => (shortcutsModal.style.display = 'none'), 300); 
+                setTimeout(() => (shortcutsModal.style.display = 'none'), 300);
             };
 
             // Gán sự kiện khi click vào nút trên header
@@ -328,27 +833,44 @@ document.addEventListener('DOMContentLoaded', function() {
             shortcutsOverlay.addEventListener('click', closeShortcutsModal);
         }
 
+        const modalClearSelectionBtn = document.getElementById('modalClearSelectionBtn');
+        if (modalClearSelectionBtn) {
+            modalClearSelectionBtn.addEventListener('click', () => {
+                modalFrameSelectionManager.clearAllSelections();
+            });
+        }
+
         document.addEventListener('keydown', function(e) {
 
             if (e.key === 'Tab') {
+                // === THÊM KHỐI KIỂM TRA NÀY VÀO ĐẦU ===
+                // Nếu modal semantic search đang mở, không làm gì cả và thoát ngay lập tức.
+                if (semanticSearchModal && semanticSearchModal.style.display === 'flex') {
+                    return;
+                }
+                // ===========================================
+
                 const videoModal = document.getElementById('videoModal');
                 if (videoModal && videoModal.style.display === 'flex') {
-                    return; 
+                    return;
                 }
 
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
                 if (!isTyping) {
-                    e.preventDefault(); // Ngăn hành vi mặc định của Tab
-                    toggleLayout();     // Gọi hàm chuyển layout chung
+                    e.preventDefault(); 
+                    toggleLayout();     
                 }
             }
-
+            if (e.altKey && e.key.toLowerCase() === '1') {
+                e.preventDefault();
+                toggleTranslation(); // Call the same toggle function
+            }
             if (e.key === 'F4') { // <<< THAY ĐỔI LOGIC F4
                 e.preventDefault();
                 if (eventFilterBtn) eventFilterBtn.click(); // Kích hoạt Event Filter
-            } 
+            }
             else if (e.key === 'F2') {
                 e.preventDefault();
                 toggleFilter('tag');
@@ -357,7 +879,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 e.preventDefault();
                 toggleFilter('ocr');
             }
-            else if (e.key === 'F3') { 
+            else if (e.key === 'F3') {
                 e.preventDefault();
                 toggleFilter('asr');
             }
@@ -375,9 +897,9 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             }
             else if (e.altKey && e.key.toLowerCase() === 's') {
-                e.preventDefault(); 
+                e.preventDefault();
                 const searchInput = document.querySelector('.search-input');
-                
+
                 // 3. Kiểm tra xem ô tìm kiếm có tồn tại và không bị ẩn không
                 // (Điều này quan trọng khi đang ở chế độ image-to-image)
                 if (searchInput && searchInput.style.display !== 'none') {
@@ -402,14 +924,19 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
 
-        translateBtn.addEventListener('click', function() {
-            isTranslationEnabled = !isTranslationEnabled; // Đảo ngược trạng thái
-            this.classList.toggle('active', isTranslationEnabled); // Cập nhật UI
-        });
+        translateBtn.classList.toggle('active', isTranslationEnabled);
+        function toggleTranslation() {
+            isTranslationEnabled = !isTranslationEnabled;
+            translateBtn.classList.toggle('active', isTranslationEnabled);
+            localStorage.setItem('aic_translation_enabled', isTranslationEnabled); // Save state
 
+            const status = isTranslationEnabled ? 'bật' : 'tắt';
+            showToastNotification(`Chế độ dịch gợi ý đã ${status}`, 'success');
+        }
+        translateBtn.addEventListener('click', toggleTranslation);
         // Initial search input setup
         setupSearchInput(document.querySelector('.search-input-group'));
-        
+
         setupToolbarEvents();
 
         submitQueueFramesContainer.addEventListener('click', (e) => {
@@ -428,11 +955,13 @@ document.addEventListener('DOMContentLoaded', function() {
         clearQueueBtn.addEventListener('click', () => {
             if (submitQueueFrames.size > 0) {
                 // if (confirm('Are you sure you want to clear ALL frames for EVERYONE?')) {
-                    // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
+                // GỬI YÊU CẦU XÓA TẤT CẢ ĐẾN SERVER
                 sendWebSocketMessage('clear_all', {});
                 // }
             }
         });
+
+
 
 
         // Thêm listener cho phím tắt khi tương tác với queue
@@ -440,105 +969,105 @@ document.addEventListener('DOMContentLoaded', function() {
             const activeElement = document.activeElement;
             const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
-                const selectedCountInQueue = selectedQueueFrameIds.size;
-                if (selectedCountInQueue > 0 && !isTyping) {
-                    
-                    // Lấy thông tin của frame được chọn CUỐI CÙNG để xử lý cho các phím S và F
-                    // (Vì S và F chỉ có ý nghĩa với 1 frame duy nhất)
-                    const lastSelectedId = Array.from(selectedQueueFrameIds).pop();
-                    const frameData = submitQueueFrames.get(lastSelectedId);
-                    
-                    if (!frameData) return; // Dừng lại nếu không có dữ liệu
+            const selectedCountInQueue = selectedQueueFrameIds.size;
+            if (selectedCountInQueue > 0 && !isTyping) {
 
-                    const key = e.key.toLowerCase();
-                    if (key === 's') {
-                        const imageModal = document.getElementById('imageModal');
-                        if (imageModal && imageModal.style.display === 'flex') {
-                            return; 
-                        }
-                        e.preventDefault(); 
-                        if (selectedCountInQueue === 1) {
-                            if (!frameData.path) {
-                                showToastNotification("Frame data is incomplete for this action.", "error");
-                            } else {
-                                const imagePath = frameData.path;
-                                clearQueueSelection(); // Bỏ chọn trước khi bắt đầu
-                                initiateImageTemporalSearch(imagePath); // Gọi hàm điều phối mới
-                            }
+                // Lấy thông tin của frame được chọn CUỐI CÙNG để xử lý cho các phím S và F
+                // (Vì S và F chỉ có ý nghĩa với 1 frame duy nhất)
+                const lastSelectedId = Array.from(selectedQueueFrameIds).pop();
+                const frameData = submitQueueFrames.get(lastSelectedId);
+
+                if (!frameData) return; // Dừng lại nếu không có dữ liệu
+
+                const key = e.key.toLowerCase();
+                if (key === 's') {
+                    const imageModal = document.getElementById('imageModal');
+                    if (imageModal && imageModal.style.display === 'flex') {
+                        return;
+                    }
+                    e.preventDefault();
+                    if (selectedCountInQueue === 1) {
+                        if (!frameData.path) {
+                            showToastNotification("Frame data is incomplete for this action.", "error");
                         } else {
-                            showToastNotification("Please select only one frame for this action.", "error");
+                            const imagePath = frameData.path;
+                            clearQueueSelection(); // Bỏ chọn trước khi bắt đầu
+                            initiateImageTemporalSearch(imagePath); // Gọi hàm điều phối mới
                         }
                     } else {
-                        e.preventDefault(); // Ngăn hành vi mặc định cho các phím tắt này
+                        showToastNotification("Please select only one frame for this action.", "error");
+                    }
+                } else {
+                    e.preventDefault(); // Ngăn hành vi mặc định cho các phím tắt này
 
-                        switch (key) {
-                            case 'v': // Vote
-                                // Vote cho TẤT CẢ các frame đang được chọn
-                                selectedQueueFrameIds.forEach(id => {
-                                    sendWebSocketMessage('vote_frame', { frameIdentifier: id });
-                                });
-                                showToastNotification(`Voted for ${selectedCountInQueue} frame(s).`, 'success');
-                                // Sau khi vote, ta nên bỏ chọn để tránh nhầm lẫn
-                                clearQueueSelection();
-                                break;
-                            
-                            case 'e':
-                                if (!submitAsKisBtn.disabled) {
-                                    submitAsKisBtn.click(); 
+                    switch (key) {
+                        case 'v': // Vote
+                            // Vote cho TẤT CẢ các frame đang được chọn
+                            selectedQueueFrameIds.forEach(id => {
+                                sendWebSocketMessage('vote_frame', { frameIdentifier: id });
+                            });
+                            showToastNotification(`Voted for ${selectedCountInQueue} frame(s).`, 'success');
+                            // Sau khi vote, ta nên bỏ chọn để tránh nhầm lẫn
+                            clearQueueSelection();
+                            break;
+
+                        case 'e':
+                            if (!submitAsKisBtn.disabled) {
+                                submitAsKisBtn.click();
+                            }
+                            break;
+
+                        case 'q':
+                            if (!submitAsQaBtn.disabled) {
+                                submitAsQaBtn.click();
+                            }
+                            break;
+
+                        case 'f': // Xem keyframe lân cận
+                            if (selectedCountInQueue === 1) {
+                                if (frameData.isFromVideo) {
+                                    showToastNotification('Cannot view neighboring frames for a captured image.', 'error');
+                                    return;
                                 }
-                                break; 
 
-                            case 'q':
-                                if (!submitAsQaBtn.disabled) {
-                                    submitAsQaBtn.click();
-                                }
-                                break;
-
-                            case 'f': // Xem keyframe lân cận
-                                if (selectedCountInQueue === 1) {
-                                    if (frameData.isFromVideo) {
-                                        showToastNotification('Cannot view neighboring frames for a captured image.', 'error');
-                                        return; 
-                                    }
-
-                                    if (frameData) { // frameData đã là đối tượng đầy đủ
-                                        openImageModal(frameData); // Chỉ cần truyền nó vào
-                                    } else {
-                                        showToastNotification("Frame data is incomplete for this action.", "error");
-                                    }
+                                if (frameData) { // frameData đã là đối tượng đầy đủ
+                                    openImageModal(frameData); // Chỉ cần truyền nó vào
                                 } else {
-                                    showToastNotification("Please select only one frame to view keyframes.", "error");
+                                    showToastNotification("Frame data is incomplete for this action.", "error");
                                 }
-                                clearQueueSelection();
-                                break;
+                            } else {
+                                showToastNotification("Please select only one frame to view keyframes.", "error");
+                            }
+                            // clearQueueSelection();
+                            break;
                             // Xử lý phím mũi tên để điều hướng lựa chọn trong queue
-                            case 'arrowright':
-                            case 'arrowleft':
-                                const allFrames = Array.from(submitQueueFramesContainer.querySelectorAll('.queue-frame-item'));
-                                const currentIndex = allFrames.findIndex(f => f.dataset.frameId === lastSelectedId);
-                                
-                                let nextIndex;
-                                if (key === 'arrowright') {
-                                    nextIndex = (currentIndex + 1) % allFrames.length;
-                                } else {
-                                    nextIndex = (currentIndex - 1 + allFrames.length) % allFrames.length;
-                                }
+                        case 'arrowright':
+                        case 'arrowleft':
+                            const allFrames = Array.from(submitQueueFramesContainer.querySelectorAll('.queue-frame-item'));
+                            const currentIndex = allFrames.findIndex(f => f.dataset.frameId === lastSelectedId);
 
-                                if(allFrames[nextIndex]) {
-                                    // Xóa lựa chọn cũ và chọn frame mới
-                                    clearQueueSelection();
-                                    const nextFrameId = allFrames[nextIndex].dataset.frameId;
-                                    selectedQueueFrameIds.add(nextFrameId);
-                                    allFrames[nextIndex].classList.add('selected');
-                                    updateSubmitButtonStates();
+                            let nextIndex;
+                            if (key === 'arrowright') {
+                                nextIndex = (currentIndex + 1) % allFrames.length;
+                            } else {
+                                nextIndex = (currentIndex - 1 + allFrames.length) % allFrames.length;
+                            }
 
-                                    // Cuộn tới frame mới
-                                    allFrames[nextIndex].scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
-                                }
-                                break;
-                        }
+                            if(allFrames[nextIndex]) {
+                                // Xóa lựa chọn cũ và chọn frame mới
+                                clearQueueSelection();
+                                const nextFrameId = allFrames[nextIndex].dataset.frameId;
+                                selectedQueueFrameIds.add(nextFrameId);
+                                allFrames[nextIndex].classList.add('selected');
+                                updateSubmitButtonStates();
+
+                                // Cuộn tới frame mới
+                                allFrames[nextIndex].scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+                            }
+                            break;
                     }
                 }
+            }
         });
 
         submitQueueFramesContainer.addEventListener('wheel', (e) => {
@@ -556,9 +1085,9 @@ document.addEventListener('DOMContentLoaded', function() {
             if (e.target.closest('.queue-actions')) {
                 return;
             }
-            
+
             submitQueueContainer.classList.toggle('minimized');
-            
+
             // Cập nhật icon trên nút
             const icon = toggleQueueBtn.querySelector('i');
             if (submitQueueContainer.classList.contains('minimized')) {
@@ -569,7 +1098,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 icon.classList.add('fa-chevron-down');
             }
         };
-        
+
         // Gán sự kiện cho cả header.
         // Người dùng có thể click vào bất kỳ đâu trên header (trừ vùng actions) để thu nhỏ.
         queueHeader.addEventListener('click', toggleQueueDisplay);
@@ -602,12 +1131,12 @@ document.addEventListener('DOMContentLoaded', function() {
         updateLayoutButton();
         setTimeout(function() {
             // Đã mặc định là text-to-image rồi, không cần kích hoạt nữa
-            
+
             // Tự động focus vào ô tìm kiếm đầu tiên
             const firstSearchInput = document.querySelector('.search-input');
             if (firstSearchInput) {
                 firstSearchInput.focus();
-                
+
                 // Tùy chọn: Đặt con trỏ ở cuối nội dung nếu có
                 const length = firstSearchInput.value.length;
                 if (length > 0) {
@@ -616,55 +1145,159 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
-    
-function getQaAnswerFromModal() {
-        return new Promise((resolve, reject) => {
-            // Mở modal
-            qaInputModal.style.display = 'flex';
+
+    function getQaAnswerFromModal() {
+    console.log("Log #1: Hàm getQaAnswerFromModal ĐÃ ĐƯỢC GỌI."); // <-- THÊM DÒNG NÀY
+    return new Promise((resolve, reject) => {
+        const modal = document.getElementById('qaInputModal');
+        const form = document.getElementById('qaInputForm');
+        const answerInput = document.getElementById('qaAnswerTextInput');
+        const submitBtn = modal.querySelector('.submit-form-btn');
+        const closeBtn = modal.querySelector('.close-btn');
+        const overlay = modal.querySelector('.modal-overlay');
+
+        const handleClick = (e) => {
+            e.preventDefault();
+            console.log("Log #2: Nút 'Submit QA' trong modal ĐÃ ĐƯỢC CLICK."); // <-- THÊM DÒNG NÀY
+
+            const answerText = answerInput.value.trim();
+            if (answerText) {
+                console.log("Log #3: Có text, chuẩn bị RESOLVE promise."); // <-- THÊM DÒNG NÀY
+                cleanupAndClose();
+                resolve(answerText);
+            } else {
+                showToastNotification("Vui lòng nhập câu trả lời!", "error");
+                answerInput.focus();
+            }
+        };
+
+        const handleClose = () => {
+            cleanupAndClose();
+            reject('Modal closed by user.');
+        };
+
+        const cleanupAndClose = () => {
+            submitBtn.removeEventListener('click', handleClick);
+            form.removeEventListener('submit', handleClick);
+            closeBtn.removeEventListener('click', handleClose);
+            overlay.removeEventListener('click', handleClose);
+
+            modal.classList.remove('visible');
             setTimeout(() => {
-                qaInputModal.classList.add('visible');
-                qaAnswerTextInput.focus(); // Tự động focus vào ô input
-            }, 10);
+                modal.style.display = 'none';
+                form.reset();
+            }, 300);
+        };
 
-            // Hàm để đóng modal và dọn dẹp
-            const closeModal = (reason = 'closed') => {
-                qaInputModal.classList.remove('visible');
-                setTimeout(() => {
-                    qaInputModal.style.display = 'none';
-                    qaInputForm.reset(); // Xóa nội dung trong form
-                    // Gỡ bỏ các event listener để tránh rò rỉ bộ nhớ
-                    qaInputForm.onsubmit = null;
-                    qaInputModalCloseBtn.onclick = null;
-                    qaInputModalOverlay.onclick = null;
-                    if (reason === 'closed') {
-                        reject('Modal closed by user.'); // Từ chối promise nếu đóng
-                    }
-                }, 300);
-            };
+        submitBtn.addEventListener('click', handleClick);
+        form.addEventListener('submit', handleClick);
+        closeBtn.addEventListener('click', handleClose);
+        overlay.addEventListener('click', handleClose);
+        modal.style.zIndex = getNewTopZIndex();
+        modal.style.display = 'flex';
+        setTimeout(() => {
+            modal.classList.add('visible');
+            answerInput.focus();
+        }, 10);
+    });
+}
 
-            // Gán sự kiện cho nút đóng và vùng nền
-            qaInputModalCloseBtn.onclick = () => closeModal();
-            qaInputModalOverlay.onclick = () => closeModal();
+    async function handleApplyDresSession() {
+        const newSessionId = dresSessionIdInput.value.trim();
+        if (!newSessionId) {
+            showToastNotification('Session ID không được để trống!', 'error');
+            return;
+        }
 
-            // Xử lý khi form được submit
-            qaInputForm.onsubmit = (e) => {
-                e.preventDefault();
-                const answerText = qaAnswerTextInput.value.trim();
-                if (answerText) {
-                    resolve(answerText); // Giải quyết promise với text
-                    closeModal('submitted'); // Đóng modal sau khi submit
-                }
-            };
+        // Lưu session ID mới
+        currentDresSessionId = newSessionId;
+        setUserScopedSetting('dres_session_id', newSessionId);
+        showToastNotification('DRES Session ID đã được lưu.', 'success');
+        
+        // Đóng menu settings và mở modal chọn evaluation
+        settingsMenu.classList.remove('visible');
+        await fetchAndShowEvaluations(newSessionId);
+    }
+
+    /**
+     * Lấy danh sách evaluation từ API và hiển thị trong modal
+     * @param {string} sessionId - Session ID để truy vấn
+     */
+    async function fetchAndShowEvaluations(sessionId) {
+        evaluationListContainer.innerHTML = '<div class="loading-indicator" style="padding: 20px;"><div class="loading-spinner" style="width: 30px; height: 30px;"></div></div>';
+        openEvaluationModal();
+
+        try {
+            const allEvaluations = await fetchDresJson(`${DRES_IP}/v2/client/evaluation/list?session=${encodeURIComponent(sessionId)}`);
+            const activeEvaluations = allEvaluations.filter(e => e.status === 'ACTIVE');
+
+            renderEvaluationsInModal(activeEvaluations);
+
+        } catch (error) {
+            console.error("Lỗi khi lấy danh sách evaluation:", error);
+            evaluationListContainer.innerHTML = `<div class="history-empty">Lỗi: Không thể tải danh sách. Vui lòng kiểm tra lại Session ID.</div>`;
+        }
+    }
+
+    /**
+     * Hiển thị danh sách evaluation trong modal
+     * @param {Array} evaluations - Mảng các evaluation đang hoạt động
+     */
+    function renderEvaluationsInModal(evaluations) {
+        evaluationListContainer.innerHTML = '';
+        if (evaluations.length === 0) {
+            evaluationListContainer.innerHTML = '<div class="history-empty">Không tìm thấy evaluation nào đang hoạt động.</div>';
+            return;
+        }
+
+        const currentSelectedEvalId = getUserScopedSetting('dres_evaluation_id');
+
+        evaluations.forEach(evaluation => {
+            const item = document.createElement('div');
+            item.className = 'evaluation-item';
+            item.innerHTML = `
+                <span class="evaluation-item-name">${evaluation.name}</span>
+                <span class="evaluation-item-id">ID: ${evaluation.id}</span>
+            `;
+
+            if (evaluation.id === currentSelectedEvalId) {
+                item.classList.add('selected');
+            }
+
+            item.addEventListener('click', () => {
+                // Lưu evaluationId được chọn
+                dresEvaluationId = evaluation.id;
+                setUserScopedSetting('dres_evaluation_id', evaluation.id);
+                
+                showToastNotification(`Đã chọn evaluation: ${evaluation.name}`, 'success');
+                
+                // Cập nhật lại UI để highlight lựa chọn mới và đóng modal
+                document.querySelectorAll('.evaluation-item.selected').forEach(el => el.classList.remove('selected'));
+                item.classList.add('selected');
+                closeEvaluationModal();
+            });
+
+            evaluationListContainer.appendChild(item);
         });
     }
 
+    function openEvaluationModal() {
+        evaluationModal.style.display = 'flex';
+        setTimeout(() => evaluationModal.classList.add('visible'), 10);
+    }
 
-function updateSubmitButtonStates() {
+    function closeEvaluationModal() {
+        evaluationModal.classList.remove('visible');
+        setTimeout(() => (evaluationModal.style.display = 'none'), 300);
+    }
+
+
+    function updateSubmitButtonStates() {
         const selectionCount = selectedQueueFrameIds.size;
-        
+
         // Luôn tắt nút KIS nếu không có lựa chọn
         submitAsKisBtn.disabled = selectionCount === 0;
-        
+
         // Chỉ bật nút QA khi có đúng 1 lựa chọn
         submitAsQaBtn.disabled = selectionCount !== 1;
     }
@@ -693,20 +1326,20 @@ function updateSubmitButtonStates() {
             // --- Logic MỚI: Xử lý Shift + Click ---
             if (e.shiftKey && lastClickedFrameId) {
                 const lastClickedIndex = allFrames.findIndex(f => f.dataset.frameId === lastClickedFrameId);
-                
+
                 const start = Math.min(clickedIndex, lastClickedIndex);
                 const end = Math.max(clickedIndex, lastClickedIndex);
 
                 // Bỏ chọn tất cả trước khi chọn khoảng mới
                 document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
                 selectedQueueFrameIds.clear();
-                
+
                 for (let i = start; i <= end; i++) {
                     const id = allFrames[i].dataset.frameId;
                     selectedQueueFrameIds.add(id);
                     allFrames[i].classList.add('selected');
                 }
-            } 
+            }
             // --- Logic đã có: Xử lý Ctrl + Click ---
             else if (e.ctrlKey) {
                 if (selectedQueueFrameIds.has(frameId)) {
@@ -716,9 +1349,9 @@ function updateSubmitButtonStates() {
                     selectedQueueFrameIds.add(frameId);
                     frameItem.classList.add('selected');
                 }
-            } 
+            }
             // --- Logic đã có: Xử lý Click thường ---
-            else { 
+            else {
                 const isAlreadySelected = selectedQueueFrameIds.has(frameId);
                 document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
                 selectedQueueFrameIds.clear();
@@ -739,9 +1372,9 @@ function updateSubmitButtonStates() {
                 lastClickedFrameId = null; // Reset nếu bỏ chọn frame cuối cùng
             }
         }
-        
+
         // Cập nhật trạng thái các nút submit sau mỗi lần thay đổi
-        updateSubmitButtonStates(); 
+        updateSubmitButtonStates();
     });
 
     // Gán sự kiện cho nút Submit as KIS
@@ -760,130 +1393,152 @@ function updateSubmitButtonStates() {
 
     // Gán sự kiện cho nút Submit as QA
     submitAsQaBtn.addEventListener('click', async () => {
+        if (selectedQueueFrameIds.size !== 1) {
+            showToastNotification("Vui lòng chọn chính xác một frame để gửi QA.", "error");
+            return;
+        }
+        const frameIdToSubmit = Array.from(selectedQueueFrameIds)[0];
+        const frameDataToSubmit = submitQueueFrames.get(frameIdToSubmit);
+        if (!frameDataToSubmit) {
+            console.error("Không thể tìm thấy dữ liệu cho frame đã chọn:", frameIdToSubmit);
+            showToastNotification("Lỗi: Không lấy được dữ liệu frame.", "error");
+            return;
+        }
         try {
-            // Gọi hàm mở modal và đợi người dùng nhập câu trả lời
             const answerText = await getQaAnswerFromModal();
-            
-            // Nếu promise được giải quyết (người dùng đã submit), tiếp tục xử lý
-            const selectedFrames = Array.from(selectedQueueFrameIds).map(id => submitQueueFrames.get(id));
-            const success = await submitToDres(selectedFrames, 'QA', answerText);
+            const success = await submitToDres([frameDataToSubmit], 'QA', answerText);
 
-            if (success){
-                // Nếu thành công, xóa frame đã submit khỏi queue
-                selectedFrames.forEach(frameData => {
-                    sendWebSocketMessage('remove_frame', frameData);
-                });
+            if (success) {
+                sendWebSocketMessage('remove_frame', frameDataToSubmit);
                 selectedQueueFrameIds.clear();
                 updateSubmitButtonStates();
             }
         } catch (error) {
-            // Nếu promise bị từ chối (người dùng đóng modal), log ra console
-            // Hoặc bạn có thể hiển thị một toast notification nhỏ
-            console.log("QA submission canceled:", error);
-            showToastNotification("QA submission canceled.", "error");
+            console.log("QA submission was canceled:", error);
+            showToastNotification("Đã hủy gửi QA.", "info");
         }
     });
 
 
-async function ensureDresPrerequisites() {
-        // Nếu đã có evaluationId, không cần làm gì cả.
+    async function ensureDresPrerequisites() {
+        // ===== BẮT ĐẦU PHẦN SỬA ĐỔI LOGIC =====
+
+        // Ưu tiên 1: Nếu người dùng đã chọn evaluationId, sử dụng nó ngay lập tức.
         if (dresEvaluationId) {
             return true;
         }
 
-        // Kiểm tra xem session id mặc định đã được đặt chưa.
-        if (!DEFAULT_DRES_SESSION_ID || DEFAULT_DRES_SESSION_ID === 'YOUR_SESSION_ID_HERE') {
-            showToastNotification("Default DRES Session ID is not set in the code.", "error");
+        // Ưu tiên 2: Nếu chưa có evaluationId, thì mới chạy logic cũ để tự động tìm.
+        // Đây là phương án dự phòng.
+        showToastNotification("Chưa chọn Evaluation, đang tự động tìm...", "info", 1500);
+
+        if (!currentDresSessionId || currentDresSessionId === 'YOUR_SESSION_ID_HERE') {
+            showToastNotification("DRES Session ID chưa được thiết lập trong Cài đặt.", "error");
             return false;
         }
 
         try {
-            showToastNotification("Fetching DRES evaluation list...", "success");
-            const evalResponse = await fetch(`http://192.168.28.151:5000/api/v2/client/evaluation/list?session=${DEFAULT_DRES_SESSION_ID}`);
+            const evalList = await fetchDresJson(`${DRES_IP}/v2/client/evaluation/list?session=${encodeURIComponent(currentDresSessionId)}`);
 
-            if (!evalResponse.ok) {
-                throw new Error(`Failed to get evaluation list: ${evalResponse.statusText}`);
-            }
-            const evalList = await evalResponse.json();
-            
-            // Tìm evaluation đang hoạt động
             const activeEvaluation = evalList.find(e => e.status === 'ACTIVE');
             if (!activeEvaluation) {
                 throw new Error("No active evaluation found in DRES.");
             }
 
-            dresEvaluationId = activeEvaluation.id;
-            showToastNotification(`Active evaluation set: ${activeEvaluation.name}`, "success");
+            dresEvaluationId = activeEvaluation.id; // Gán ID tự động tìm được
+            // Không lưu vào localStorage vì đây là lựa chọn tự động, không phải của người dùng
+            showToastNotification(`Tự động chọn evaluation: ${activeEvaluation.name}`, "success");
             return true;
 
         } catch (error) {
             console.error("DRES Prerequisites Error:", error);
             showToastNotification(error.message, "error", 3000);
-            dresEvaluationId = null; // Reset lại để lần sau thử lại
+            dresEvaluationId = null; // Reset lại
             return false;
         }
+        // ===== KẾT THÚC PHẦN SỬA ĐỔI LOGIC =====
+    }
+    
+
+    async function submitTrakeToDres(trakeFrames) {
+        return submitToDres(trakeFrames, 'TRAKE');
     }
 
-    /**
-     * Hàm submit chính, có khả năng gửi cả KIS và QA.
-     * @param {Array<Object>} framesToSubmit - Mảng các đối tượng frame được chọn.
-     * @param {'KIS' | 'QA'} submissionType - Loại submit.
-     * @param {string} [qaText=''] - Văn bản trả lời cho loại QA.
-     */
     async function submitToDres(framesToSubmit, submissionType, qaText = '') {
+        console.log("thua", qaText)
         if (!framesToSubmit || framesToSubmit.length === 0) return false;
 
-        // Đảm bảo đã có evaluationID.
         const isReady = await ensureDresPrerequisites();
         if (!isReady) {
             showToastNotification("Submission failed. Could not prepare DRES session.", "error");
             return false;
         }
-
+        console.log(qaText);
         let submissionBody = {};
 
         try {
+            // --- KIS: single-frame only ---
             if (submissionType === 'KIS') {
-                let answers;
-                if (framesToSubmit.length === 1) {
-                    // Trường hợp 1 frame
-                    const frame = framesToSubmit[0];
-                    const fps = await getFpsForVideo(frame.videoName);
-                    console.log("fps", fps);
-                    const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
-                    console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
-                    answers = [{ mediaItemName: frame.videoName, start: timeMs, end: timeMs }];
-                } else {
-                    // Trường hợp nhiều frame
-                    const firstVideoName = framesToSubmit[0].videoName;
-                    if (!framesToSubmit.every(f => f.videoName === firstVideoName)) {
-                        throw new Error("Please select frames from the same video for KIS submission.");
-                    }
-                    const fps = await getFpsForVideo(framesToSubmit[0].videoName);
-                    const frameIds = framesToSubmit.map(f => parseInt(f.frame_id_ori, 10));
-                    const minTimeMs = Math.round((Math.min(...frameIds) / fps) * 1000);
-                    const maxTimeMs = Math.round((Math.max(...frameIds) / fps) * 1000);
-                    console.log("frame id:", frame.frame_id_ori, "timeMs:", minTimeMs, maxTimeMs);
-                    answers = [{ mediaItemName: firstVideoName, start: minTimeMs, end: maxTimeMs }];
+                if (framesToSubmit.length !== 1) {
+                    throw new Error("KIS submission only supports a single frame.");
                 }
-                console.log("Final answers for KIS submission:", answers);
-                submissionBody = { answerSets: [{ answers: answers }] };
-
-            } else if (submissionType === 'QA') {
-                if (framesToSubmit.length !== 1) throw new Error("QA submission only supports a single frame.");
                 const frame = framesToSubmit[0];
-                const fps = await getFpsForFrame(frame.videoName, parseInt(frame.frame_id_ori, 10));
+                const fps = await getFpsForVideo(frame.videoName);
                 const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
-                console.log("frame id:", frame.frame_id_ori, "timeMs:", timeMs);
-                const finalText = `${qaText}-${frame.videoName}-${timeMs}`;
-                console.log("Final text for QA submission:", finalText);
-                submissionBody = { answerSets: [{ answers: [{ text: finalText }] }] };
+                submissionBody = {
+                    answerSets: [{
+                        answers: [{ mediaItemName: frame.videoName, start: timeMs, end: timeMs }]
+                    }]
+                };
+            } 
+            // --- BẮT ĐẦU PHẦN LOGIC MỚI CỦA QA ---
+            else if (submissionType === 'QA') {
+                // 1. Xác thực chỉ có một frame được chọn
+                if (framesToSubmit.length !== 1) {
+                    throw new Error("QA submission only supports a single frame.");
+                }
+                
+                // 2. Lấy thông tin của frame duy nhất đó
+                const frame = framesToSubmit[0];
+                const videoId = frame.videoName;
+                const frameIdOri = parseInt(frame.frame_id_ori, 10);
+                
+                // 3. Tính toán thời gian (ms), logic giống hệt KIS
+                const fps = await getFpsForVideo(videoId);
+                const timeMs = Math.round((frameIdOri / fps) * 1000);
 
+                // 4. Xây dựng chuỗi văn bản theo đúng định dạng yêu cầu
+                const finalText = `QA-${qaText}-${videoId}-${timeMs}`;
+                
+                console.log("submit info: ", finalText);
+                // 5. Tạo submissionBody theo cấu trúc của QA
+                submissionBody = {
+                    "answerSets": [{
+                        "answers": [{
+                            "text": finalText
+                        }]
+                    }]
+                };
+            } 
+            // --- KẾT THÚC PHẦN LOGIC MỚI CỦA QA ---
+            else if (submissionType === 'TRAKE') {
+                const videoId = framesToSubmit[0].videoName;
+                const frameIds = framesToSubmit
+                    .map(frame => parseInt(frame.frame_id_ori, 10))
+                    .sort((a, b) => a - b);
+                const frameIdsString = frameIds.join(',');
+                const finalText = `TR-${videoId}-${frameIdsString}`;
+                submissionBody = {
+                    answerSets: [{
+                        answers: [{ text: finalText }]
+                    }]
+                };
             } else {
                 throw new Error("Invalid submission type.");
             }
 
-            const submitUrl = `http://192.168.28.151:5000/api/v2/submit/${dresEvaluationId}?session=${DEFAULT_DRES_SESSION_ID}`;
+            // Bắt đầu gọi API DRES (Phần này không thay đổi)
+            const submitUrl = `${DRES_IP}/v2/submit/${dresEvaluationId}?session=${currentDresSessionId}`;
             showToastNotification(`Submitting as ${submissionType}...`, "success");
 
             const response = await fetch(submitUrl, {
@@ -891,9 +1546,21 @@ async function ensureDresPrerequisites() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(submissionBody)
             });
+            const result = await response.json();
 
-            if (response.ok) {
-                showToastNotification("Submission to DRES successful!", "success", 2000);
+            // Xử lý kết quả trả về (Phần này không thay đổi)
+            if (response.ok && result.submission) {
+                if (result.submission === "WRONG") {
+                    showToastNotification("Kết quả sai, hãy thử lại!", "error");
+                }
+                
+                const submittedFrameIds = framesToSubmit.map(f => f.frameIdentifier);
+
+                sendWebSocketMessage('report_dres_result', {
+                    status: result.submission,
+                    frameIdentifiers: submittedFrameIds
+                });
+                
                 return true;
             } else {
                 const errorText = await response.text();
@@ -907,7 +1574,7 @@ async function ensureDresPrerequisites() {
     }
 
 
-// quan ly nguoi dung
+    // quan ly nguoi dung
     function getUsername() {
         let username = localStorage.getItem('aic_lunch_username');
         while (!username || username.trim() === '') {
@@ -919,11 +1586,8 @@ async function ensureDresPrerequisites() {
 
     function connectWebSocket() {
         currentUser = getUsername();
-        
-        // Xác định giao thức ws:// hoặc wss:// (cho https)
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsUrl = `${wsProtocol}//${window.location.host}/ws/queue/${currentUser}`;
 
+        const wsUrl = `${APP_CONFIG.WEBSOCKET_URL}/ws/queue/${currentUser}`;
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
@@ -952,70 +1616,65 @@ async function ensureDresPrerequisites() {
     function handleWebSocketMessage(message) {
         const { action, payload } = message;
 
-         if (action === 'trake_queue_update') {
-            console.log('[TRAKE] Received queue update from server:', payload);
+        // Xử lý các action cập nhật trạng thái "đúng/sai" trước
+        // Những action này chỉ cập nhật dữ liệu (Set) và sau đó gọi hàm update UI
+        if (action === 'dres_submission_wrong') {
+            console.log("sai roi con di");
+            payload.frameIdentifiers.forEach(id => wrongSubmissionIds.add(id));
+            updateWrongSubmissionUI();
+            showGlobalAlert(payload.submittedBy, 'cac');
+            return; // Dừng lại, không xử lý tiếp
         }
 
+        if (action === 'dres_submission_correct') {
+            wrongSubmissionIds.clear();
+            updateWrongSubmissionUI();
+            showGlobalAlert(payload.submittedBy, 'correct');
+            return;
+        }
+
+        // Xử lý các action cập nhật queue và trạng thái ban đầu
+        // Những action này sẽ render lại một phần hoặc toàn bộ giao diện
         switch (action) {
             case 'init_state':
-                userColors = payload.users;
-                renderFullQueue(payload.queue);
-                queuedFramesSet = new Set(payload.queue.map(frame => frame.frameIdentifier));
-                if (allImages.length > 0) {
-                    allImages = allImages.map(image => ({
-                        ...image,
-                        isInQueue: queuedFramesSet.has(image.frameIdentifier)
-                    }));
+                if (window.isInitialStateReceived === undefined) {
+                    wrongSubmissionIds = new Set(payload.wrongSubmissionIds || []);
+                    window.isInitialStateReceived = true; // Đánh dấu đã nhận
                 }
-                if (allGroupedData.length > 0) {
-                    allGroupedData.forEach(group => {
-                        group.frames = group.frames.map(image => ({
-                            ...image,
-                            isInQueue: queuedFramesSet.has(image.frameIdentifier)
-                        }));
-                    });
-                }
-                const resultFrames = document.querySelectorAll('.main-content .image-item');
-                resultFrames.forEach(frameElement => {
-                    const frameId = frameElement.getAttribute('data-frame-identifier');
-                    if (queuedFramesSet.has(frameId)) {
-                        frameElement.classList.add('is-in-queue');
-                    } else {
-                        frameElement.classList.remove('is-in-queue');
-                    }
-                });
 
-                // updateSearchResultsUI();
+                userColors = payload.users;
+                queuedFramesSet = new Set(payload.queue.map(frame => frame.frameIdentifier));
+                renderFullQueue(payload.queue);
+                updateSearchResultsQueueStatus();
+
                 if (resolveInitialStatePromise) {
                     resolveInitialStatePromise();
-                    resolveInitialStatePromise = null; 
+                    resolveInitialStatePromise = null;
                 }
                 break;
+
             case 'user_update':
                 userColors = payload.users;
-                // renderUserLegend();
-                break;
-            case 'frames_added':
-                // Chỉ cần thêm các frame mới vào queue
-                payload.forEach(frame => {
-                    if (!submitQueueFrames.has(frame.frameIdentifier)) {
-                        submitQueueFrames.set(frame.frameIdentifier, frame);
-                    }
-                });
-                renderFullQueue(Array.from(submitQueueFrames.values()));
-                break;
-            case 'frame_removed':
-                submitQueueFrames.delete(payload.frameIdentifier);
-                renderFullQueue(Array.from(submitQueueFrames.values()));
-                break;
-            case 'queue_cleared':
-                submitQueueFrames.clear();
-                renderFullQueue([]);
                 break;
             case 'trake_queue_update':
+                console.log('[TRAKE] Received queue update from server:', payload);
                 renderTrakeQueue(payload);
                 break;
+            case 'special_submission_alert':
+                if (payload && payload.username) {
+                    showGlobalAlert(payload.username, 'special');
+                }
+                break;
         }
+    }
+
+    function updateSearchResultsQueueStatus() {
+        const resultFrames = document.querySelectorAll('.main-content .image-item');
+        resultFrames.forEach(frameElement => {
+            const frameId = frameElement.getAttribute('data-frame-identifier');
+            const isInQueue = queuedFramesSet.has(frameId);
+            frameElement.classList.toggle('is-in-queue', isInQueue);
+        });
     }
 
     function sendWebSocketMessage(action, payload) {
@@ -1026,38 +1685,166 @@ async function ensureDresPrerequisites() {
         }
     }
 
+    // THAY THẾ TOÀN BỘ HÀM openTemporalChainModal BẰNG PHIÊN BẢN NÀY
 
-    function updateSearchResultsUI() {
-        const resultFrames = document.querySelectorAll('.main-content .image-item');
+async function openTemporalChainModal(baseFrame, temporalChain) {
+    const modal = document.getElementById('temporalChainModal');
+    const mainPreview = document.getElementById('temporalMainPreviewImage');
+    const thumbnailStrip = document.getElementById('temporalThumbnailStrip');
+    const modalFrameInfo = document.getElementById('temporalModalFrameInfo');
 
-        resultFrames.forEach(frameElement => {
-            const frameId = frameElement.getAttribute('data-frame-identifier');
+    // Biến trạng thái, chỉ tồn tại bên trong hàm này
+    let currentModalFrameData = null;
 
-            if (queuedFramesSet.has(frameId)) {
-                frameElement.classList.add('is-in-queue');
-            } else {
-                frameElement.classList.remove('is-in-queue');
-            }
-        });
+    // 1. Chuẩn bị và xử lý dữ liệu (logic gốc, không thay đổi)
+    const sortedQueryIds = Object.keys(temporalChain).sort((a, b) => a - b);
+    const chainFramesData = sortedQueryIds.map(queryId => temporalChain[queryId]);
+    const allFramesRaw = [baseFrame, ...chainFramesData];
+    const uniqueFramesMap = new Map();
+    allFramesRaw.forEach((frame, index) => {
+        let identifier;
+        if (index === 0) {
+            identifier = frame.frameIdentifier;
+        } else {
+            const metadata = frame.metadata;
+            identifier = `${metadata.video_name}_${metadata.frame_id}`;
+        }
+        if (!uniqueFramesMap.has(identifier)) {
+            uniqueFramesMap.set(identifier, frame);
+        }
+    });
+    const uniqueFramesRaw = Array.from(uniqueFramesMap.values());
+
+    // 'processedFrames' là biến CỦA RIÊNG MODAL NÀY
+    const processedFrames = uniqueFramesRaw.map((frame, index) => {
+        let path, frameIdentifier, videoName, timestamp, score, frame_id_ori;
+        if (frame.frameIdentifier) {
+            path = frame.path;
+            frameIdentifier = frame.frameIdentifier;
+            videoName = frame.videoName;
+            timestamp = frame.timestamp;
+            score = frame.temporal_score !== undefined ? frame.temporal_score : frame.score;
+            frame_id_ori = frame.frame_id_ori;
+        } else {
+            const metadata = frame.metadata;
+            if (!metadata || !metadata.frame_name || !metadata.video_name) return null;
+            const fullFrameName = metadata.frame_name.endsWith('.webp') ? metadata.frame_name : `${metadata.frame_name}.webp`;
+            videoName = metadata.video_name;
+            path = getFrameUrl(videoName, fullFrameName);
+            frame_id_ori = metadata.frame_id;
+            frameIdentifier = `${videoName}_${frame_id_ori}`;
+            timestamp = metadata.timestamp;
+            score = frame.temporal_score;
+        }
+        const originalQueryIndex = sortedQueryIds.findIndex(qid => temporalChain[qid] && temporalChain[qid].metadata.frame_id === frame_id_ori);
+        const queryLabel = (frameIdentifier === baseFrame.frameIdentifier) ? 'A (Start)' : `Chain ${String.fromCharCode(65 + originalQueryIndex + 1)}`;
+        return { path, frameIdentifier, queryLabel, score, videoName, timestamp, frame_id_ori };
+    }).filter(Boolean);
+
+
+    // 2. Định nghĩa các hàm con (chỉ hoạt động trong phạm vi của modal này)
+    
+    // Hàm con updateMainPreview CỦA RIÊNG MODAL NÀY
+    function updateMainPreview(frameData) {
+        if (!frameData) return;
+        currentModalFrameData = frameData; // Cập nhật biến trạng thái
+        setFrameImageSource(mainPreview, frameData.path);
+        modalFrameInfo.textContent = `${frameData.queryLabel}: ${frameData.frameIdentifier} | Score: ${frameData.score.toFixed(4)}`;
+
+        const oldCurrent = thumbnailStrip.querySelector('.current-frame');
+        if (oldCurrent) oldCurrent.classList.remove('current-frame');
+        const newCurrent = thumbnailStrip.querySelector(`[data-frame-identifier="${frameData.frameIdentifier}"]`);
+        if (newCurrent) {
+            newCurrent.classList.add('current-frame');
+            newCurrent.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+        }
     }
 
+    // Hàm con wheelHandler CỦA RIÊNG MODAL NÀY, sử dụng 'processedFrames'
+    const wheelHandler = (e) => {
+        e.preventDefault();
+        const currentIndex = processedFrames.findIndex(f => f.path === currentModalFrameData.path);
+        if (currentIndex === -1) return;
+        let nextIndex = currentIndex + (e.deltaY > 0 ? 1 : -1);
+        nextIndex = Math.max(0, Math.min(processedFrames.length - 1, nextIndex));
+        if (nextIndex !== currentIndex) {
+            updateMainPreview(processedFrames[nextIndex]);
+        }
+    };
 
+    // Hàm con keydownHandler CỦA RIÊNG MODAL NÀY, sử dụng 'processedFrames'
+    const keydownHandler = (e) => {
+        const key = e.key.toLowerCase();
+        if (key === 'escape') { closeModal(); return; }
+        
+        // Dòng này sẽ không còn lỗi vì 'currentModalFrameData' được 'updateMainPreview' khởi tạo trước
+        if (!currentModalFrameData) return;
 
-    function resetTagFiltering() {
-        // 1. Tắt biến cờ toàn cục
-        isTagFilterEnabled = false;
-        // 2. Tắt trạng thái 'active' của nút
-        const tagFilterBtn = document.getElementById('tagFilterBtn');
-        if (tagFilterBtn) {
-            tagFilterBtn.classList.remove('active');
+        const currentIndex = processedFrames.findIndex(f => f.path === currentModalFrameData.path);
+        if (currentIndex === -1) return;
+
+        if (key === 'arrowright') {
+            const nextIndex = Math.min(processedFrames.length - 1, currentIndex + 1);
+            updateMainPreview(processedFrames[nextIndex]);
+            return;
+        } else if (key === 'arrowleft') {
+            const nextIndex = Math.max(0, currentIndex - 1);
+            updateMainPreview(processedFrames[nextIndex]);
+            return;
         }
 
-        // 3. Ẩn tất cả các ô nhập tag đang hiển thị
-        // const allTagContainers = document.querySelectorAll('.tag-filter-container.visible');
-        // allTagContainers.forEach(container => {
-        //     container.classList.remove('visible');
-        // });
+        e.preventDefault();
+
+        if (key === 'd' || key === 'a') {
+            const isSpecial = key === 'a';
+            const frameDataToSend = { ...currentModalFrameData, isSpecial: isSpecial };
+            addFramesToQueue([frameDataToSend]);
+            closeModal();
+        } else if (key === 's') {
+            closeModal(() => initiateImageTemporalSearch(currentModalFrameData.path));
+        }
+    };
+
+    // Hàm con clickThumbnailHandler CỦA RIÊNG MODAL NÀY
+    const clickThumbnailHandler = (e) => {
+        if (e.target.tagName === 'IMG' && e.target.frameData) {
+            updateMainPreview(e.target.frameData);
+        }
+    };
+
+    // Hàm con closeModal CỦA RIÊNG MODAL NÀY, gỡ đúng các sự kiện
+    function closeModal(onClosedCallback = null) {
+        modal.removeEventListener('wheel', wheelHandler);
+        document.removeEventListener('keydown', keydownHandler);
+        thumbnailStrip.removeEventListener('click', clickThumbnailHandler);
+        modal.style.display = 'none';
+        mainPreview.src = "";
+        if (typeof onClosedCallback === 'function') {
+            setTimeout(onClosedCallback, 50);
+        }
     }
+
+    // 3. Populate UI và gán sự kiện (logic gốc, không thay đổi)
+    thumbnailStrip.innerHTML = '';
+    processedFrames.forEach(frame => {
+        const thumb = document.createElement('img');
+        setFrameImageSource(thumb, frame.path);
+        thumb.title = `${frame.queryLabel}: ${frame.frameIdentifier}\nScore: ${frame.score.toFixed(4)}`;
+        thumb.frameData = frame;
+        thumb.dataset.frameIdentifier = frame.frameIdentifier;
+        thumbnailStrip.appendChild(thumb);
+    });
+
+    modal.addEventListener('wheel', wheelHandler, { passive: false });
+    document.addEventListener('keydown', keydownHandler);
+    thumbnailStrip.addEventListener('click', clickThumbnailHandler);
+    modal.querySelector('.modal-overlay').onclick = () => closeModal();
+    modal.style.zIndex = getNewTopZIndex();
+    
+    // 4. Hiển thị modal và gọi updateMainPreview để khởi tạo 'currentModalFrameData'
+    modal.style.display = 'flex';
+    updateMainPreview(processedFrames[0]);
+}
 
     function updateModelHighlight() {
         const menuItems = document.querySelectorAll('#settingsMenu li');
@@ -1077,110 +1864,110 @@ async function ensureDresPrerequisites() {
         // Danh sách các nút trên header theo thứ tự từ trái sang phải
         const headerButtons = [
             document.getElementById('textToImageBtn'),
-            document.getElementById('textToTextBtn'),
-            document.getElementById('imageToImageBtn'),
-            document.getElementById('translateBtn')
+                          document.getElementById('textToTextBtn'),
+                          document.getElementById('imageToImageBtn'),
+                          document.getElementById('translateBtn')
         ];
-        
+
         // Thêm thuộc tính tabindex cho các nút để có thể focus
         headerButtons.forEach(btn => {
             if (btn) btn.setAttribute('tabindex', '0');
         });
-        
-        // Xử lý sự kiện keydown trên toàn trang
-        document.addEventListener('keydown', function(e) {
-            // Nếu đang focus vào một input, textarea hoặc bất kỳ element có thể edit
-            // thì không xử lý phím tắt (để người dùng có thể nhập bình thường)
-            const activeElement = document.activeElement;
-            const isEditableElement = activeElement.tagName === 'INPUT' || 
-                                activeElement.tagName === 'TEXTAREA' || 
-                                activeElement.isContentEditable;
-            
-            if (e.key === 'Escape' && isEditableElement) {
-                // Nếu đang trong ô tìm kiếm và nhấn Escape
-                if (activeElement.classList.contains('search-input')) {
-                    e.preventDefault();
-                    activeElement.blur(); // Thoát khỏi ô tìm kiếm
-                    return; // Không xử lý các logic khác
-                }
-            }
 
-            if (settingsMenu.classList.contains('visible')) {
-                const menuItems = document.querySelectorAll('#settingsMenu li');
-                if (menuItems.length === 0) return;
+            // Xử lý sự kiện keydown trên toàn trang
+            document.addEventListener('keydown', function(e) {
+                // Nếu đang focus vào một input, textarea hoặc bất kỳ element có thể edit
+                // thì không xử lý phím tắt (để người dùng có thể nhập bình thường)
+                const activeElement = document.activeElement;
+                const isEditableElement = activeElement.tagName === 'INPUT' ||
+                activeElement.tagName === 'TEXTAREA' ||
+                activeElement.isContentEditable;
 
-                // Xử lý phím mũi tên xuống
-                if (e.key === 'ArrowDown') {
-                    e.preventDefault(); // Ngăn trang cuộn xuống
-                    highlightedModelIndex++;
-                    if (highlightedModelIndex >= menuItems.length) {
-                        highlightedModelIndex = 0; // Quay lại đầu danh sách
-                    }
-                    updateModelHighlight();
-                }
-                // Xử lý phím mũi tên lên
-                else if (e.key === 'ArrowUp') {
-                    e.preventDefault(); // Ngăn trang cuộn lên
-                    highlightedModelIndex--;
-                    if (highlightedModelIndex < 0) {
-                        highlightedModelIndex = menuItems.length - 1; // Đi đến cuối danh sách
-                    }
-                    updateModelHighlight();
-                }
-                // Xử lý phím Enter
-                else if (e.key === 'Enter') {
-                    e.preventDefault();
-                    if (highlightedModelIndex > -1) {
-                        menuItems[highlightedModelIndex].click(); // Giả lập một cú click chuột
+                if (e.key === 'Escape' && isEditableElement) {
+                    // Nếu đang trong ô tìm kiếm và nhấn Escape
+                    if (activeElement.classList.contains('search-input')) {
+                        e.preventDefault();
+                        activeElement.blur(); // Thoát khỏi ô tìm kiếm
+                        return; // Không xử lý các logic khác
                     }
                 }
-                // Xử lý phím Escape để đóng menu (UX bonus)
-                else if (e.key === 'Escape') {
-                    toggleSettingsMenu();
-                }
-            } 
-            
 
-        });
-        
-        // Xử lý khi focus vào/ra các nút header
-        headerButtons.forEach(btn => {
-            if (!btn) return;
-            
-            btn.addEventListener('focus', function() {
-                currentHeaderFocus = btn;
-                headerButtons.forEach(b => b.classList.remove('keyboard-focus'));
-                btn.classList.add('keyboard-focus');
-            });
-            
-            btn.addEventListener('blur', function() {
-                // Chỉ xóa highlight khi không chuyển focus sang nút header khác
-                setTimeout(() => {
-                    if (!headerButtons.includes(document.activeElement)) {
-                        btn.classList.remove('keyboard-focus');
-                        currentHeaderFocus = null;
+                if (settingsMenu.classList.contains('visible')) {
+                    const menuItems = document.querySelectorAll('#settingsMenu li');
+                    if (menuItems.length === 0) return;
+
+                    // Xử lý phím mũi tên xuống
+                    if (e.key === 'ArrowDown') {
+                        e.preventDefault(); // Ngăn trang cuộn xuống
+                        highlightedModelIndex++;
+                        if (highlightedModelIndex >= menuItems.length) {
+                            highlightedModelIndex = 0; // Quay lại đầu danh sách
+                        }
+                        updateModelHighlight();
                     }
-                }, 10);
+                    // Xử lý phím mũi tên lên
+                    else if (e.key === 'ArrowUp') {
+                        e.preventDefault(); // Ngăn trang cuộn lên
+                        highlightedModelIndex--;
+                        if (highlightedModelIndex < 0) {
+                            highlightedModelIndex = menuItems.length - 1; // Đi đến cuối danh sách
+                        }
+                        updateModelHighlight();
+                    }
+                    // Xử lý phím Enter
+                    else if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (highlightedModelIndex > -1) {
+                            menuItems[highlightedModelIndex].click(); // Giả lập một cú click chuột
+                        }
+                    }
+                    // Xử lý phím Escape để đóng menu (UX bonus)
+                    else if (e.key === 'Escape') {
+                        toggleSettingsMenu();
+                    }
+                }
+
+
             });
-            
-            // Thêm sự kiện mouseenter/mouseleave để xử lý visual cues
-            btn.addEventListener('mouseenter', function() {
-                // Thêm class hover nếu cần
-                btn.classList.add('header-btn-hover');
+
+            // Xử lý khi focus vào/ra các nút header
+            headerButtons.forEach(btn => {
+                if (!btn) return;
+
+                btn.addEventListener('focus', function() {
+                    currentHeaderFocus = btn;
+                    headerButtons.forEach(b => b.classList.remove('keyboard-focus'));
+                    btn.classList.add('keyboard-focus');
+                });
+
+                btn.addEventListener('blur', function() {
+                    // Chỉ xóa highlight khi không chuyển focus sang nút header khác
+                    setTimeout(() => {
+                        if (!headerButtons.includes(document.activeElement)) {
+                            btn.classList.remove('keyboard-focus');
+                            currentHeaderFocus = null;
+                        }
+                    }, 10);
+                });
+
+                // Thêm sự kiện mouseenter/mouseleave để xử lý visual cues
+                btn.addEventListener('mouseenter', function() {
+                    // Thêm class hover nếu cần
+                    btn.classList.add('header-btn-hover');
+                });
+
+                btn.addEventListener('mouseleave', function() {
+                    // Xóa class hover
+                    btn.classList.remove('header-btn-hover');
+                });
             });
-            
-            btn.addEventListener('mouseleave', function() {
-                // Xóa class hover
-                btn.classList.remove('header-btn-hover');
-            });
-        });
     }
 
 
     // HÀM MỚI: Lấy danh sách model từ API
     async function fetchAvailableModels() {
         try {
-            const response = await fetch('/api/models');
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/models`);
             if (!response.ok) throw new Error('Failed to fetch models');
             const data = await response.json();
             availableModels = data.models || [];
@@ -1208,7 +1995,7 @@ async function ensureDresPrerequisites() {
         availableModels.forEach(model => {
             const modelItem = document.createElement('li');
             // Lấy tên ngắn gọn của model
-            const displayName = model.split('/').pop(); 
+            const displayName = model.split('/').pop();
             modelItem.textContent = displayName;
             modelItem.dataset.model = model;
             menuList.appendChild(modelItem);
@@ -1237,8 +2024,8 @@ async function ensureDresPrerequisites() {
     // HÀM MỚI: Xử lý khi người dùng chọn model
     function selectModel(modelName) {
         currentSelectedModel = modelName;
-        console.log('Selected model:', currentSelectedModel);
-        localStorage.setItem('user_selected_model', modelName);
+        console.log('Selected model:', currentSelectedModel, 'for user:', currentUserId);
+        setUserScopedSetting('selected_model', modelName);
         updateSelectedModelUI();
     }
 
@@ -1253,160 +2040,104 @@ async function ensureDresPrerequisites() {
             }
         });
     }
-// Thay thế hàm cũ bằng hàm này
-async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
-    if (!text || typeof text !== "string") return '';
-
-    const LLM_API_URL = 'http://192.168.20.156:5070/v1/chat/completions';
-    
-    const MODEL_NAME = 'unsloth/Qwen3-4B-Instruct-2507-unsloth-bnb-4bit'; 
-
-    const systemPrompt = `You are an expert translator. Your task is to translate text from Vietnamese to English accurately and concisely. Do not add any extra explanations, comments, or apologies. Provide ONLY the translated English text.`;
-
-    const body = {
-        model: MODEL_NAME,
-        messages: [
-            {
-                role: 'system',
-                content: systemPrompt
-            },
-            {
-                role: 'user', 
-                content: text
-            }
-        ],
-        temperature: 0.1,  
-        max_tokens: 1024,  
-        stream: false       
-    };
-
-    try {
-        const response = await fetch(LLM_API_URL, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(body)
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`Lỗi API LLM: ${response.status} - ${errorText}`);
-        }
-
-        const data = await response.json();
-
-        if (data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content) {
-            const translatedText = data.choices[0].message.content.trim();
-            return translatedText;
-        } else {
-            throw new Error('Cấu trúc phản hồi từ API LLM không hợp lệ.');
-        }
-
-    } catch (error) {
-        console.error('Lỗi khi gọi API dịch của LLM:', error);
-        return text; 
-    }
-}
-
     function switchSearchMode(mode) {
         // Cập nhật UI của các nút
         textToImageBtn.classList.toggle('active', mode === 'text-to-image');
         imageToImageBtn.classList.toggle('active', mode === 'image-to-image');
-        
+
         // Cập nhật mode hiện tại
         currentSearchMode = mode;
-        
-        
+
+
         // Cập nhật giao diện tìm kiếm
         updateSearchMode();
-        
+
         // Xử lý khi chuyển từ image-to-image sang chế độ text
         if (mode !== 'image-to-image') {
             const firstSearchGroup = document.querySelector('.search-input-group');
             if (firstSearchGroup) {
                 const textInput = firstSearchGroup.querySelector('.search-input');
-                
+
                 if (textInput && textInput.style.display === 'none') {
                     // Nếu textInput đang bị ẩn (đang ở chế độ image-to-image),
                     // tạo lại thanh tìm kiếm đầu tiên
                     searchInputsContainer.innerHTML = '';  // Xóa tất cả thanh tìm kiếm
-                    
+
                     // Tạo thanh tìm kiếm mới
                     const newSearchGroup = document.createElement('div');
                     newSearchGroup.className = 'search-input-group';
                     newSearchGroup.setAttribute('data-search-id', '1');
-                    
+
                     // Cập nhật placeholder tùy theo mode
                     let placeholder = "In Image";
                     if (mode === 'text-to-text') {
                         placeholder = "In Text";
                     }
-                    
+
                     newSearchGroup.innerHTML = `
-                        <div class="search-box">
-                            <textarea 
-                                class="search-input"
-                                placeholder="${placeholder}"
-                                rows="1"
-                                data-mode="${mode}"
-                            ></textarea>
-                            <div class="translated-query-display"></div>
-                            <div class="autocorrect-suggestion-display"></div>
-                            <div class="image-upload-area" style="display: none;">
-                                <input type="file" class="image-input" accept="image/*" style="display: none;">
-                                <div class="upload-zone">
-                                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                                        <circle cx="8.5" cy="8.5" r="1.5"/>
-                                        <polyline points="21,15 16,10 5,21"/>
-                                    </svg>
-                                    <p>Kéo thả ảnh vào đây hoặc click để chọn</p>
-                                    <div class="uploaded-image" style="display: none;">
-                                        <img src="" alt="Uploaded image">
-                                        <button class="remove-image">×</button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="search-box">
+                    <textarea
+                    class="search-input"
+                    placeholder="${placeholder}"
+                    rows="1"
+                    data-mode="${mode}"
+                    ></textarea>
+                    <div class="translated-query-display"></div>
+                    <div class="autocorrect-suggestion-display"></div>
+                    <div class="image-upload-area" style="display: none;">
+                    <input type="file" class="image-input" accept="image/*" style="display: none;">
+                    <div class="upload-zone">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+                    <circle cx="8.5" cy="8.5" r="1.5"/>
+                    <polyline points="21,15 16,10 5,21"/>
+                    </svg>
+                    <p>Kéo thả ảnh vào đây hoặc click để chọn</p>
+                    <div class="uploaded-image" style="display: none;">
+                    <img src="" alt="Uploaded image">
+                    <button class="remove-image">×</button>
+                    </div>
+                    </div>
+                    </div>
+                    </div>
                     `;
-                    
+
                     searchInputsContainer.appendChild(newSearchGroup);
                     setupSearchInput(newSearchGroup);
-                    
+
                     // Focus vào thanh tìm kiếm mới
                     const newInput = newSearchGroup.querySelector('.search-input');
                     if (newInput) {
                         newInput.focus();
                     }
                 } else if (textInput && mode !== 'image-to-image') {
-                    // THÊM VÀO: Nếu đã có textInput (không cần tạo mới), 
+                    // THÊM VÀO: Nếu đã có textInput (không cần tạo mới),
                     // vẫn focus vào nó khi chuyển giữa các chế độ text
                     textInput.focus();
                 }
             }
         }
     }
-    
+
     function updateSearchMode() {
         const searchInputGroups = document.querySelectorAll('.search-input-group');
         searchInputGroups.forEach(group => {
             const textInput = group.querySelector('.search-input');
             const imageUploadArea = group.querySelector('.image-upload-area');
-            
+
             if (currentSearchMode === 'text-to-image' || currentSearchMode === 'text-to-text') {
                 // Hiện thanh tìm kiếm văn bản, ẩn khung tải ảnh
                 textInput.style.display = 'block';
                 imageUploadArea.style.display = 'none';
                 textInput.setAttribute('data-mode', currentSearchMode);
-                
+
                 // Cập nhật placeholder tùy theo mode
                 if (currentSearchMode === 'text-to-image') {
                     textInput.placeholder = "In Image";
                 } else {
                     textInput.placeholder = "In Text";
                 }
-                
+
                 // THÊM VÀO: Tự động focus vào ô tìm kiếm đầu tiên nếu có
                 if (group === searchInputGroups[0]) {
                     setTimeout(() => textInput.focus(), 0);
@@ -1419,27 +2150,27 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             }
         });
     }
-    
+
     function handleModeButtonClick(e) {
         if (e.target.classList.contains('mode-btn')) {
             // Update active button
-            searchModeButtons.querySelectorAll('.mode-btn').forEach(btn => 
-                btn.classList.remove('active')
+            searchModeButtons.querySelectorAll('.mode-btn').forEach(btn =>
+            btn.classList.remove('active')
             );
             e.target.classList.add('active');
-            
+
             // Update current mode
             currentSearchMode = e.target.dataset.mode;
             updateSearchMode();
         }
     }
-    
+
     function createNewSearchInput() {
         searchIdCounter++;
         const newSearchGroup = document.createElement('div');
         newSearchGroup.className = 'search-input-group';
         newSearchGroup.setAttribute('data-search-id', searchIdCounter);
-        
+
         // Cập nhật placeholder tùy theo mode hiện tại
         let placeholder = "Search";
         if (currentSearchMode === 'text-to-image') {
@@ -1447,70 +2178,70 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         } else if (currentSearchMode === 'text-to-text') {
             placeholder = "In Text";
         }
-        
+
         newSearchGroup.innerHTML = `
-            <div class="search-box">
-                <textarea 
-                    class="search-input"
-                    placeholder="${placeholder}"
-                    rows="1"
-                    data-mode="${currentSearchMode}"
-                ></textarea>
-                <div class="translated-query-display"></div>
-                <div class="autocorrect-suggestion-display"></div>
-                 <div class="tag-filter-container">
-                    <input type="text" class="tag-input" placeholder="Enter tags">
-                </div>  
-                <div class="ocr-filter-container">
-                    <input type="text" class="ocr-input" placeholder="Enter OCR">
-                    <div class="fuzzy-switch-wrapper">
-                        <label class="fuzzy-switch-container">
-                            <input type="checkbox"> <!-- Không cần ID ở đây vì nó sẽ là duy nhất trong group -->
-                            <span class="slider round"></span>
-                        </label>
-                        <span>Fuzzy Search</span>
-                    </div>
-                </div>
-                <div class="asr-filter-container">
-                    <input type="text" class="asr-input" placeholder="Enter ASR">
-                    <div class="fuzzy-switch-wrapper">
-                        <label class="fuzzy-switch-container">
-                            <input type="checkbox">
-                            <span class="slider round"></span>
-                        </label>
-                        <span>Fuzzy Search</span>
-                    </div>
-                </div>
-                <div class="image-upload-area" style="display: none;">
-                    <input type="file" class="image-input" accept="image/*" style="display: none;">
-                    <div class="upload-zone">
-                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
-                            <circle cx="8.5" cy="8.5" r="1.5"/>
-                            <polyline points="21,15 16,10 5,21"/>
-                        </svg>
-                        <p>Kéo thả ảnh vào đây hoặc click để chọn</p>
-                        <div class="uploaded-image" style="display: none;">
-                            <img src="" alt="Uploaded image">
-                            <button class="remove-image">×</button>
-                        </div>
-                    </div>
-                </div>
-            </div>
+        <div class="search-box">
+        <textarea
+        class="search-input"
+        placeholder="${placeholder}"
+        rows="1"
+        data-mode="${currentSearchMode}"
+        ></textarea>
+        <div class="translated-query-display"></div>
+        <div class="autocorrect-suggestion-display"></div>
+        <div class="tag-filter-container">
+        <input type="text" class="tag-input" placeholder="Enter tags">
+        </div>
+        <div class="ocr-filter-container">
+        <input type="text" class="ocr-input" placeholder="Enter OCR">
+        <div class="fuzzy-switch-wrapper">
+        <label class="fuzzy-switch-container">
+        <input type="checkbox"> <!-- Không cần ID ở đây vì nó sẽ là duy nhất trong group -->
+        <span class="slider round"></span>
+        </label>
+        <span>Fuzzy Search</span>
+        </div>
+        </div>
+        <div class="asr-filter-container">
+        <input type="text" class="asr-input" placeholder="Enter ASR">
+        <div class="fuzzy-switch-wrapper">
+        <label class="fuzzy-switch-container">
+        <input type="checkbox">
+        <span class="slider round"></span>
+        </label>
+        <span>Fuzzy Search</span>
+        </div>
+        </div>
+        <div class="image-upload-area" style="display: none;">
+        <input type="file" class="image-input" accept="image/*" style="display: none;">
+        <div class="upload-zone">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+        <circle cx="8.5" cy="8.5" r="1.5"/>
+        <polyline points="21,15 16,10 5,21"/>
+        </svg>
+        <p>Kéo thả ảnh vào đây hoặc click để chọn</p>
+        <div class="uploaded-image" style="display: none;">
+        <img src="" alt="Uploaded image">
+        <button class="remove-image">×</button>
+        </div>
+        </div>
+        </div>
+        </div>
         `;
-        
+
         searchInputsContainer.appendChild(newSearchGroup);
         setupSearchInput(newSearchGroup);
-        
+
         // Update mode display
         updateSearchMode();
-        
+
         // Trả về element input mới được tạo
         const newInput = newSearchGroup.querySelector('.search-input');
         return newInput;
     }
-    
-   function setupSearchInput(searchGroup) {
+
+    function setupSearchInput(searchGroup) {
         const textInput = searchGroup.querySelector('.search-input');
         const ocrInput = searchGroup.querySelector('.ocr-input');
         const imageInput = searchGroup.querySelector('.image-input');
@@ -1528,7 +2259,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                 translationDisplay.classList.remove('visible');
             }
         });
-        
+
         if (ocrInput) {
             ocrInput.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') {
@@ -1542,7 +2273,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             tagInput.addEventListener('keydown', function(e) {
                 if (e.key === 'Enter') {
                     e.preventDefault(); // Ngăn hành vi mặc định của Enter
-                    
+
                     // Chuyển focus trở lại ô tìm kiếm chính
                     textInput.focus();
                 }
@@ -1586,11 +2317,11 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         textInput.addEventListener('keydown', function(e) {
             if (e.key === 'Tab') {
                 const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
-                
+
                 if (suggestionDisplay.classList.contains('visible') && suggestionDisplay.dataset.suggestion) {
-                    e.preventDefault(); 
+                    e.preventDefault();
                     const correctedText = suggestionDisplay.dataset.suggestion;
-                    this.value = correctedText + ' '; 
+                    this.value = correctedText + ' ';
                     suggestionDisplay.classList.remove('visible');
                     suggestionDisplay.dataset.suggestion = '';
                     autoResizeTextarea(this);
@@ -1611,7 +2342,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             if (this.classList.contains('visible') && this.dataset.suggestion) {
                 const correctedText = this.dataset.suggestion;
                 textInput.value = correctedText + ' ';
-                
+
                 this.classList.remove('visible');
                 this.dataset.suggestion = '';
 
@@ -1626,19 +2357,19 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 const searchQuery = this.value;
-                
+
                 // Thực hiện tìm kiếm
                 performSearch(searchQuery, 'text', searchGroup);
             }
         });
-        
+
         textInput.addEventListener('keydown', function(e) {
             // Chỉ xử lý khi người dùng nhấn mũi tên lên hoặc xuống
             if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-                
+
                 // 1. Lấy tất cả các ô tìm kiếm đang có trên trang theo đúng thứ tự
                 const allInputs = Array.from(document.querySelectorAll('.search-inputs-container .search-input'));
-                
+
                 // 2. Tìm vị trí (index) của ô tìm kiếm hiện tại mà bạn đang focus
                 const currentIndex = allInputs.indexOf(this);
 
@@ -1660,11 +2391,11 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                 // 4. Nếu đã tìm thấy ô tiếp theo, di chuyển focus đến đó
                 if (nextInput) {
                     // Ngăn hành vi mặc định của phím mũi tên (di chuyển con trỏ trong textarea)
-                    e.preventDefault(); 
-                    
+                    e.preventDefault();
+
                     // Di chuyển focus
                     nextInput.focus();
-                    
+
                     // (Tùy chọn UX) Đặt con trỏ ở cuối văn bản trong ô mới
                     const len = nextInput.value.length;
                     nextInput.setSelectionRange(len, len);
@@ -1676,7 +2407,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         uploadZone.addEventListener('click', function() {
             imageInput.click();
         });
-        
+
         // Image file selection
         imageInput.addEventListener('change', function(e) {
             const file = e.target.files[0];
@@ -1684,51 +2415,92 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                 handleImageUpload(file, searchGroup);
             }
         });
-        
+
         // Drag and drop
         uploadZone.addEventListener('dragover', function(e) {
             e.preventDefault();
             this.classList.add('drag-over');
         });
-        
+
         uploadZone.addEventListener('dragleave', function(e) {
             e.preventDefault();
             this.classList.remove('drag-over');
         });
-        
+
         uploadZone.addEventListener('drop', function(e) {
             e.preventDefault();
             this.classList.remove('drag-over');
-            
+
             const file = e.dataTransfer.files[0];
             if (file && file.type.startsWith('image/')) {
                 handleImageUpload(file, searchGroup);
             }
         });
-        
+
+
+
+
         // Remove image
         removeImageBtn.addEventListener('click', function(e) {
             e.stopPropagation();
             uploadedImageDiv.style.display = 'none';
             imageInput.value = '';
         });
+
+        // 1. Làm cho vùng upload có thể nhận focus
+        uploadZone.setAttribute('tabindex', '0');
+        // Thêm một chút style để loại bỏ đường viền focus mặc định khó coi
+        uploadZone.style.outline = 'none';
+
+        // 2. Gắn listener sự kiện 'paste' trực tiếp vào vùng upload
+        uploadZone.addEventListener('paste', function(e) {
+            if (currentSearchMode !== 'image-to-image') return;
+
+            const clipboardItems = e.clipboardData.items;
+            if (!clipboardItems) return;
+
+            for (let i = 0; i < clipboardItems.length; i++) {
+                if (clipboardItems[i].kind === 'file' && clipboardItems[i].type.startsWith('image/')) {
+                    e.preventDefault();
+                    const imageFile = clipboardItems[i].getAsFile();
+                    if (imageFile) {
+                        showToastNotification("Đã nhận ảnh từ clipboard, bắt đầu tìm kiếm...", "success");
+                        handleImageUpload(imageFile, searchGroup);
+                    }
+                    break;
+                }
+            }
+        });
+
+        // 3. Focus vào vùng upload khi di chuột vào
+        uploadZone.addEventListener('mouseenter', function() {
+            uploadZone.classList.add('paste-active');
+            uploadZone.focus(); // Chuyển sự chú ý của trình duyệt vào đây
+        });
+
+        // 4. Bỏ focus khi di chuột ra
+        uploadZone.addEventListener('mouseleave', function() {
+            uploadZone.classList.remove('paste-active');
+            uploadZone.blur(); // Bỏ focus
+        });
+
     }
-    
+
     function handleImageUpload(file, searchGroup) {
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
         const img = uploadedImageDiv.querySelector('img');
-        
+
         const reader = new FileReader();
         reader.onload = function(e) {
             img.src = e.target.result;
             uploadedImageDiv.style.display = 'block';
-            
+
             // Automatically perform search when image is uploaded
             performSearch(file, 'image', searchGroup);
         };
         reader.readAsDataURL(file);
     }
-    
+
     async function performSearch(query, type, searchGroup) {
         if (type === 'text') {
             // Lấy giá trị từ các ô lọc đang hoạt động
@@ -1752,65 +2524,47 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
 
         showLoadingIndicator();
         const filterOptions = {};
-
         if (isEventFilterEnabled) { // <<< THÊM DÒNG NÀY
             filterOptions.use_event_filter = true;
         }
 
-        // 2. Kiểm tra và lấy giá trị từ bộ lọc OCR
-        const ocrFilterContainer = searchGroup.querySelector('.ocr-filter-container');
-        if (ocrFilterContainer && ocrFilterContainer.classList.contains('visible')) {
-            const ocrInput = searchGroup.querySelector('.ocr-input');
-            if (ocrInput && ocrInput.value.trim() !== '') {
-                filterOptions.ocr = ocrInput.value.trim();
-                const ocrFuzzySwitch = ocrFilterContainer.querySelector('input[type="checkbox"]');
-                if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
-                    filterOptions.ocr_fuzzy = true;
+        if (searchGroup) {
+            if (ocrFilterBtn.classList.contains('active')) {
+                const ocrInput = searchGroup.querySelector('.ocr-input');
+                if (ocrInput && ocrInput.value.trim() !== '') {
+                    filterOptions.ocr = ocrInput.value.trim();
+                    const ocrFuzzySwitch = searchGroup.querySelector('.ocr-filter-container input[type="checkbox"]');
+                    if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
+                        filterOptions.ocr_fuzzy = true;
+                    }
                 }
             }
-        }
 
-        // 3. Kiểm tra và lấy giá trị từ bộ lọc Tag
-        const tagFilterContainer = searchGroup.querySelector('.tag-filter-container');
-        if (tagFilterContainer && tagFilterContainer.classList.contains('visible')) {
-            const tagInput = searchGroup.querySelector('.tag-input');
-            if (tagInput && tagInput.value.trim() !== '') {
-                const tags = tagInput.value.split(',').map(tag => tag.trim()).filter(tag => tag);
-
-                if (tags.length > 0) {
-                    filterOptions.use_tag = true;
-                    filterOptions.tags_filter = tags;
+            if (tagFilterBtn.classList.contains('active')) {
+                const tagInput = searchGroup.querySelector('.tag-input');
+                if (tagInput && tagInput.value.trim() !== '') {
+                    const tags = tagInput.value.split(',').map(tag => tag.trim()).filter(tag => tag);
+                    if (tags.length > 0) {
+                        filterOptions.use_tag = true;
+                        filterOptions.tags_filter = tags;
+                    }
                 }
             }
-            
-        }
 
-        const asrFilterContainer = searchGroup.querySelector('.asr-filter-container');
-        if (asrFilterContainer && asrFilterContainer.classList.contains('visible')) {
-            const asrInput = searchGroup.querySelector('.asr-input'); // Lấy asrInput bên trong group
-            if (asrInput && asrInput.value.trim() !== '') {
-                filterOptions.asr = asrInput.value.trim();
-                // Lấy trạng thái của fuzzy switch
-                const asrFuzzySwitch = asrFilterContainer.querySelector('input[type="checkbox"]');
-                if (asrFuzzySwitch && asrFuzzySwitch.checked) {
-                    filterOptions.asr_fuzzy = true; // Thêm tham số fuzzy
+            if (asrFilterBtn.classList.contains('active')) {
+                const asrInput = searchGroup.querySelector('.asr-input');
+                if (asrInput && asrInput.value.trim() !== '') {
+                    filterOptions.asr = asrInput.value.trim();
+                    const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
+                    if (asrFuzzySwitch && asrFuzzySwitch.checked) {
+                        filterOptions.asr_fuzzy = true;
+                    }
                 }
             }
         }
 
         try {
-            const translationDisplay = searchGroup.querySelector('.translated-query-display');
             let finalQuery = query;
-
-            if (isTranslationEnabled && type === 'text') {
-                finalQuery = await translateText(query);
-                if (translationDisplay) {
-                    translationDisplay.innerHTML = `Searching for: "<strong>${finalQuery}</strong>"`;
-                    translationDisplay.classList.add('visible');
-                }
-            } else if (translationDisplay) {
-                translationDisplay.classList.remove('visible');
-            }
 
             let searchPromise;
             if (type === 'text') {
@@ -1820,22 +2574,22 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                     if (isFirstSearch) {
                         searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions, searchGroup)
                         .then(response => {
-                                handleSearchResults(response.initial_results, false);
-                                manageNextSearchInput();
-                            });
+                            handleSearchResults(response.initial_results, false);
+                            manageNextSearchInput();
+                        });
                     } else {
                         searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, filterOptions, searchGroup)
                         .then(response => {
-                                handleSearchResults(response.query_A_reranked, true);
-                                manageNextSearchInput();
-                            });
-                    }
-                } else if (currentSearchMode === 'text-to-text') {
-                    searchPromise = callTextToTextAPI(finalQuery)
-                        .then(results => {
-                            handleSearchResults(results, false);
+                            handleSearchResults(response.query_A_reranked, true);
                             manageNextSearchInput();
                         });
+                    }
+                } else if (currentSearchMode === 'text-to-text') {
+                    searchPromise = callTextToTextAPI(finalQuery, currentSelectedModel, filterOptions)
+                    .then(results => {
+                        handleSearchResults(results, false);
+                        manageNextSearchInput();
+                    });
                 }
             } else if (type === 'image' && currentSearchMode === 'image-to-image') {
                 // *** BẮT ĐẦU THAY ĐỔI ***
@@ -1845,8 +2599,8 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                     // TRƯỜNG HỢP 1: Semantic search (query là một đường dẫn URL)
                     // Chúng ta cần chuyển URL thành một đối tượng File
                     imageFilePromise = fetch(query)
-                        .then(response => response.blob())
-                        .then(blob => new File([blob], "semantic_search_image.jpg", { type: blob.type }));
+                    .then(response => response.blob())
+                    .then(blob => new File([blob], "semantic_search_image.jpg", { type: blob.type }));
                 } else {
                     // TRƯỜNG HỢP 2: Tải ảnh lên (query đã là một đối tượng File)
                     imageFilePromise = Promise.resolve(query);
@@ -1855,7 +2609,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
                 // `searchPromise` sẽ đợi cho đến khi có File object
                 searchPromise = imageFilePromise.then(imageFile => {
                     return callImageToImageAPI(imageFile, currentSelectedModel)
-                        .then(results => handleSearchResults(results, false));
+                    .then(results => handleSearchResults(results, false));
                 });
                 // *** KẾT THÚC THAY ĐỔI ***
             }
@@ -1865,24 +2619,22 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             // *** ĐOẠN CODE QUAN TRỌNG NHẤT ĐƯỢC THÊM VÀO ĐÂY ***
             if (!isRestoringState) {
                 const currentState = buildStateObject();
-                // URL này chỉ để tạo mục lịch sử mới, không cần đẹp
-                const newUrl = `/?search_timestamp=${Date.now()}`; 
-                window.history.pushState(currentState, '', newUrl);
+                const historyUrl = new URL(window.location.href);
+                historyUrl.searchParams.set('search_timestamp', Date.now());
+                window.history.pushState(currentState, '', `${historyUrl.pathname}${historyUrl.search}${historyUrl.hash}`);
             }
 
         } catch (error) {
             handleSearchError(error);
         } finally {
-            resetTagFiltering();
-            resetOcrFiltering();
         }
     }
-    
+
 
     function manageNextSearchInput() {
         // === Giai đoạn 1: Tìm kiếm một ô trống đã tồn tại ===
         const allInputs = document.querySelectorAll('.search-inputs-container .search-input');
-        
+
         let firstEmptyInput = null;
         for (const input of allInputs) {
             // Một ô được coi là "trống" nếu nó không có text VÀ không có filter nào đang áp dụng cho nó
@@ -1891,10 +2643,10 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
             const asrValue = searchGroup.querySelector('.asr-input')?.value.trim();
             // Giả sử filter chỉ áp dụng cho ô tìm kiếm đầu tiên (theo logic toggleFilter của bạn)
-            const isFilterActiveOnThisInput = 
-                (ocrFilterBtn.classList.contains('active') && ocrValue) || 
-                (tagFilterBtn.classList.contains('active') && tagValue)||
-                (asrFilterBtn.classList.contains('active') && asrValue);
+            const isFilterActiveOnThisInput =
+            (ocrFilterBtn.classList.contains('active') && ocrValue) ||
+            (tagFilterBtn.classList.contains('active') && tagValue)||
+            (asrFilterBtn.classList.contains('active') && asrValue);
             if (input.value.trim() === '' && !isFilterActiveOnThisInput) {
                 firstEmptyInput = input;
                 break; // Dừng lại ngay khi tìm thấy ô trống đầu tiên
@@ -1914,7 +2666,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         // === Giai đoạn 2: Nếu không có ô trống nào, quyết định có nên tạo ô mới không ===
         // Logic này chỉ chạy khi tất cả các ô hiện có đều đã được điền hoặc có filter.
         // Đây là lúc logic gốc của bạn phát huy tác dụng.
-        
+
         console.log('All existing inputs are in use. Creating a new one.');
         const newInput = createNewSearchInput();
         setTimeout(() => {
@@ -1922,16 +2674,29 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             newInput.scrollIntoView({ behavior: 'auto', block: 'center' });
         }, 50);
     }
-    // Thêm hàm gọi API text-to-text mới
-    function callTextToTextAPI(query) {
-        return fetch("/api/search/text", {
+    function callTextToTextAPI(query, modelName, filterOptions = {}) {
+        const body = { query, cluster_mode_enabled: clusterModeEnabled };
+        if (modelName && modelName !== 'all') {
+            body.model_name = modelName;
+        }
+        if (filterOptions.use_event_filter) {
+            body.use_event_filter = true;
+        }
+        if (filterOptions.use_tag && filterOptions.tags_filter) {
+            body.use_tag = true;
+            body.tags_filter = filterOptions.tags_filter;
+        }
+        if (filterOptions.ocr) {
+            body.ocr = filterOptions.ocr;
+        }
+        if (filterOptions.asr) {
+            body.asr = filterOptions.asr;
+        }
+
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/text-to-text`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                query: query,
-                // top_k: 1000,
-                search_in: "text" // Khác với text-to-image ở đây
-            })
+            body: JSON.stringify(body)
         })
         .then(res => res.ok ? res.json() : Promise.reject(res))
         .catch(err => {
@@ -1940,61 +2705,14 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         });
     }
 
-    /**
-     * Tái cấu trúc: Hàm lõi để thực hiện tìm kiếm bằng ảnh từ một đường dẫn.
-     * Có thể được gọi từ cả kết quả tìm kiếm và submit queue.
-     * @param {string} imagePath - Đường dẫn đầy đủ đến ảnh dùng để tìm kiếm.
-     */
-    async function performImageSearchFromPath(imagePath) {
-        if (!imagePath) {
-            console.error("Image path is required for semantic search.");
-            return;
-        }
-
-        const searchStartTime = performance.now();
-        
-        // 1. Chuyển UI sang chế độ Image-to-Image và hiển thị loading
-        switchSearchMode('image-to-image');
-        showLoadingIndicator();
-
-        try {
-            // 2. Cập nhật UI ở sidebar để hiển thị ảnh đang được dùng để tìm kiếm
-            const uploadArea = document.querySelector('.image-upload-area');
-            if (uploadArea) {
-                const imgElement = uploadArea.querySelector('.uploaded-image img');
-                const uploadedImageDiv = uploadArea.querySelector('.uploaded-image');
-                imgElement.src = imagePath;
-                uploadedImageDiv.style.display = 'block';
-            }
-
-            // 3. Lấy dữ liệu của ảnh từ URL của nó
-            const response = await fetch(imagePath);
-            if (!response.ok) {
-                throw new Error(`Failed to fetch image: ${response.statusText}`);
-            }
-            const imageBlob = await response.blob();
-            
-            // Tạo một đối tượng File từ Blob để gửi đi
-            const imageFile = new File([imageBlob], "selected_frame.jpg", { type: imageBlob.type });
-
-            // 4. Gọi API tìm kiếm bằng ảnh
-            const results = await callImageToImageAPI(imageFile, currentSelectedModel);
-
-            // 5. Xử lý kết quả
-            handleSearchResults(results, false);
-
-        } catch (error) {
-            handleSearchError(error);
-        }
-    }
     function callTemporalSearchStart(query, modelName, filterOptions, searchGroup) {
         const queryId = searchGroup.dataset.searchId;
-        const body = { 
-            query: query, 
-            user_id: currentUserId, 
-            query_id: queryId 
+        const body = {
+            query: query,
+            user_id: currentUserId,
+            query_id: queryId,
+            cluster_mode_enabled: clusterModeEnabled
         };
-
         if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
             body.use_event_filter = true;
         }
@@ -2022,7 +2740,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             body.asr_fuzzy = true;
         }
 
-        return fetch("/api/search/temporal/start", {
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
@@ -2033,17 +2751,15 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
     // Hàm này được gọi khi tìm kiếm query B, C...
     function callTemporalSearchContinue(query, chainId, filterOptions, searchGroup) {
         const queryId = searchGroup.dataset.searchId;
-        const body = { 
-            query: query, 
-            chain_id: chainId, // chainId ở đây chính là currentUserId
-            query_id: queryId 
+        const body = {
+            query: query,
+            chain_id: chainId,
+            query_id: queryId,
+            cluster_mode_enabled: clusterModeEnabled
         };
-
-        if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
+        if (filterOptions.use_event_filter) {
             body.use_event_filter = true;
         }
-
-        // >>> LOGIC MỚI <<<
         if (filterOptions.use_tag && filterOptions.tags_filter) {
             body.use_tag = true;
             body.tags_filter = filterOptions.tags_filter;
@@ -2054,8 +2770,6 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
         }
-        // >>> KẾT THÚC LOGIC MỚI <<<
-
         if (filterOptions.ocr_fuzzy) {
             body.ocr_fuzzy = true;
         }
@@ -2063,7 +2777,7 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             body.asr_fuzzy = true;
         }
 
-        return fetch("/api/search/temporal/continue", {
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/continue`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
@@ -2071,16 +2785,14 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         .then(res => res.ok ? res.json() : Promise.reject(res));
     }
 
-    function callTextToImageAPI(query, modelName, filterOptions) {
-        const body = {
-            query: query,
-            search_in: "image"
-        };
-        if (modelName !== 'all') {
+    function callTextToImageAPI(query, modelName, filterOptions = {}) {
+        const body = { query, cluster_mode_enabled: clusterModeEnabled };
+        if (modelName && modelName !== 'all') {
             body.model_name = modelName;
         }
-
-        // >>> LOGIC MỚI <<<
+        if (filterOptions.use_event_filter) {
+            body.use_event_filter = true;
+        }
         if (filterOptions.use_tag && filterOptions.tags_filter) {
             body.use_tag = true;
             body.tags_filter = filterOptions.tags_filter;
@@ -2091,9 +2803,8 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
         }
-        // >>> KẾT THÚC LOGIC MỚI <<<
 
-        return fetch("/api/search/text", {
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/text-to-image`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(body)
@@ -2108,22 +2819,16 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
     function callImageToImageAPI(imageFile, modelName) { // Thêm modelName
         const formData = new FormData();
         formData.append("file", imageFile);
+        formData.append("cluster_mode_enabled", String(clusterModeEnabled));
         if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
             formData.append("model_name", modelName);
         }
 
-        if (isEventFilterEnabled) { // <<< THÊM KHỐI LỆNH NÀY
+        if (isEventFilterEnabled) {
             formData.append("use_event_filter", "true");
         }
 
-        let isTagFilterEnabled = false;
-        if (isTagFilterEnabled) {
-            // Bật cờ use_tag để backend biết là ta có thể lọc tag
-            formData.append("use_tag", "true");
-            formData.append("top_k_tags", "5");
-        }
-
-        return fetch("/api/search/image", {
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/image`, {
             method: "POST",
             body: formData,
         })
@@ -2133,160 +2838,164 @@ async function translateText(text, sourceLang = 'vi', targetLang = 'en') {
             throw err;
         });
     }
-async function handleSearchResults(images, isReranked = false) {
-    // 1. Dọn dẹp trạng thái cũ
-    if (window.currentInfiniteScrollObserver) {
-        window.currentInfiniteScrollObserver.disconnect();
-    }
-    
-    if (!images || images.length === 0) {
-        contentArea.innerHTML = `<div class="content-placeholder"><h2>Không tìm thấy kết quả</h2><p>Vui lòng thử lại.</p></div>`;
-        return;
-    }
+    async function handleSearchResults(images, isReranked = false) {
+        currentResultsAreReranked = isReranked;
+        // 1. Dọn dẹp trạng thái cũ
+        if (window.currentInfiniteScrollObserver) {
+            window.currentInfiniteScrollObserver.disconnect();
+        }
+        if (!images || images.length === 0) {
+            contentArea.innerHTML = `<div class="content-placeholder"><h2>Không tìm thấy kết quả</h2><p>Vui lòng thử lại.</p></div>`;
+            return;
+        }
 
-    await initialStateReady;
+        await initialStateReady;
 
-    const markedImages = images.map(image => {
-        return {
-            ...image, // Giữ lại tất cả thông tin cũ của frame
-            isInQueue: queuedFramesSet.has(image.frameIdentifier) // Thêm thuộc tính mới
+        const getSortScore = image => {
+            const primaryScore = isReranked ? image.temporal_score : image.score;
+            const fallbackScore = isReranked ? image.score : image.temporal_score;
+            return Number(primaryScore ?? fallbackScore ?? 0);
         };
-    });
 
-    allImages = markedImages; 
+        const markedImages = images.map(image => {
+            return {
+                ...image, // Giữ lại tất cả thông tin cũ của frame
+                isInQueue: queuedFramesSet.has(image.frameIdentifier) // Thêm thuộc tính mới
+            };
+        }).sort((a, b) => getSortScore(b) - getSortScore(a));
 
-    // allImages = images;
-    frameSelectionManager.clearAllSelections();
-    contentArea.innerHTML = '';
-    isLoading = false;
-    hasReachedEnd = false;
-    const loadingMore = document.createElement('div');
-    loadingMore.id = 'loadingMore';
-    loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
-    loadingMore.style.display = 'none';
-    contentArea.appendChild(loadingMore); // Thêm vào cuối cùng của contentArea đang trống
-
-    // 3. Phân nhánh logic dựa trên layout hiện tại
-    if (currentLayout === 'grid') {
-        displayedImagesCount = 0;
-        renderGridLayout(isReranked); // Tạo cấu trúc cột rỗng, sẽ được chèn VÀO TRƯỚC "loadingMore"
-        
-        setupInfiniteScrollForGrid();
-        loadMoreImages();
-
-    } else {
-        allGroupedData = groupResultsByVideo(allImages);
-        displayedGroupsCount = 0;
-        
-        setupInfiniteScrollForGroups();
-        loadMoreGroups();
-    }
-    updateSearchResultsUI();
-}
-
-function resetOcrFiltering() {
-    isOcrFilterEnabled = false;
-    if (ocrFilterBtn) {
-        ocrFilterBtn.classList.remove('active');
-    }
-    // document.querySelectorAll('.ocr-filter-container.visible').forEach(container => {
-    //     container.classList.remove('visible');
-    // });
-}
-
-function loadMoreImages() {
-    if (isLoading || hasReachedEnd) return;
-
-    isLoading = true;
-    const loadingMore = document.getElementById('loadingMore');
-    
-    if (loadingMore) loadingMore.style.display = 'flex';
-
-    // Tìm các cột masonry đã tồn tại
-    const columns = document.querySelectorAll('.masonry-column');
-    if (columns.length === 0) {
+        allImages = markedImages;
+        frameSelectionManager.clearAllSelections();
+        contentArea.innerHTML = '';
         isLoading = false;
-        if (loadingMore) loadingMore.style.display = 'none';
-        return;
-    }
-
-    const startIndex = displayedImagesCount;
-    const endIndex = Math.min(startIndex + IMAGES_PER_BATCH, allImages.length);
-
-    if (startIndex >= allImages.length) {
-        hasReachedEnd = true;
-        isLoading = false;
-        if (loadingMore) loadingMore.style.display = 'none';
-        return;
-    }
-
-    setTimeout(() => {
-        for (let i = startIndex; i < endIndex; i++) {
-            const image = allImages[i];
-            const imageItem = createImageItemElement(image);
-            const columnIndex = i % columns.length;
-            columns[columnIndex].appendChild(imageItem);
-        }
-
-        displayedImagesCount = endIndex;
-
-        if (displayedImagesCount >= allImages.length) {
-            hasReachedEnd = true;
-            if (loadingMore) loadingMore.style.display = 'none';
-        }
-
-        isLoading = false;
-    }, 100);
-}
-
-// Thiết lập Intersection Observer để phát hiện khi cuộn đến cuối trang
-function setupInfiniteScroll() {
-    // Tìm hoặc tạo phần tử "loadingMore"
-    let loadingMore = document.getElementById('loadingMore');
-    if (!loadingMore) {
-        loadingMore = document.createElement('div');
-        loadingMore.className = 'loading-more';
+        hasReachedEnd = false;
+        const loadingMore = document.createElement('div');
         loadingMore.id = 'loadingMore';
         loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
         loadingMore.style.display = 'none';
-        contentArea.appendChild(loadingMore);
-    }
-    
-    // Tạo Intersection Observer
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            // Nếu phần tử loadingMore hiển thị trong viewport
-            if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
-                loadMoreImages(); // Tải thêm ảnh
-            }
-        });
-    }, {
-        root: null, // viewport
-        rootMargin: '0px 0px 200px 0px', // trigger trước khi đến cuối 200px
-        threshold: 0.1 // kích hoạt khi ít nhất 10% phần tử hiển thị
-    });
-    
-    // Theo dõi phần tử loadingMore
-    observer.observe(loadingMore);
-    
-    // Lưu observer để có thể disconnect khi cần
-    window.currentInfiniteScrollObserver = observer;
-}
+        contentArea.appendChild(loadingMore); // Thêm vào cuối cùng của contentArea đang trống
 
-function showLoadingIndicator() {
-    // Ngắt kết nối observer cũ nếu có
-    if (window.currentInfiniteScrollObserver) {
-        window.currentInfiniteScrollObserver.disconnect();
-        window.currentInfiniteScrollObserver = null;
+        // 3. Phân nhánh logic dựa trên layout hiện tại
+        if (currentLayout === 'grid') {
+            displayedImagesCount = 0;
+            renderGridLayout(isReranked); // Tạo cấu trúc cột rỗng, sẽ được chèn VÀO TRƯỚC "loadingMore"
+
+            setupInfiniteScrollForGrid();
+            loadMoreImages();
+
+        } else {
+            allGroupedData = groupResultsByVideo(allImages, isReranked);
+            displayedGroupsCount = 0;
+
+            setupInfiniteScrollForGroups();
+            loadMoreGroups();
+        }
+        updateSearchResultsQueueStatus();
     }
-    
-    contentArea.innerHTML = `
+
+    function resetOcrFiltering() {
+        isOcrFilterEnabled = false;
+        if (ocrFilterBtn) {
+            ocrFilterBtn.classList.remove('active');
+        }
+        // document.querySelectorAll('.ocr-filter-container.visible').forEach(container => {
+        //     container.classList.remove('visible');
+        // });
+    }
+
+    function loadMoreImages() {
+        if (isLoading || hasReachedEnd) return;
+
+        isLoading = true;
+        const loadingMore = document.getElementById('loadingMore');
+
+        if (loadingMore) loadingMore.style.display = 'flex';
+
+        // Tìm các cột masonry đã tồn tại
+        const columns = document.querySelectorAll('.masonry-column');
+        if (columns.length === 0) {
+            isLoading = false;
+            if (loadingMore) loadingMore.style.display = 'none';
+            return;
+        }
+
+        const startIndex = displayedImagesCount;
+        const endIndex = Math.min(startIndex + IMAGES_PER_BATCH, allImages.length);
+
+        if (startIndex >= allImages.length) {
+            hasReachedEnd = true;
+            isLoading = false;
+            if (loadingMore) loadingMore.style.display = 'none';
+            return;
+        }
+
+        setTimeout(() => {
+            for (let i = startIndex; i < endIndex; i++) {
+                const image = allImages[i];
+                const imageItem = createImageItemElement(image);
+                const columnIndex = i % columns.length;
+                columns[columnIndex].appendChild(imageItem);
+            }
+
+            displayedImagesCount = endIndex;
+
+            if (displayedImagesCount >= allImages.length) {
+                hasReachedEnd = true;
+                if (loadingMore) loadingMore.style.display = 'none';
+            }
+
+            isLoading = false;
+        }, 100);
+    }
+
+    // Thiết lập Intersection Observer để phát hiện khi cuộn đến cuối trang
+    function setupInfiniteScroll() {
+        // Tìm hoặc tạo phần tử "loadingMore"
+        let loadingMore = document.getElementById('loadingMore');
+        if (!loadingMore) {
+            loadingMore = document.createElement('div');
+            loadingMore.className = 'loading-more';
+            loadingMore.id = 'loadingMore';
+            loadingMore.innerHTML = '<div class="loading-spinner"></div><p>Đang tải thêm...</p>';
+            loadingMore.style.display = 'none';
+            contentArea.appendChild(loadingMore);
+        }
+
+        // Tạo Intersection Observer
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                // Nếu phần tử loadingMore hiển thị trong viewport
+                if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
+                    loadMoreImages(); // Tải thêm ảnh
+                }
+            });
+        }, {
+            root: null, // viewport
+            rootMargin: '0px 0px 200px 0px', // trigger trước khi đến cuối 200px
+            threshold: 0.1 // kích hoạt khi ít nhất 10% phần tử hiển thị
+        });
+
+        // Theo dõi phần tử loadingMore
+        observer.observe(loadingMore);
+
+        // Lưu observer để có thể disconnect khi cần
+        window.currentInfiniteScrollObserver = observer;
+    }
+
+    function showLoadingIndicator() {
+        // Ngắt kết nối observer cũ nếu có
+        if (window.currentInfiniteScrollObserver) {
+            window.currentInfiniteScrollObserver.disconnect();
+            window.currentInfiniteScrollObserver = null;
+        }
+
+        contentArea.innerHTML = `
         <div class="loading-indicator">
-            <div class="loading-spinner"></div>
-            <p>Đang tìm kiếm...</p>
+        <div class="loading-spinner"></div>
+        <p>Đang tìm kiếm...</p>
         </div>
-    `;
-}
+        `;
+    }
 
 
 
@@ -2295,700 +3004,908 @@ function showLoadingIndicator() {
     function handleSearchError(error) {
         console.error('Search error:', error);
         contentArea.innerHTML = `
-            <div class="content-placeholder">
-                <h2>Lỗi tìm kiếm</h2>
-                <p>Đã xảy ra lỗi khi tìm kiếm. Vui lòng thử lại.</p>
-            </div>
+        <div class="content-placeholder">
+        <h2>Lỗi tìm kiếm</h2>
+        <p>Đã xảy ra lỗi khi tìm kiếm. Vui lòng thử lại.</p>
+        </div>
         `;
     }
     const videoInfoCache = {};
 
-function showToastNotification(message, type = 'success', duration = 2000) {
-    const toast = document.createElement('div');
-    toast.className = `toast-notification ${type}`;
-    toast.textContent = message;
-    document.body.appendChild(toast);
+    function showToastNotification(message, type = 'success', duration = 2000) {
+        const toast = document.createElement('div');
+        toast.className = `toast-notification ${type}`;
+        toast.textContent = message;
+        document.body.appendChild(toast);
 
-    // Kích hoạt animation
-    setTimeout(() => {
-        toast.classList.add('show');
-    }, 10);
+        // Kích hoạt animation
+        setTimeout(() => {
+            toast.classList.add('show');
+        }, 10);
 
-    // Tự động xóa sau một khoảng thời gian
-    setTimeout(() => {
-        toast.classList.remove('show');
-        // Đợi animation kết thúc rồi mới xóa khỏi DOM
-        toast.addEventListener('transitionend', () => toast.remove());
-    }, duration);
-}
-// ====== BẮT ĐẦU PHIÊN BẢN MỚI CỦA HÀM OPENIMAGEMODAL ======
-
-async function openImageModal(clickedFrameData) {
-    // --- BƯỚC 1: KIỂM TRA DỮ LIỆU ĐẦU VÀO ---
-    if (!clickedFrameData || !clickedFrameData.videoName || typeof clickedFrameData.frame_id_ori === 'undefined') {
-        showToastNotification("Lỗi: Dữ liệu frame không đầy đủ để mở modal.", "error");
-        console.error("Dữ liệu không hợp lệ được truyền cho openImageModal:", clickedFrameData);
-        return;
+        // Tự động xóa sau một khoảng thời gian
+        setTimeout(() => {
+            toast.classList.remove('show');
+            toast.addEventListener('transitionend', () => toast.remove());
+        }, duration);
     }
-
-    const modal = document.getElementById('imageModal');
-    const mainPreview = document.getElementById('mainPreviewImage');
-    const thumbnailStrip = document.getElementById('thumbnailStrip');
-    const modalFrameInfo = document.getElementById('modalFrameInfo');
-
-    let currentModalFrameData = null;
-    let currentFrameNumber = -1;
-
-    const videoId = clickedFrameData.videoName;
-    const targetFrameIdOri = clickedFrameData.frame_id_ori;
-
-    // --- BƯỚC 2: TẢI DỮ LIỆU CẦN THIẾT (METADATA & VIDEO INFO) ---
-    let videoInfo = videoInfoCache[videoId];
-    let videoMetadata = null;
-
-    try {
-        const [metadataResponse, videoInfoResponse] = await Promise.all([
-            fetch(`/api/metadata/${videoId}?t=${Date.now()}`),
-            videoInfo ? Promise.resolve(null) : fetch(`/api/video_info/${videoId}`)
-        ]);
-
-        if (metadataResponse.ok) {
-            videoMetadata = await metadataResponse.json();
-        } else {
-            throw new Error(`Could not fetch metadata for video ${videoId}`);
-        }
-
-        if (videoInfoResponse) {
-            if (videoInfoResponse.ok) {
-                videoInfo = await videoInfoResponse.json();
-                videoInfoCache[videoId] = videoInfo;
-            } else {
-                throw new Error("Server response not ok for video_info");
-            }
-        }
-    } catch (error) {
-        console.error("Không thể tải thông tin video hoặc metadata:", error);
-        showToastNotification("Lỗi: Không thể tải các frame lân cận.", "error");
-        return;
-    }
-
-    if (!videoInfo || !videoMetadata) {
-        showToastNotification("Lỗi: Dữ liệu không đầy đủ để hiển thị.", "error");
-        return;
-    }
-
-    const { frame_filenames } = videoInfo;
-    const folderUrlPath = `/frames/${videoId}`;
-
-    // --- BƯỚC 3: CHUẨN BỊ VÀ SẮP XẾP DỮ LIỆU FRAME ---
-    const metadataForVideo = videoMetadata[videoId] || videoMetadata;
-    console.log("metadata_video:", metadataForVideo);
-
-    // Tạo mảng từ metadataForVideo (object -> array)
-    const sortedFrames = Object.entries(metadataForVideo)
-        .map(([frameKey, metadata]) => {
-            // frameKey ví dụ: "frame_001"
-            const filename = `${frameKey}.webp`;  // hoặc giữ nguyên nếu tên file khác
-            const frameNum = parseInt(frameKey.split('_')[1], 10);
-
-            return {
-                ...metadata,
-                filename,
-                frameNum,
-                frame_id_ori: metadata.id,
-                timestamp: metadata['time-stamp'] || metadata.timestamp
-            };
-        })
-        .filter(Boolean) // loại bỏ null/undefined nếu có
-        .sort((a, b) => a.frame_id_ori - b.frame_id_ori); // sort theo id gốc
-
-    // --- BƯỚC 4: TÌM FRAME MỤC TIÊU BẰNG ID GỐC ---
-    const currentIndexInList = sortedFrames.findIndex(frame => frame.frame_id_ori === targetFrameIdOri);
-    
-    // console.log("index list", sortedFrames);
-    if (currentIndexInList === -1) {
-        console.error("Frame được click không tìm thấy trong danh sách đã xử lý.", { targetFrameIdOri, videoId });
-        showToastNotification("Lỗi: Không tìm thấy frame trong metadata.", "error");
-        return;
-    }
-
-    const clickedFrameNumber = sortedFrames[currentIndexInList].frameNum;
-
-    // --- BƯỚC 5: CÁC HÀM NỘI BỘ VÀ EVENT HANDLERS ---
-    function updateMainPreview(frameNum) {
-        if (frameNum === currentFrameNumber) return;
-        
-        const frameData = sortedFrames.find(frame => frame.frameNum === frameNum);
-        if (!frameData) return;
-
-        mainPreview.src = `${folderUrlPath}/${frameData.filename}`;
-        currentFrameNumber = frameNum;
-
-        currentModalFrameData = {
-            path: mainPreview.src,
-            videoName: videoId,
-            timestamp: frameData.timestamp,
-            frameIdentifier: `${videoId}_${frameData.id}`,
-            frame_id_ori: frameData.id,
-            id: frameData.frameNum,
-            isFromVideo: false, // Mặc định
-            // Thêm các trường khác nếu cần
-        };
-        modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
-
-        const oldCurrent = thumbnailStrip.querySelector('.current-frame');
-        if (oldCurrent) oldCurrent.classList.remove('current-frame');
-
-        const newCurrent = thumbnailStrip.querySelector(`[data-frame-number='${frameNum}']`);
-        if (newCurrent) {
-            newCurrent.classList.add('current-frame');
-            newCurrent.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
-        }
-    }
-
-    const wheelHandler = (e) => {
-        e.preventDefault();
-        const currentIndex = sortedFrames.findIndex(f => f.frameNum === currentFrameNumber);
-        if (currentIndex === -1) return;
-        
-        let nextIndex = currentIndex + (e.deltaY > 0 ? 1 : -1);
-        nextIndex = Math.max(0, Math.min(sortedFrames.length - 1, nextIndex));
-
-        if (nextIndex !== currentIndex) {
-            updateMainPreview(sortedFrames[nextIndex].frameNum);
-        }
-    };
-
-    const keydownHandler = (e) => {
-        const key = e.key.toLowerCase();
-        
-        if (key === 'escape') { closeModal(); return; }
-        if (key === 'arrowright' || key === 'arrowleft') {
-            wheelHandler({ preventDefault: () => {}, deltaY: key === 'arrowright' ? 1 : -1 });
+    function showGlobalAlert(username, type = 'special') {
+        // Ngăn tạo nhiều thông báo cùng lúc
+        if (document.querySelector('.global-alert-notification')) {
             return;
         }
-        
-        if (!currentModalFrameData) return;
-        e.preventDefault();
 
-        if (key === 'd') {
-            sendWebSocketMessage('add_frames', { frames: [currentModalFrameData] });
-            showToastNotification('Frame added to queue!', 'success');
-            closeModal(); 
-        } 
-        else if (key === 'v') { // Thêm phím 'V' cho queue cá nhân
+        let config = {
+            text: '',
+            cssClass: '',
+            duration: 800 // Mặc định
+        };
+
+        // Cấu hình dựa trên loại thông báo
+        if (type === 'correct') {
+            config.text = `<span>${username.toUpperCase()}</span> NHÌN MÀ HỌC HỎI ĐI MẤY CON CHÓ!`;
+            config.cssClass = 'is-correct'; // Class cho màu xanh
+            config.duration = 4000; // Hiển thị lâu hơn để chúc mừng
+        } else if(type === 'special'){ // Mặc định là 'special'
+            config.text = `<span>${username.toUpperCase()}</span> ĐÚNG MẸ NÓ RỒI NỘP ĐI!`;
+            config.cssClass = 'is-special';
+        }else{
+            config.text = `<span>${username.toUpperCase()}</span> GET OUTTTTTT!`;
+            config.cssClass = 'is-special';
+        }
+
+        const alertDiv = document.createElement('div');
+        // Thêm cả class cơ sở và class loại thông báo
+        alertDiv.className = `global-alert-notification ${config.cssClass}`;
+        alertDiv.innerHTML = config.text;
+
+        document.body.appendChild(alertDiv);
+
+        // Kích hoạt animation
+        setTimeout(() => {
+            alertDiv.classList.add('show');
+        }, 20);
+
+        // Tự động ẩn đi sau một khoảng thời gian
+        setTimeout(() => {
+            alertDiv.classList.remove('show');
+            alertDiv.addEventListener('transitionend', () => {
+                alertDiv.remove();
+            });
+        }, config.duration);
+    }
+    // ====== BẮT ĐẦU PHIÊN BẢN MỚI CỦA HÀM OPENIMAGEMODAL ======
+
+    async function openImageModal(clickedFrameData) {
+        if (!clickedFrameData || !clickedFrameData.videoName || typeof clickedFrameData.frame_id_ori === 'undefined') {
+            showToastNotification("Lỗi: Dữ liệu frame không đầy đủ để mở modal.", "error");
+            console.error("Dữ liệu không hợp lệ được truyền cho openImageModal:", clickedFrameData);
+            return;
+        }
+
+        const modal = document.getElementById('imageModal');
+        const mainPreview = document.getElementById('mainPreviewImage');
+        const thumbnailStrip = document.getElementById('thumbnailStrip');
+        const modalFrameInfo = document.getElementById('modalFrameInfo');
+        const mainPreviewOverlay = document.getElementById('mainPreviewOverlay');
+
+        let currentModalFrameData = null;
+
+        const videoId = clickedFrameData.videoName;
+        const targetFrameIdOri = clickedFrameData.frame_id_ori;
+
+        let neighborFrames = []; // Biến này sẽ chứa các frame lân cận sau khi xử lý
+
+        try {
+            // === BẮT ĐẦU PHẦN THAY THẾ LOGIC API ===
+
+            // 1. Tải file metadata.json từ Nginx
+            const metadataUrl = getFrameMetadataUrl(videoId);
+            const response = await fetch(metadataUrl);
+
+            if (!response.ok) {
+                throw new Error(`Không tìm thấy tệp ${metadataUrl}. Status: ${response.statusText}`);
+            }
+            const metadataFileContent = await response.json();
+            const videoMetadataObject = metadataFileContent[videoId];
+
+            if (!videoMetadataObject) {
+                throw new Error(`Không tìm thấy key '${videoId}' trong tệp metadata.json.`);
+            }
+
+            // 2. Chuyển đổi và "CHUẨN HÓA" đối tượng metadata thành một MẢNG
+            const allKeyframes = Object.entries(videoMetadataObject).map(([frameKey, frameInfo]) => ({
+                // Ánh xạ (map) các thuộc tính từ file JSON sang tên mà code đang dùng
+                frame_id_ori: frameInfo.id,
+                timestamp: frameInfo["time-stamp"],
+                filename: `${frameKey}.webp`,
+                ...frameInfo
+            }));
+
+            // 3. SẮP XẾP mảng theo frame_id_ori
+            allKeyframes.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
+
+            // 4. Tìm vị trí (index) của frame được click
+            const targetFrameId = parseInt(targetFrameIdOri, 10);
+            const targetIndex = allKeyframes.findIndex(kf => kf.frame_id_ori === targetFrameId);
+
+            if (targetIndex === -1) {
+                throw new Error(`Frame ID ${targetFrameId} không tìm thấy trong metadata của video ${videoId}.`);
+            }
+
+            // 5. Cắt ra các frame lân cận (modal này lấy nhiều hơn: 50 trước, 50 sau)
+            const lookBehind = 50;
+            const lookAhead = 50;
+            const startIndex = Math.max(0, targetIndex - lookBehind);
+            const endIndex = Math.min(allKeyframes.length, targetIndex + lookAhead + 1);
+            
+            // Gán kết quả vào biến neighborFrames để phần code sau sử dụng
+            neighborFrames = allKeyframes.slice(startIndex, endIndex);
+
+            // === KẾT THÚC PHẦN THAY THẾ LOGIC API ===
+
+            if (neighborFrames.length === 0) {
+                showToastNotification("Không tìm thấy frame lân cận.", "info");
+                return;
+            }
+
+        } catch (error) {
+            console.error("Lỗi khi tải frame lân cận từ file tĩnh (trong openImageModal):", error);
+            showToastNotification("Lỗi: Không thể tải dữ liệu frame lân cận.", "error");
+            return;
+        }
+
+        // =========================================================================
+        // PHẦN CÒN LẠI CỦA HÀM KHÔNG CẦN THAY ĐỔI GÌ CẢ
+        // Nó sẽ tự động hoạt động với biến `neighborFrames` chúng ta vừa tạo ở trên
+        // =========================================================================
+
+        function updateMainPreview(frameDataToDisplay) {
+            if (!frameDataToDisplay || (currentModalFrameData && currentModalFrameData.frame_id_ori === frameDataToDisplay.frame_id_ori)) {
+                return;
+            }
+            
+            const framePath = getFrameUrl(videoId, frameDataToDisplay.filename);
+            setFrameImageSource(mainPreview, framePath);
+
+            currentModalFrameData = {
+                path: framePath,
+                videoName: videoId,
+                timestamp: frameDataToDisplay.timestamp,
+                frameIdentifier: `${videoId}_${frameDataToDisplay.frame_id_ori}`,
+                frame_id_ori: frameDataToDisplay.frame_id_ori,
+                isFromVideo: false
+            };
+
+            modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
+
+            const oldCurrent = thumbnailStrip.querySelector('.current-frame');
+            if (oldCurrent) oldCurrent.classList.remove('current-frame');
+            const newCurrent = thumbnailStrip.querySelector(`[data-frame-id-ori='${frameDataToDisplay.frame_id_ori}']`);
+            if (newCurrent) {
+                newCurrent.classList.add('current-frame');
+                newCurrent.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+            }
+
+            mainPreviewOverlay.onclick = () => {
+                if (currentModalFrameData && currentModalFrameData.videoName && currentModalFrameData.timestamp) {
+                    openVideoModal(currentModalFrameData.videoName, currentModalFrameData.timestamp);
+                } else {
+                    console.error("Dữ liệu không hợp lệ để mở video:", currentModalFrameData);
+                    showToastNotification("Lỗi: Không đủ thông tin để mở video.", "error");
+                }
+            };
+            mainPreviewOverlay.oncontextmenu = (event) => {
+                event.preventDefault();
+                if (currentModalFrameData && currentModalFrameData.videoName && currentModalFrameData.timestamp) {
+                    openVideoModal(currentModalFrameData.videoName, currentModalFrameData.timestamp);
+                } else {
+                    console.error("Dữ liệu không hợp lệ để mở video:", currentModalFrameData);
+                    showToastNotification("Lỗi: Không đủ thông tin để mở video.", "error");
+                }
+            };
+        }
+
+        const wheelHandler = (e) => {
             e.preventDefault();
-            addToFormSubmitQueue(currentModalFrameData);
-            // Không cần đóng modal, để người dùng có thể thêm nhiều frame
-        }
-        else if (key === 's') {
-            closeModal(() => initiateImageTemporalSearch(currentModalFrameData.path));
-        }
-    };
-    
-    const clickThumbnailHandler = (e) => {
-        if (e.target.tagName === 'IMG') {
-            updateMainPreview(parseInt(e.target.dataset.frameNumber));
-        }
-    };
+            if (!currentModalFrameData) return;
 
-    function closeModal(onClosedCallback = null) {
-        modal.removeEventListener('wheel', wheelHandler);
-        document.removeEventListener('keydown', keydownHandler);
-        thumbnailStrip.removeEventListener('click', clickThumbnailHandler);
-        modal.style.display = 'none';
-        mainPreview.src = ""; // Xóa ảnh để giải phóng bộ nhớ
-        if (typeof onClosedCallback === 'function') {
-            setTimeout(onClosedCallback, 50); 
+            const currentIndex = neighborFrames.findIndex(f => f.frame_id_ori === currentModalFrameData.frame_id_ori);
+            if (currentIndex === -1) return;
+
+            let nextIndex = currentIndex + (e.deltaY > 0 ? 1 : -1);
+            nextIndex = Math.max(0, Math.min(neighborFrames.length - 1, nextIndex));
+
+            if (nextIndex !== currentIndex) {
+                updateMainPreview(neighborFrames[nextIndex]);
+            }
+        };
+
+        const keydownHandler = (e) => {
+            const key = e.key.toLowerCase();
+
+            if (key === 'escape') { closeModal(); return; }
+            if (key === 'arrowright' || key === 'arrowleft') {
+                wheelHandler({ preventDefault: () => {}, deltaY: key === 'arrowright' ? 1 : -1 });
+                return;
+            }
+
+            if (!currentModalFrameData) return;
+            e.preventDefault();
+
+            if (key === 'd' || key === 'a') {
+                const isSpecial = key === 'a';
+                const frameDataToSend = { ...currentModalFrameData, isSpecial: isSpecial };
+                addFramesToQueue([frameDataToSend]);
+                closeModal();
+            }
+            else if (key === 'v') {
+                e.preventDefault();
+                addToFormSubmitQueue(currentModalFrameData);
+            }
+            else if (key === 's') {
+                e.preventDefault();
+                const frameDataForSearch = currentModalFrameData;
+                closeModal();
+                setTimeout(() => {
+                    openSemanticSearchModal(frameDataForSearch);
+                }, 100);
+            }
+        };
+
+        function closeModal(onClosedCallback = null) {
+            modal.removeEventListener('wheel', wheelHandler);
+            document.removeEventListener('keydown', keydownHandler);
+            mainPreviewOverlay.onclick = null;
+
+            modal.style.display = 'none';
+            mainPreview.src = "";
+
+            registerModalClose(modal);
+
+            if (typeof onClosedCallback === 'function') {
+                setTimeout(onClosedCallback, 50);
+            }
         }
+
+        thumbnailStrip.innerHTML = '';
+
+        neighborFrames.forEach(frameData => {
+            const thumb = document.createElement('img');
+            setFrameImageSource(thumb, getFrameUrl(videoId, frameData.filename));
+            thumb.title = `${videoId}_${frameData.frame_id_ori}`;
+            thumb.dataset.frameIdOri = frameData.frame_id_ori;
+
+            thumb.addEventListener('click', () => {
+                updateMainPreview(frameData);
+            });
+
+            if (frameData.frame_id_ori === parseInt(targetFrameIdOri, 10)) {
+                thumb.classList.add('active-frame');
+            }
+            thumbnailStrip.appendChild(thumb);
+        });
+
+        modal.addEventListener('wheel', wheelHandler, { passive: false });
+        document.addEventListener('keydown', keydownHandler);
+        modal.querySelector('.modal-overlay').onclick = () => closeModal();
+
+        const initialFrame = neighborFrames.find(f => f.frame_id_ori === parseInt(targetFrameIdOri, 10));
+        if (initialFrame) {
+            updateMainPreview(initialFrame);
+        }
+        
+        registerModalOpen(modal, closeModal);
+        modal.style.display = 'flex';
+
+        setTimeout(() => {
+            const activeThumb = thumbnailStrip.querySelector('.active-frame');
+            if (activeThumb) activeThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+        }, 50);
     }
-    
-    // --- BƯỚC 6: KHỞI TẠO VÀ HIỂN THỊ MODAL ---
-    thumbnailStrip.innerHTML = '';
-    
-    const start = Math.max(0, currentIndexInList - 50);
-    const end = Math.min(sortedFrames.length, currentIndexInList + 51);
-    
-    for (let i = start; i < end; i++) {
-        const frameData = sortedFrames[i];
-        const thumb = document.createElement('img');
-        thumb.src = `${folderUrlPath}/${frameData.filename}`;
-        thumb.dataset.frameNumber = frameData.frameNum;
-        if (frameData.frameNum === clickedFrameNumber) {
-            thumb.classList.add('active-frame'); // Frame ban đầu được click
+
+    function parseTimestamp(inputTimestamp) {
+        if (inputTimestamp === null || inputTimestamp === undefined || inputTimestamp === '') {
+            return 0;
         }
-        thumbnailStrip.appendChild(thumb);
-    }
 
-    modal.addEventListener('wheel', wheelHandler, { passive: false });
-    document.addEventListener('keydown', keydownHandler);
-    thumbnailStrip.addEventListener('click', clickThumbnailHandler);
-    modal.querySelector('.modal-overlay').onclick = () => closeModal();
+        if (typeof inputTimestamp === 'number') {
+            return inputTimestamp; // Trả về trực tiếp
+        }
 
-    updateMainPreview(clickedFrameNumber); // Tải ảnh chính đầu tiên
-    modal.style.display = 'flex';
-    
-    setTimeout(() => {
-        const activeThumb = thumbnailStrip.querySelector('.active-frame');
-        if (activeThumb) activeThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
-    }, 50);
-}
+        if (typeof inputTimestamp === 'string') {
+            if (inputTimestamp.includes(':')) {
+                const parts = inputTimestamp.split(':');
+                if (parts.length === 2) {
+                    const minutes = parseInt(parts[0], 10);
+                    const seconds = parseFloat(parts[1]);
+                    if (!isNaN(minutes) && !isNaN(seconds)) {
+                        return (minutes * 60) + seconds;
+                    }
+                }
+            }
+            else {
+                const numericValue = parseFloat(inputTimestamp);
+                if (!isNaN(numericValue)) {
+                    return numericValue;
+                }
+            }
+        }
 
-
-function parseTimestamp(inputTimestamp) {
-    if (inputTimestamp === null || inputTimestamp === undefined || inputTimestamp === '') {
+        console.warn(`Không thể phân tích định dạng timestamp: "${inputTimestamp}". Mặc định là 0 giây.`);
         return 0;
     }
 
-    if (typeof inputTimestamp === 'number') {
-        return inputTimestamp; // Trả về trực tiếp
+    function getHlsPlaylistUrl(videoName) {
+        return `${APP_CONFIG.REMOTE_BASE_URL}/videos_hls/${encodeURIComponent(videoName)}/playlist.m3u8`;
     }
 
-    if (typeof inputTimestamp === 'string') {
-        if (inputTimestamp.includes(':')) {
-            const parts = inputTimestamp.split(':');
-            if (parts.length === 2) {
-                const minutes = parseInt(parts[0], 10);
-                const seconds = parseFloat(parts[1]);
-                if (!isNaN(minutes) && !isNaN(seconds)) {
-                    return (minutes * 60) + seconds;
-                }
-            }
-        } 
-        else {
-            const numericValue = parseFloat(inputTimestamp);
-            if (!isNaN(numericValue)) {
-                return numericValue;
-            }
-        }
-    }
+    function openVideoModal(videoName, timestamp) {
 
-    console.warn(`Không thể phân tích định dạng timestamp: "${inputTimestamp}". Mặc định là 0 giây.`);
-    return 0;
-}
-
-function openVideoModal(videoName, timestamp) {
-
-    if (isTrakeMode) {
-        toggleTrakeMode(false); 
-    }
-    currentVideoModalData = { videoName, timestamp };
-
-    const modal = document.getElementById('videoModal');
-    const player = document.getElementById('videoPlayer');
-    const closeBtn = document.getElementById('closeVideoModalBtn');
-    const captureCanvas = document.getElementById('frameCaptureCanvas');
-
-    const playPauseBtn = document.getElementById('playPauseBtn');
-    const playIcon = playPauseBtn.querySelector('i');
-    const seekBackwardBtn = document.getElementById('seekBackwardBtn');
-    const seekForwardBtn = document.getElementById('seekForwardBtn');
-    const seekSlider = document.getElementById('videoSeekSlider');
-    const currentTimeDisplay = document.getElementById('currentTimeDisplay');
-    const durationDisplay = document.getElementById('durationDisplay');
-    
-    const muteBtn = document.getElementById('muteBtn');
-    const volumeIcon = muteBtn.querySelector('i');
-    const volumeSlider = document.getElementById('volumeSlider');
-
-    const SKIP_TIME = 1;
-    const FAST_FORWARD_RATE = 2.5;
-
-    let isSeeking = false;
-    let rewindInterval = null;
-
-    if (!videoName || !timestamp) {
-        showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
-        return;
-    }
-
-    console.log("time:", timestamp);
-    const formatTime = (timeInSeconds) => {
-        const minutes = Math.floor(timeInSeconds / 60);
-        const seconds = Math.floor(timeInSeconds % 60);
-        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-    };
-
-    const togglePlayPause = () => player.paused ? player.play() : player.pause();
-    
-    const updatePlayButton = () => {
-        playIcon.classList.toggle('fa-play', player.paused);
-        playIcon.classList.toggle('fa-pause', !player.paused);
-    };
-
-    const updateSlider = () => {
-        if (!isSeeking && player.duration) {
-            seekSlider.value = player.currentTime;
-            currentTimeDisplay.textContent = formatTime(player.currentTime);
-        }
-    };
-
-    const toggleMute = () => {
-        player.muted = !player.muted;
-    };
-
-    const updateVolumeUI = () => {
-        if (player.muted || player.volume === 0) {
-            volumeIcon.className = 'fas fa-volume-xmark';
-            volumeSlider.value = 0;
-        } else {
-            volumeIcon.className = 'fas fa-volume-up';
-            volumeSlider.value = player.volume;
-        }
-    };
-
-    const handleVolumeChange = () => {
-        player.volume = volumeSlider.value;
-        if (player.volume > 0) {
-            player.muted = false;
-        }
-    };
-
-    // <<< BẮT ĐẦU THAY ĐỔI >>>
-    // Hàm onLoadedMetadata bây giờ chỉ tập trung vào việc cập nhật UI
-    // Việc tua video sẽ được xử lý riêng cho HLS để đảm bảo độ chính xác
-    const onLoadedMetadata = () => {
-        if (player.duration) {
-            seekSlider.max = player.duration;
-            durationDisplay.textContent = formatTime(player.duration);
-        }
-        updateVolumeUI(); // Cập nhật UI âm thanh ban đầu
-    };
-    // <<< KẾT THÚC THAY ĐỔI >>>
-    
-    const handleKeyDown = (e) => {
-
-        if (document.activeElement === trakeSeekGapInput) {
-            if (e.key === 'Enter' || e.key === 'Escape') {
-                trakeSeekGapInput.blur(); // Thoát focus khi nhấn Enter hoặc Escape
-            }
-            return; // Không xử lý các phím tắt khác khi đang gõ
-        }
-        if (e.key === 'Tab') {
-            e.preventDefault(); // Ngăn hành vi mặc định của Tab
-            toggleTrakeMode(!isTrakeMode); // Bật/tắt chế độ TRAKE
-            return; // Dừng lại sau khi xử lý Tab
-        }
-
-
-        if (e.key === 'Escape') { closePreviewModal(); return; }
-        if (isTrakeMode) {
-            const eventNumber = parseInt(e.key);
-            if (!isNaN(eventNumber) && eventNumber >= 1 && eventNumber <= 5) {
-                e.preventDefault();
-                captureAndSubmitTrakeFrame(eventNumber);
-            }
-        } else {
-            
-            if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
-
-            const activeElement = document.activeElement;
-            if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
-            
-            const key = e.key.toLowerCase();
-
-            switch (key) {
-                case ' ': e.preventDefault(); togglePlayPause(); break;
-                case 'v':
-                    e.preventDefault();
-                    // Tạm dừng video để chụp frame
-                    player.pause();
-                    // Tạo một hàm async nhỏ để xử lý vì captureFrame cần là async
-                    (async () => {
-                        const currentTime = player.currentTime;
-                        const fps = await getFpsForVideo(videoName);
-                        const frameNumber = Math.round(currentTime * fps);
-                        
-                        captureCanvas.width = player.videoWidth;
-                        captureCanvas.height = player.videoHeight;
-                        // ... (phần code vẽ canvas giống hệt trong captureFrameAndAddToQueue)
-                        const context = captureCanvas.getContext('2d');
-                        context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-                        const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-
-                        const minutes = Math.floor(currentTime / 60);
-                        const seconds = (currentTime % 60).toFixed(3);
-                        const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
-
-                        const newFrameData = {
-                            videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
-                            timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
-                            score: 0, temporal_score: 0, videoPath: `/videos/${videoName}.mp4`, fps, isFromVideo: true
-                        };
-                        
-                        addToFormSubmitQueue(newFrameData);
-                    })();
-                    break;
-                case 'm': e.preventDefault(); toggleMute(); break;
-                case 'arrowright':
-                    e.preventDefault();
-                    if (e.shiftKey) { // Nếu giữ Shift
-                        player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
-                    } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
-                        player.playbackRate = FAST_FORWARD_RATE;
-                    }
-                    break;
-
-                case 'arrowleft':
-                    e.preventDefault();
-                    if (e.shiftKey) { // Nếu giữ Shift
-                        player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
-                    } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
-                        rewindInterval = setInterval(() => {
-                            player.currentTime = Math.max(0, player.currentTime - 0.2);
-                        }, 100);
-                    }
-                    break;
-                }
-        }
-    };
-
-const handleKeyUp = (e) => {
-    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-        player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
-    }
-    switch (e.key) {
-        case 'ArrowRight':
-            e.preventDefault();
-            if (!e.repeat && !e.shiftKey) {
-                player.currentTime += SKIP_TIME;
-            }
-            break;
-
-        case 'ArrowLeft':
-            e.preventDefault();
-            if (rewindInterval) { // Dừng tua lùi (khi giữ phím)
-                clearInterval(rewindInterval);
-                rewindInterval = null;
-            } else if (!e.shiftKey) { // Tua 1 đoạn ngắn khi nhấn-nhả (không giữ)
-                player.currentTime -= SKIP_TIME;
-            }
-            break;
-    }
-};
-
-    const captureFrameAndAddToQueue = async () => { /* Giữ nguyên hàm này */
-        player.pause();
-        try {
-            const currentTime = player.currentTime;
-            const fps = await getFpsForVideo(videoName);
-            const frameNumber = Math.round(currentTime * fps);
-            
-            captureCanvas.width = player.videoWidth;
-            captureCanvas.height = player.videoHeight;
-            const context = captureCanvas.getContext('2d');
-            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-
-            const minutes = Math.floor(currentTime / 60);
-            const seconds = (currentTime % 60).toFixed(3);
-            const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
-            
-            const newFrameData = {
-                videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
-                timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
-                score: 0, temporal_score: 0, videoPath: `/videos/${videoName}.mp4`, fps, isFromVideo: true
-            };
-
-            sendWebSocketMessage('add_frames', { frames: [newFrameData] });
-            showToastNotification(`Đã chụp và thêm frame ${newFrameData.frameIdentifier} vào queue!`, 'success');
-            closePreviewModal();
-        } catch (error) {
-            console.error("Lỗi khi chụp frame:", error);
-            showToastNotification("Không thể chụp frame.", "error");
-            player.play();
-        }
-    };
-    
-    // <<< BẮT ĐẦU THAY ĐỔI >>>
-    // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
-    const closePreviewModal = () => {
         if (isTrakeMode) {
             toggleTrakeMode(false);
         }
-        // Hủy HLS player instance nếu nó tồn tại
+        currentVideoModalData = { videoName, timestamp };
+
+        const modal = document.getElementById('videoModal');
+        const player = document.getElementById('videoPlayer');
+        const closeBtn = document.getElementById('closeVideoModalBtn');
+        const captureCanvas = document.getElementById('frameCaptureCanvas');
+
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const playIcon = playPauseBtn.querySelector('i');
+        const seekBackwardBtn = document.getElementById('seekBackwardBtn');
+        const seekForwardBtn = document.getElementById('seekForwardBtn');
+        const seekSlider = document.getElementById('videoSeekSlider');
+        const currentTimeDisplay = document.getElementById('currentTimeDisplay');
+        const durationDisplay = document.getElementById('durationDisplay');
+
+        const muteBtn = document.getElementById('muteBtn');
+        const volumeIcon = muteBtn.querySelector('i');
+        const volumeSlider = document.getElementById('volumeSlider');
+
+        const SKIP_TIME = 1;
+        const FAST_FORWARD_RATE = 2.5;
+
+        let isSeeking = false;
+        let rewindInterval = null;
+
+        if (!videoName || !timestamp) {
+            showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
+            return;
+        }
+
+        console.log("time:", timestamp);
+        const formatTime = (timeInSeconds) => {
+            const minutes = Math.floor(timeInSeconds / 60);
+            const seconds = Math.floor(timeInSeconds % 60);
+            return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        };
+
+        const togglePlayPause = () => player.paused ? player.play() : player.pause();
+
+        const updatePlayButton = () => {
+            playIcon.classList.toggle('fa-play', player.paused);
+            playIcon.classList.toggle('fa-pause', !player.paused);
+        };
+
+        const updateSlider = () => {
+            if (!isSeeking && player.duration) {
+                seekSlider.value = player.currentTime;
+                currentTimeDisplay.textContent = formatTime(player.currentTime);
+            }
+        };
+
+        const toggleMute = () => {
+            player.muted = !player.muted;
+        };
+
+        const updateVolumeUI = () => {
+            if (player.muted || player.volume === 0) {
+                volumeIcon.className = 'fas fa-volume-xmark';
+                volumeSlider.value = 0;
+            } else {
+                volumeIcon.className = 'fas fa-volume-up';
+                volumeSlider.value = player.volume;
+            }
+        };
+
+        const handleVolumeChange = () => {
+            player.volume = volumeSlider.value;
+            if (player.volume > 0) {
+                player.muted = false;
+            }
+        };
+
+        const handleSeekInput = () => {
+            player.currentTime = seekSlider.value;
+        };
+        const handleSeekMouseDown = () => {
+            isSeeking = true;
+        };
+        const handleSeekMouseUp = () => {
+            isSeeking = false;
+        };
+        let nativeLoadedMetadataHandler = null;
+        let playerErrorHandler = null;
+
+        // <<< BẮT ĐẦU THAY ĐỔI >>>
+        // Hàm onLoadedMetadata bây giờ chỉ tập trung vào việc cập nhật UI
+        // Việc tua video sẽ được xử lý riêng cho HLS để đảm bảo độ chính xác
+        const onLoadedMetadata = () => {
+            if (player.duration) {
+                seekSlider.max = player.duration;
+                durationDisplay.textContent = formatTime(player.duration);
+            }
+            updateVolumeUI(); // Cập nhật UI âm thanh ban đầu
+        };
+        // <<< KẾT THÚC THAY ĐỔI >>>
+
+        const handleKeyDown = (e) => {
+
+            if (document.activeElement === trakeSeekGapInput) {
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                    trakeSeekGapInput.blur(); // Thoát focus khi nhấn Enter hoặc Escape
+                }
+                return; // Không xử lý các phím tắt khác khi đang gõ
+            }
+            if (e.key === 'Tab') {
+                e.preventDefault(); // Ngăn hành vi mặc định của Tab
+                toggleTrakeMode(!isTrakeMode); // Bật/tắt chế độ TRAKE
+                return; // Dừng lại sau khi xử lý Tab
+            }
+
+
+            if (e.key === 'Escape') { closePreviewModal(); return; }
+            if (isTrakeMode) {
+                const eventNumber = parseInt(e.key);
+                if (!isNaN(eventNumber) && eventNumber >= 1 && eventNumber <= 5) {
+                    e.preventDefault();
+                    captureAndSubmitTrakeFrame(eventNumber);
+                }
+            } else {
+
+                if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
+
+                const activeElement = document.activeElement;
+                if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
+
+                const key = e.key.toLowerCase();
+
+                switch (key) {
+                    case ' ': e.preventDefault(); togglePlayPause(); break;
+                    case 'v':
+                        e.preventDefault();
+                        // Tạm dừng video để chụp frame
+                        player.pause();
+                        // Tạo một hàm async nhỏ để xử lý vì captureFrame cần là async
+                        (async () => {
+                            const currentTime = player.currentTime;
+                            const fps = await getFpsForVideo(videoName);
+                            const frameNumber = Math.round(currentTime * fps);
+
+                            captureCanvas.width = player.videoWidth;
+                            captureCanvas.height = player.videoHeight;
+                            // ... (phần code vẽ canvas giống hệt trong captureFrameAndAddToQueue)
+                            const context = captureCanvas.getContext('2d');
+                            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
+                            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
+                            const minutes = Math.floor(currentTime / 60);
+                            const seconds = (currentTime % 60).toFixed(3);
+                            const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+
+                            const newFrameData = {
+                                videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
+                                timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
+                                score: 0, temporal_score: 0, videoPath: getHlsPlaylistUrl(videoName), fps, isFromVideo: true
+                            };
+
+                            addToFormSubmitQueue(newFrameData);
+                        })();
+                        break;
+                    case 'm': e.preventDefault(); toggleMute(); break;
+                    case 'arrowright':
+                        e.preventDefault();
+                        if (e.shiftKey) { // Nếu giữ Shift
+                            player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                        } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
+                            player.playbackRate = FAST_FORWARD_RATE;
+                        }
+                        break;
+
+                    case 'arrowleft':
+                        e.preventDefault();
+                        if (e.shiftKey) { // Nếu giữ Shift
+                            player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                        } else if (e.repeat && !rewindInterval) { // Logic tua lùi cũ
+                            rewindInterval = setInterval(() => {
+                                player.currentTime = Math.max(0, player.currentTime - 0.2);
+                            }, 100);
+                        }
+                        break;
+                }
+            }
+        };
+
+        const handleKeyUp = (e) => {
+            if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
+            }
+            switch (e.key) {
+                case 'ArrowRight':
+                    e.preventDefault();
+                    if (!e.repeat && !e.shiftKey) {
+                        player.currentTime += SKIP_TIME;
+                    }
+                    break;
+
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    if (rewindInterval) { // Dừng tua lùi (khi giữ phím)
+                        clearInterval(rewindInterval);
+                        rewindInterval = null;
+                    } else if (!e.shiftKey) { // Tua 1 đoạn ngắn khi nhấn-nhả (không giữ)
+                        player.currentTime -= SKIP_TIME;
+                    }
+                    break;
+            }
+        };
+
+        const captureFrameAndAddToQueue = async () => {
+            player.pause();
+            try {
+                const currentTime = player.currentTime;
+                const fps = await getFpsForVideo(videoName);
+                const frameNumber = Math.round(currentTime * fps);
+
+                // === BẮT ĐẦU PHẦN TỐI ƯU HÓA ===
+
+                // 1. THÊM VÀO: Định nghĩa chiều rộng cho thumbnail (ví dụ: 320px là đủ)
+                const THUMBNAIL_WIDTH = 320;
+
+                // 2. THÊM VÀO: Tính toán chiều cao tương ứng để giữ đúng tỷ lệ khung hình
+                const aspectRatio = player.videoHeight / player.videoWidth;
+                const thumbnailHeight = Math.round(THUMBNAIL_WIDTH * aspectRatio);
+
+                // 3. SỬA ĐỔI: Set kích thước canvas theo thumbnail, không phải video gốc
+                captureCanvas.width = THUMBNAIL_WIDTH;
+                captureCanvas.height = thumbnailHeight;
+
+                const context = captureCanvas.getContext('2d');
+                
+                // 4. SỬA ĐỔI: Vẽ video gốc vào canvas nhỏ (nó sẽ tự động co lại)
+                context.drawImage(player, 0, 0, THUMBNAIL_WIDTH, thumbnailHeight);
+
+                // 5. SỬA ĐỔI: Tạo Data URL từ canvas nhỏ này, chất lượng có thể giảm một chút để tối ưu hơn
+                const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.8); // Giảm quality xuống 0.8
+
+                // === KẾT THÚC PHẦN TỐI ƯU HÓA ===
+
+                const minutes = Math.floor(currentTime / 60);
+                const seconds = (currentTime % 60).toFixed(3);
+                const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+
+                const newFrameData = {
+                    videoName,
+                    path: imagePathDataUrl, // Gửi đi Data URL của thumbnail
+                    frame_id_ori: frameNumber,
+                    id: frameNumber,
+                    timestamp: newTimestamp,
+                    frameIdentifier: `${videoName}_${frameNumber}`,
+                    score: 0,
+                    temporal_score: 0,
+                    videoPath: getHlsPlaylistUrl(videoName),
+                    fps,
+                    isFromVideo: true
+                };
+
+                addFramesToQueue([newFrameData]);
+                closePreviewModal();
+            } catch (error) {
+                console.error("Lỗi khi chụp frame:", error);
+                showToastNotification("Không thể chụp frame.", "error");
+                player.play();
+            }
+        };
+
+        // <<< BẮT ĐẦU THAY ĐỔI >>>
+        // Cập nhật hàm closeModal để hủy instance HLS, tránh rò rỉ bộ nhớ
+        const closePreviewModal = () => {
+            if (isTrakeMode) {
+                toggleTrakeMode(false);
+            }
+            if (hlsPlayerInstance) {
+                hlsPlayerInstance.destroy();
+                hlsPlayerInstance = null;
+            }
+
+            player.pause();
+            player.removeEventListener('loadedmetadata', onLoadedMetadata);
+            player.removeEventListener('timeupdate', updateSlider);
+            player.removeEventListener('play', updatePlayButton);
+            player.removeEventListener('pause', updatePlayButton);
+            player.removeEventListener('volumechange', updateVolumeUI);
+            if (playerErrorHandler) {
+                player.removeEventListener('error', playerErrorHandler);
+            }
+            if (nativeLoadedMetadataHandler) {
+                player.removeEventListener('loadedmetadata', nativeLoadedMetadataHandler);
+            }
+            seekSlider.removeEventListener('input', handleSeekInput);
+            seekSlider.removeEventListener('mousedown', handleSeekMouseDown);
+            seekSlider.removeEventListener('mouseup', handleSeekMouseUp);
+            volumeSlider.removeEventListener('input', handleVolumeChange);
+            document.removeEventListener('keydown', handleKeyDown);
+            document.removeEventListener('keyup', handleKeyUp);
+            if (rewindInterval) clearInterval(rewindInterval);
+
+            // Dọn dẹp player để sẵn sàng cho lần mở tiếp theo
+            player.removeAttribute('src');
+            player.load();
+
+            modal.style.display = 'none';
+            registerModalClose(modal);
+        };
+        // <<< KẾT THÚC THAY ĐỔI >>>
+
+        // --- KHỞI TẠO VÀ GÁN SỰ KIỆN ---
+        player.addEventListener('loadedmetadata', onLoadedMetadata);
+        player.addEventListener('timeupdate', updateSlider);
+        player.addEventListener('play', updatePlayButton);
+        player.addEventListener('pause', updatePlayButton);
+        player.addEventListener('volumechange', updateVolumeUI);
+
+        playPauseBtn.onclick = togglePlayPause;
+        seekBackwardBtn.onclick = () => player.currentTime -= SKIP_TIME;
+        seekForwardBtn.onclick = () => player.currentTime += SKIP_TIME;
+
+        seekSlider.addEventListener('input', handleSeekInput);
+        seekSlider.addEventListener('mousedown', handleSeekMouseDown);
+        seekSlider.addEventListener('mouseup', handleSeekMouseUp);
+
+        muteBtn.onclick = toggleMute;
+        volumeSlider.addEventListener('input', handleVolumeChange);
+        const closeModal = closePreviewModal;
+        modal.querySelector('.modal-overlay').onclick = closeModal;
+        closeBtn.onclick = closeModal;
+        document.addEventListener('keydown', handleKeyDown);
+        document.addEventListener('keyup', handleKeyUp);
+
+        const targetTimeInSeconds = parseTimestamp(timestamp);
+        const videoSrc = getHlsPlaylistUrl(videoName);
+        const seekAndPlay = () => {
+            player.currentTime = targetTimeInSeconds;
+            player.play().catch(e => console.error("Lỗi tự động phát video:", e));
+        };
+
         if (hlsPlayerInstance) {
             hlsPlayerInstance.destroy();
             hlsPlayerInstance = null;
         }
 
-        player.pause();
-        document.removeEventListener('keydown', handleKeyDown);
-        document.removeEventListener('keyup', handleKeyUp);
-        if (rewindInterval) clearInterval(rewindInterval);
+        if (window.Hls && Hls.isSupported()) {
+            hlsPlayerInstance = new Hls({ enableWorker: true });
+            hlsPlayerInstance.loadSource(videoSrc);
+            hlsPlayerInstance.attachMedia(player);
+            hlsPlayerInstance.on(Hls.Events.MANIFEST_PARSED, seekAndPlay);
+            hlsPlayerInstance.on(Hls.Events.ERROR, (event, data) => {
+                console.error("HLS playback error:", data);
+                if (data.fatal) {
+                    showToastNotification(`Lỗi: Không thể tải HLS tại ${videoSrc}`, "error");
+                }
+            });
+        } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+            player.src = videoSrc;
+            nativeLoadedMetadataHandler = seekAndPlay;
+            player.addEventListener('loadedmetadata', nativeLoadedMetadataHandler, { once: true });
+        } else {
+            showToastNotification("Trình duyệt không hỗ trợ HLS playback.", "error");
+            console.error("HLS is not supported by this browser.");
+        }
+
+        playerErrorHandler = () => {
+            showToastNotification(`Lỗi: Không thể tải video tại ${videoSrc}`, "error");
+            console.error(`Không tìm thấy hoặc không thể phát video: ${videoSrc}`);
+        };
+        player.addEventListener('error', playerErrorHandler, { once: true });
         
-        // Dọn dẹp player để sẵn sàng cho lần mở tiếp theo
-        player.removeAttribute('src');
-        player.load();
-        
-        modal.style.display = 'none';
-    };
-    // <<< KẾT THÚC THAY ĐỔI >>>
-
-    // --- KHỞI TẠO VÀ GÁN SỰ KIỆN ---
-    player.addEventListener('loadedmetadata', onLoadedMetadata);
-    player.addEventListener('timeupdate', updateSlider);
-    player.addEventListener('play', updatePlayButton);
-    player.addEventListener('pause', updatePlayButton);
-    player.addEventListener('volumechange', updateVolumeUI);
-
-    playPauseBtn.onclick = togglePlayPause;
-    seekBackwardBtn.onclick = () => player.currentTime -= SKIP_TIME;
-    seekForwardBtn.onclick = () => player.currentTime += SKIP_TIME;
-    
-    seekSlider.addEventListener('input', () => player.currentTime = seekSlider.value);
-    seekSlider.addEventListener('mousedown', () => isSeeking = true);
-    seekSlider.addEventListener('mouseup', () => isSeeking = false);
-    
-    muteBtn.onclick = toggleMute;
-    volumeSlider.addEventListener('input', handleVolumeChange);
-    const closeModal = closePreviewModal;
-    modal.querySelector('.modal-overlay').onclick = closeModal;
-    closeBtn.onclick = closeModal;
-    document.addEventListener('keydown', handleKeyDown);
-    document.addEventListener('keyup', handleKeyUp);
-
-    const hlsSrc = `/videos_hls/${videoName}/playlist.m3u8`;
-    const targetTimeInSeconds = parseTimestamp(timestamp);
-
-    if (hlsPlayerInstance) {
-        hlsPlayerInstance.destroy();
+        registerModalOpen(modal, closePreviewModal);
+        modal.style.display = 'flex';
+        // <<< KẾT THÚC THAY ĐỔI >>>
     }
-    if (player.canPlayType('application/vnd.apple.mpegurl')) {
-        player.src = hlsSrc;
-        player.addEventListener('canplay', () => {
-             player.currentTime = targetTimeInSeconds;
-             player.play().catch(e => console.error("Lỗi tự động phát video:", e));
-        }, { once: true });
-    } 
-    else if (Hls.isSupported()) {
-        hlsPlayerInstance = new Hls();
-        hlsPlayerInstance.loadSource(hlsSrc);
-        hlsPlayerInstance.attachMedia(player);
-        hlsPlayerInstance.on(Hls.Events.MANIFEST_PARSED, function() {
-            player.currentTime = targetTimeInSeconds;
-            player.play().catch(e => console.error("Lỗi tự động phát video:", e));
-        });
-
-        // Xử lý lỗi
-        hlsPlayerInstance.on(Hls.Events.ERROR, function(event, data) {
-            if (data.fatal) {
-                console.error('Lỗi HLS nghiêm trọng:', data.type, data.details);
-                showToastNotification(`Lỗi khi tải video: ${data.details}`, "error");
-            }
-        });
-    } else {
-        showToastNotification("Trình duyệt của bạn không hỗ trợ HLS streaming.", "error");
-        return; // Dừng lại nếu không thể phát video
-    }
-
-    modal.style.display = 'flex';
-    // <<< KẾT THÚC THAY ĐỔI >>>
-}
     const frameSelectionManager = {
         selectedFrames: new Map(), // Map lưu tất cả frame đã chọn: key = frameId, value = frameData
-        
-        // Thêm frame vào danh sách đã chọn
+
+                          // Thêm frame vào danh sách đã chọn
+                          selectFrame(frameId, frameData) {
+                              this.selectedFrames.set(frameId, frameData);
+                              this.updateSelectionUI();
+                              this.triggerSelectionChanged();
+                          },
+
+                          // Bỏ chọn một frame
+                          deselectFrame(frameId) {
+                              this.selectedFrames.delete(frameId);
+                              this.updateSelectionUI();
+                              this.triggerSelectionChanged();
+                          },
+
+                          // Kiểm tra frame đã được chọn chưa
+                          isSelected(frameId) {
+                              return this.selectedFrames.has(frameId);
+                          },
+
+                          // Chọn/bỏ chọn (toggle)
+                          toggleSelection(frameId, frameData) {
+                              if (this.isSelected(frameId)) {
+                                  this.deselectFrame(frameId);
+                                  return false; // Trả về false nếu đã bỏ chọn
+                              } else {
+                                  this.selectFrame(frameId, frameData);
+                                  return true; // Trả về true nếu đã chọn
+                              }
+                          },
+
+                          // Xóa tất cả các chọn
+                          clearAllSelections() {
+                              this.selectedFrames.clear();
+                              this.updateSelectionUI();
+                              this.triggerSelectionChanged();
+                          },
+
+                          // Lấy tất cả frame đã chọn
+                          getAllSelectedFrames() {
+                              return Array.from(this.selectedFrames.values());
+                          },
+
+                          // Đếm số frame đã chọn
+                          getSelectionCount() {
+                              return this.selectedFrames.size;
+                          },
+
+                          // Cập nhật UI dựa trên trạng thái chọn
+                          updateSelectionUI() {
+                              // Xóa tất cả class selected
+                              document.querySelectorAll('.image-item.selected').forEach(el => {
+                                  el.classList.remove('selected');
+                              });
+
+                              // Thêm class selected cho các frame đã chọn
+                              this.selectedFrames.forEach(frameData => {
+                                  if (frameData.element) {
+                                      frameData.element.classList.add('selected');
+                                  }
+                              });
+
+                              // Hiển thị/ẩn toolbar nếu có frame được chọn
+                              this.updateSelectionToolbar();
+                          },
+
+                          // Cập nhật toolbar dựa trên số lượng frame đã chọn
+                          updateSelectionToolbar() {
+                              const toolbar = document.getElementById('selectionToolbar');
+                              if (!toolbar) return;
+
+                              if (this.getSelectionCount() > 0) {
+                                  toolbar.style.display = 'flex';
+                                  // Cập nhật số lượng item đã chọn
+                                  const countElement = toolbar.querySelector('.selection-count');
+                                  if (countElement) {
+                                      countElement.textContent = this.getSelectionCount();
+                                  }
+
+                                  // Cập nhật trạng thái các nút dựa trên số lượng frame đã chọn
+                                  this.updateToolbarButtonStates();
+                              } else {
+                                  toolbar.style.display = 'none';
+                              }
+                          },
+
+                          // Cập nhật trạng thái các nút trên toolbar
+                          updateToolbarButtonStates() {
+                              const count = this.getSelectionCount();
+
+                              // Ví dụ: Nút "View Keyframes" chỉ kích hoạt khi chọn chính xác 1 frame
+                              const viewKeyframesBtn = document.getElementById('viewKeyframesBtn');
+                              if (viewKeyframesBtn) {
+                                  viewKeyframesBtn.disabled = count !== 1;
+                              }
+
+                              // Có thể thêm logic cho các nút khác ở đây
+                          },
+
+                          // Kích hoạt sự kiện khi trạng thái chọn thay đổi (để các module khác có thể lắng nghe)
+                          triggerSelectionChanged() {
+                              const event = new CustomEvent('frameSelectionChanged', {
+                                  detail: {
+                                      selectedCount: this.getSelectionCount(),
+                                                            selectedFrames: this.getAllSelectedFrames()
+                                  }
+                              });
+                              document.dispatchEvent(event);
+                          }
+    };
+
+    const modalFrameSelectionManager = {
+        selectedFrames: new Map(),
+
         selectFrame(frameId, frameData) {
             this.selectedFrames.set(frameId, frameData);
             this.updateSelectionUI();
             this.triggerSelectionChanged();
         },
-        
-        // Bỏ chọn một frame
+
         deselectFrame(frameId) {
             this.selectedFrames.delete(frameId);
             this.updateSelectionUI();
             this.triggerSelectionChanged();
         },
-        
-        // Kiểm tra frame đã được chọn chưa
+
         isSelected(frameId) {
             return this.selectedFrames.has(frameId);
         },
-        
-        // Chọn/bỏ chọn (toggle)
+
         toggleSelection(frameId, frameData) {
             if (this.isSelected(frameId)) {
                 this.deselectFrame(frameId);
-                return false; // Trả về false nếu đã bỏ chọn
             } else {
                 this.selectFrame(frameId, frameData);
-                return true; // Trả về true nếu đã chọn
             }
         },
-        
-        // Xóa tất cả các chọn
+
         clearAllSelections() {
             this.selectedFrames.clear();
             this.updateSelectionUI();
             this.triggerSelectionChanged();
         },
-        
-        // Lấy tất cả frame đã chọn
+
         getAllSelectedFrames() {
             return Array.from(this.selectedFrames.values());
         },
-        
-        // Đếm số frame đã chọn
+
         getSelectionCount() {
             return this.selectedFrames.size;
         },
-        
-        // Cập nhật UI dựa trên trạng thái chọn
+
+        // --- CÁC HÀM SAU ĐÂY ĐƯỢC CHỈNH SỬA ĐỂ HOẠT ĐỘNG VỚI MODAL ---
+
         updateSelectionUI() {
-            // Xóa tất cả class selected
-            document.querySelectorAll('.image-item.selected').forEach(el => {
+            // Chỉ tìm các frame bên trong modal
+            document.querySelectorAll('#semanticSearchResultsContainer .image-item.selected').forEach(el => {
                 el.classList.remove('selected');
             });
-            
-            // Thêm class selected cho các frame đã chọn
+
             this.selectedFrames.forEach(frameData => {
                 if (frameData.element) {
                     frameData.element.classList.add('selected');
                 }
             });
             
-            // Hiển thị/ẩn toolbar nếu có frame được chọn
+            // Cập nhật toolbar của modal
             this.updateSelectionToolbar();
         },
         
-        // Cập nhật toolbar dựa trên số lượng frame đã chọn
         updateSelectionToolbar() {
-            const toolbar = document.getElementById('selectionToolbar');
+            // Tìm toolbar bên trong modal
+            const toolbar = document.getElementById('modalSelectionToolbar');
             if (!toolbar) return;
-            
-            if (this.getSelectionCount() > 0) {
+
+            const count = this.getSelectionCount();
+            if (count > 0) {
                 toolbar.style.display = 'flex';
-                // Cập nhật số lượng item đã chọn
                 const countElement = toolbar.querySelector('.selection-count');
                 if (countElement) {
-                    countElement.textContent = this.getSelectionCount();
+                    countElement.textContent = count;
                 }
-                
-                // Cập nhật trạng thái các nút dựa trên số lượng frame đã chọn
-                this.updateToolbarButtonStates();
             } else {
                 toolbar.style.display = 'none';
             }
         },
-        
-        // Cập nhật trạng thái các nút trên toolbar
-        updateToolbarButtonStates() {
-            const count = this.getSelectionCount();
-            
-            // Ví dụ: Nút "View Keyframes" chỉ kích hoạt khi chọn chính xác 1 frame
-            const viewKeyframesBtn = document.getElementById('viewKeyframesBtn');
-            if (viewKeyframesBtn) {
-                viewKeyframesBtn.disabled = count !== 1;
-            }
-            
-            // Có thể thêm logic cho các nút khác ở đây
-        },
-        
-        // Kích hoạt sự kiện khi trạng thái chọn thay đổi (để các module khác có thể lắng nghe)
+
         triggerSelectionChanged() {
-            const event = new CustomEvent('frameSelectionChanged', {
+            // Tạo một sự kiện riêng cho modal để tránh xung đột
+            const event = new CustomEvent('modalFrameSelectionChanged', {
                 detail: {
                     selectedCount: this.getSelectionCount(),
                     selectedFrames: this.getAllSelectedFrames()
@@ -3001,15 +3918,15 @@ const handleKeyUp = (e) => {
     function setupToolbarEvents() {
         // Lắng nghe sự kiện click trên toolbar
         const toolbar = document.getElementById('selectionToolbar');
-        
+
         if (toolbar) {
             toolbar.addEventListener('click', function(e) {
                 // Tìm nút được nhấn
                 const button = e.target.closest('.toolbar-btn');
-                
+
                 if (button) {
                     const action = button.getAttribute('data-action');
-                    
+
                     // Xử lý các hành động
                     switch (action) {
                         case 'view-keyframes':
@@ -3019,30 +3936,45 @@ const handleKeyUp = (e) => {
                                 openImageModal(selectedFrame.id, selectedFrame.path, selectedFrame);
                             }
                             break;
-                            
+
                         case 'clear-selection':
                             // Bỏ chọn tất cả
                             frameSelectionManager.clearAllSelections();
                             break;
-                            
-                        // Thêm các case khác khi cần
+
+                            // Thêm các case khác khi cần
                         default:
                             console.log('Hành động không được hỗ trợ:', action);
                     }
                 }
             });
         }
-        
+
         // Thiết lập phím tắt
         document.addEventListener('keydown', function(e) {
 
+            if (e.key === 'Backspace') {
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+                if (isTyping || getTopActiveModal()) {
+                    return;
+                }
+
+                if (frameSelectionManager.getSelectionCount() === 1) {
+                    e.preventDefault();
+                    const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                    requestClusterDeletion(selectedFrame.data);
+                }
+                return;
+            }
+
             // Phím F: Mở modal keyframe nếu chỉ có 1 frame được chọn
             if (e.key === 'f' || e.key === 'F') {
-                // e.preventDefault(); 
-                
+                // e.preventDefault();
+
                 if (currentlyHoveredPreviewFrameData) {
                     openImageModal(currentlyHoveredPreviewFrameData);
-                } 
+                }
                 // === BẮT ĐẦU THAY ĐỔI: THÊM LOGIC KIỂM TRA MỚI ===
                 else if (currentlyHoveredFormQueueFrameData) {
                     // Kiểm tra ràng buộc: không cho mở với frame "live"
@@ -3058,76 +3990,130 @@ const handleKeyUp = (e) => {
                     openImageModal(selectedFrame.data);
                 }
             }
-            if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) {
-                if (currentlyHoveredPreviewFrameData) {
-                    e.preventDefault();
-                    initiateImageTemporalSearch(currentlyHoveredPreviewFrameData.path);
-                    // Tự động đóng thanh preview để tránh rối
-                    keyframePreviewBar.classList.remove('visible');
-                    header.classList.remove('header-expanded');
-                    return;
-                }
+            if (e.key === 't' || e.key === 'T') {
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
-                const imageModal = document.getElementById('imageModal');
+                const anyModalOpen = document.getElementById('imageModal').style.display === 'flex' ||
+                document.getElementById('videoModal').style.display === 'flex';
 
-                if (!isTyping && (!imageModal || imageModal.style.display !== 'flex')) {
+                if (!isTyping && !anyModalOpen && frameSelectionManager.getSelectionCount() === 1) {
                     e.preventDefault();
-                    if (currentlyHoveredPreviewFrameData) {
-                        initiateImageTemporalSearch(currentlyHoveredPreviewFrameData.path);
-                        keyframePreviewBar.classList.remove('visible');
-                        header.classList.remove('header-expanded');
-                    } 
-                    // === BẮT ĐẦU THAY ĐỔI: THÊM LOGIC KIỂM TRA MỚI ===
-                    else if (currentlyHoveredFormQueueFrameData) {
-                        initiateImageTemporalSearch(currentlyHoveredFormQueueFrameData.path);
-                    } 
-                    // === KẾT THÚC THAY ĐỔI ===
-                    else if (frameSelectionManager.getSelectionCount() === 1) {
-                        const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
-                        const imagePath = selectedFrame.data.path; 
-                        if (imagePath) {
-                            initiateImageTemporalSearch(imagePath); 
-                        } else {
-                            showToastNotification('Cannot start search: image path is missing.', 'error');
-                        }
+                    const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                    const baseFrameData = selectedFrame.data; // This is the data from the search result
+
+                    // NEW LOGIC: Check the flag first
+                    if (baseFrameData.has_temporal_chain) {
+                        // Fetch the full chain data for THIS frame only
+                        fetchFullTemporalChain(baseFrameData)
+                        .then(temporalChain => {
+                            openTemporalChainModal(baseFrameData, temporalChain);
+                        })
+                        .catch(err => {
+                            console.error("Failed to fetch full temporal chain:", err);
+                            showToastNotification("Could not load temporal chain data.", "error");
+                        });
+                    } else {
+                        showToastNotification("No temporal chain available for this frame.", "info");
                     }
                 }
             }
-            if (e.key === 'd' || e.key ==='D') {
+
+            if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) {
+                // Ngăn chặn hành vi khi đang gõ chữ hoặc khi có modal khác đang mở
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
+                const anyModalOpen = document.getElementById('imageModal').style.display === 'flex' ||
+                                     document.getElementById('videoModal').style.display === 'flex' ||
+                                     document.getElementById('temporalChainModal').style.display === 'flex';
+
+                if (isTyping || anyModalOpen) {
+                    return; // Không làm gì cả
+                }
+
+                e.preventDefault(); // Ngăn hành vi mặc định (ví dụ: mở ô tìm kiếm của trình duyệt)
+
+                let frameToSearch = null;
+
+                if (currentlyHoveredPreviewFrameData) {
+                    frameToSearch = currentlyHoveredPreviewFrameData;
+                }
+                else if (currentlyHoveredFormQueueFrameData) {
+                    frameToSearch = currentlyHoveredFormQueueFrameData;
+                }
+                else if (frameSelectionManager.getSelectionCount() === 1) {
+                    const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
+                    frameToSearch = selectedFrame.data;
+                }
+                // LOGIC MỚI CHO HÀNG ĐỢI CỘNG TÁC
+                else if (selectedQueueFrameIds.size === 1) {
+                     const lastSelectedId = Array.from(selectedQueueFrameIds).pop();
+                     frameToSearch = submitQueueFrames.get(lastSelectedId);
+                }
+
+
+                if (frameToSearch) {
+                    // Gọi hàm quản lý modal mới của chúng ta!
+                    openSemanticSearchModal(frameToSearch);
+                    
+                    // Nếu đang mở thanh preview, hãy đóng nó đi cho gọn
+                    if (keyframePreviewBar.classList.contains('visible')) {
+                        keyframePreviewBar.classList.remove('visible');
+                        header.classList.remove('header-expanded');
+                    }
+                } else {
+                    showToastNotification("Vui lòng chọn hoặc di chuột qua một frame duy nhất.", "info");
+                }
+            }
+            if (e.key.toLowerCase() === 'd' || e.key.toLowerCase() === 'a') {
+                const isSpecialSubmission = e.key.toLowerCase() === 'a';
+
                 if (currentlyHoveredPreviewFrameData) {
                     e.preventDefault();
-                    sendWebSocketMessage('add_frames', { frames: [currentlyHoveredPreviewFrameData] });
-                    showToastNotification(`Đã thêm ${currentlyHoveredPreviewFrameData.frameIdentifier} vào queue cộng tác!`, 'success');
+                    // Create a new object to avoid modifying the original
+                    const frameDataToSend = {
+                        ...currentlyHoveredPreviewFrameData,
+                        isSpecial: isSpecialSubmission
+                    };
+                    addFramesToQueue([frameDataToSend]);
                     return;
                 }
+
                 const imageModal = document.getElementById('imageModal');
-                if (imageModal && imageModal.style.display === 'flex') {
-                    return; 
+                const temporalChainModal = document.getElementById('temporalChainModal');
+                const videoModal = document.getElementById('videoModal');
+
+                // Check if any of these modals are currently displayed
+                const isAnyModalActive = imageModal.style.display === 'flex' ||
+                temporalChainModal.style.display === 'flex' ||
+                videoModal.style.display === 'flex';
+
+                // If a modal is active, do NOT proceed with the global key press logic.
+                // The modal's own keydown handler will take care of it.
+                if (isAnyModalActive) {
+                    return;
                 }
+
                 const selectedCount = frameSelectionManager.getSelectionCount();
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
 
                 if (selectedCount > 0 && !isTyping) {
-                    e.preventDefault(); 
-                    const selectedFramesData = frameSelectionManager.getAllSelectedFrames().map(f => f.data);
-                    
-                    // GỬI TIN NHẮN ĐẾN SERVER
-                    sendWebSocketMessage('add_frames', { frames: selectedFramesData });
-                    
-                    // Xóa lựa chọn ở client
-                    frameSelectionManager.clearAllSelections();
+                    e.preventDefault();
+                    const selectedFramesData = frameSelectionManager.getAllSelectedFrames().map(f => ({
+                        ...f.data,
+                        isSpecial: isSpecialSubmission // Add the special flag here
+                    }));
+
+                    addFramesToQueue(selectedFramesData);
                 }
             }
-
             if (e.key === 'v' || e.key === 'V') {
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
                 if (isTyping) return; // Bỏ qua nếu đang gõ chữ
 
-                e.preventDefault();
-                
+                // e.preventDefault();
+
                 // Ưu tiên 1: Frame đang được hover trên thanh preview
                 if (currentlyHoveredPreviewFrameData) {
                     addToFormSubmitQueue(currentlyHoveredPreviewFrameData);
@@ -3147,57 +4133,53 @@ const handleKeyUp = (e) => {
                 // Chỉ xử lý nếu không có modal nào đang mở
                 const modals = [
                     document.getElementById('imageModal'),
-                    document.getElementById('videoModal')
+                                  document.getElementById('videoModal')
                 ];
-                
-                const noModalOpen = modals.every(modal => 
-                    !modal || modal.style.display !== 'flex'
+
+                const noModalOpen = modals.every(modal =>
+                !modal || modal.style.display !== 'flex'
                 );
-                
+
                 if (noModalOpen) {
                     frameSelectionManager.clearAllSelections();
                 }
             }
-            
+
             // Phím Ctrl+A: Chọn tất cả các frame
             if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
                 // e.preventDefault(); // Ngăn hành vi mặc định (chọn tất cả văn bản)
-                
-                // Chỉ áp dụng nếu đang focus vào khu vực kết quả
-                if (document.activeElement === document.body || 
-                    document.activeElement.closest('.main-content')) {
-                     e.preventDefault();
-                    // Chọn tất cả frame hiện có
 
-                    document.querySelectorAll('.image-item').forEach(item => {
-                        const frameId = item.getAttribute('data-frame-id');
-                        const frameIdentifier = item.getAttribute('data-frame-identifier');
-                        if (frameId && !frameSelectionManager.isSelected(frameId)) {
-                            // Tìm dữ liệu frame từ các thuộc tính
-                            const imgElement = item.querySelector('img');
-                            const path = imgElement ? imgElement.src : '';
-                            const id = frameId.replace('frame-', '');
-                            
-                            frameSelectionManager.selectFrame(frameId, {
-                                id: frameIdentifier.split('_').pop(),
-                                path: path,
-                                element: item,
-                                data: { frameIdentifier: frameIdentifier, path: path } // Thông tin bổ sung có thể được lưu trữ ở đây
-                            });
-                        }
-                    });
-                }
+                // Chỉ áp dụng nếu đang focus vào khu vực kết quả
+                if (document.activeElement === document.body ||
+                    document.activeElement.closest('.main-content')) {
+                    e.preventDefault();
+                // Chọn tất cả frame hiện có
+
+                document.querySelectorAll('.image-item').forEach(item => {
+                    const frameId = item.getAttribute('data-frame-id');
+                    const frameIdentifier = item.getAttribute('data-frame-identifier');
+                    if (frameId && !frameSelectionManager.isSelected(frameId)) {
+                        // Tìm dữ liệu frame từ các thuộc tính
+                        const imgElement = item.querySelector('img');
+                        const path = imgElement ? imgElement.src : '';
+                        const id = frameId.replace('frame-', '');
+
+                        frameSelectionManager.selectFrame(frameId, {
+                            id: frameIdentifier.split('_').pop(),
+                                                          path: path,
+                                                          element: item,
+                                                          data: { frameIdentifier: frameIdentifier, path: path } // Thông tin bổ sung có thể được lưu trữ ở đây
+                        });
+                    }
+                });
+                    }
             }
-            
-            if (e.key === 'Delete') {
-                // Thực hiện hành động xóa nếu cần
-                // frameSelectionManager.deleteSelectedFrames();
-            }
+
         });
         document.addEventListener('click', function(e) {
             // Kiểm tra xem click có nằm ngoài frame và toolbar không
-            const isClickOutside = !e.target.closest('.image-item') && 
-                                !e.target.closest('.selection-toolbar');
+            const isClickOutside = !e.target.closest('.image-item') &&
+            !e.target.closest('.selection-toolbar');
             if (isClickOutside && !e.ctrlKey) {
                 frameSelectionManager.clearAllSelections();
             }
@@ -3207,7 +4189,20 @@ const handleKeyUp = (e) => {
             adjustToolbarPosition();
         });
     }
+    async function fetchFullTemporalChain(frameData) {
+        // You will need the user_id here. Let's assume you have it in `currentUserId`
+        if (!currentUserId) {
+            throw new Error("User ID is not available.");
+        }
 
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/temporal-chain/${currentUserId}/${frameData.frameIdentifier}`);
+
+        if (!response.ok) {
+            throw new Error(`API error: ${response.statusText}`);
+        }
+
+        return await response.json();
+    }
     function blurActiveInput() {
         const activeElement = document.activeElement;
         if (activeElement && (activeElement.tagName === 'TEXTAREA' || activeElement.tagName === 'INPUT')) {
@@ -3220,7 +4215,7 @@ const handleKeyUp = (e) => {
             // Đảm bảo toolbar luôn nằm trong viewport
             const rect = toolbar.getBoundingClientRect();
             const viewportWidth = window.innerWidth;
-            
+
             // Nếu toolbar vượt quá cạnh bên phải
             if (rect.right > viewportWidth) {
                 const newLeft = viewportWidth - rect.width - 20; // 20px margin
@@ -3253,48 +4248,69 @@ const handleKeyUp = (e) => {
         // Bước 3: Vẽ lại các frame
         const currentSelectedId = document.querySelector('.queue-frame-item.selected')?.dataset.frameId;
         submitQueueFramesContainer.innerHTML = ''; // Xóa các frame cũ
-        
+
         submitQueueFrames.forEach((frameData) => {
             const userColor = frameData.user_color || '#888888';
             const hasVotesClass = frameData.vote_count > 0 ? 'has-votes' : '';
             const isSelectedClass = frameData.frameIdentifier === currentSelectedId ? 'selected' : '';
             const isFromVideoClass = frameData.isFromVideo ? 'from-video' : '';
+            const isSpecialClass = frameData.isSpecial ? 'special-submission' : '';
+            const isWrongClass = wrongSubmissionIds.has(frameData.frameIdentifier) ? 'is-wrong-submission' : '';
 
-            // Tạo thẻ cha
             const frameElement = document.createElement('div');
-            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass}`;
+            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass} ${isSpecialClass} ${isWrongClass}`;            frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.style.borderColor = userColor;
 
             // Tạo cấu trúc HTML bên trong
             frameElement.innerHTML = `
-                <div class="queue-frame-image-container">
-                    <img src="${frameData.path}" alt="Queued frame">
-                    <div class="queue-frame-user">${frameData.added_by}</div>
-                    ${frameData.vote_count > 0 ? `
-                        <div class="queue-frame-vote">
-                            <i class="fas fa-heart"></i> ${frameData.vote_count}
-                        </div>
-                    ` : ''}
-                    <button 
-                        class="remove-queue-item-btn" 
-                        title="Remove from queue"
-                    >×</button>
+            <div class="queue-frame-image-container">
+            <img src="${resolveFrameUrl(frameData.path)}" data-frame-source="${frameData.path}" alt="Queued frame">
+            <div class="queue-frame-user">${frameData.added_by}</div>
+            ${frameData.vote_count > 0 ? `
+                <div class="queue-frame-vote">
+                <i class="fas fa-heart"></i> ${frameData.vote_count}
+                </div>` : ''}
+                <button class="remove-queue-item-btn" title="Remove from queue">×</button>
                 </div>
                 <div class="queue-frame-info-bar">
-                    ${frameData.frameIdentifier}
-                </div>
-            `;
-            submitQueueFramesContainer.appendChild(frameElement);
+                ${frameData.frameIdentifier}
+                </div>`;
+                submitQueueFramesContainer.appendChild(frameElement);
         });
+
+        if (lastAddedFrameId) {
+            // Xóa lựa chọn cũ trước khi target cái mới
+            clearQueueSelection();
+
+            const newFrameElement = submitQueueFramesContainer.querySelector(`.queue-frame-item[data-frame-id="${lastAddedFrameId}"]`);
+
+            if (newFrameElement) {
+                // Thực hiện các hành động "target"
+                newFrameElement.classList.add('selected');
+                selectedQueueFrameIds.add(lastAddedFrameId);
+                updateSubmitButtonStates();
+
+                // Cuộn tới frame đó để người dùng thấy
+                newFrameElement.scrollIntoView({
+                    behavior: 'smooth',
+                    block: 'nearest',
+                    inline: 'center'
+                });
+            }
+
+            // Reset biến tạm sau khi đã xử lý xong
+            lastAddedFrameId = null;
+        }
+
     }
 
     function renderUserLegend() {
         const actionsContainer = document.querySelector('.submit-queue-header .queue-actions');
-        
+
         const oldLegend = document.getElementById('userLegend');
         if (oldLegend) oldLegend.remove();
-        
+
         const legendContainer = document.createElement('div');
         legendContainer.id = 'userLegend';
         legendContainer.style.display = 'flex';
@@ -3306,7 +4322,7 @@ const handleKeyUp = (e) => {
             userSpan.style.display = 'flex';
             userSpan.style.alignItems = 'center';
             userSpan.style.fontSize = '12px';
-            
+
             const colorBox = document.createElement('div');
             colorBox.style.width = '12px';
             colorBox.style.height = '12px';
@@ -3333,14 +4349,14 @@ const handleKeyUp = (e) => {
                 tag: { enabled: false, value: '' }
             },
             imageDataUrl: null,
-            finalResults: allImages 
+            finalResults: allImages
         };
         const searchInputGroups = document.querySelectorAll('.search-input-group');
         searchInputGroups.forEach((group, index) => {
             const searchInput = group.querySelector('.search-input');
             const ocrInput = group.querySelector('.ocr-input');
             const tagInput = group.querySelector('.tag-input');
-            
+
             state.queries.push({
                 id: group.dataset.searchId,
                 value: searchInput.value
@@ -3360,13 +4376,13 @@ const handleKeyUp = (e) => {
                 state.imageDataUrl = uploadedImage.src;
             }
         }
-        
+
         return state;
     }
     async function restoreStateFromHistory(state) {
         if (!state || state.description !== 'AIC_LUNCH_SEARCH') return;
         showLoadingIndicator();
-        searchInputsContainer.innerHTML = ''; 
+        searchInputsContainer.innerHTML = '';
         switchSearchMode(state.searchMode);
         selectModel(state.selectedModel);
         temporalChainId = state.temporalChainId;
@@ -3380,7 +4396,7 @@ const handleKeyUp = (e) => {
             if (state.isImageTemporalStart && index === 0) {
                 return;
             }
-            
+
             const newSearchInput = createNewSearchInput();
             newSearchInput.value = queryInfo.value;
             const group = newSearchInput.closest('.search-input-group');
@@ -3389,7 +4405,7 @@ const handleKeyUp = (e) => {
 
         const allRestoredInputs = document.querySelectorAll('.search-inputs-container .search-input');
         allRestoredInputs.forEach(input => {
-            autoResizeTextarea(input); 
+            autoResizeTextarea(input);
         });
 
         const firstGroup = document.querySelector('.search-input-group');
@@ -3420,16 +4436,16 @@ const handleKeyUp = (e) => {
 
         try {
             if (state.finalResults && Array.isArray(state.finalResults)) {
-                
+
                 console.log("Restoring results directly from history state.");
                 const isRerankedResult = state.queries.length > 1;
                 handleSearchResults(state.finalResults, isRerankedResult);
 
-            } 
+            }
             // ƯU TIÊN 2: Nếu không có kết quả lưu sẵn (dành cho state cũ), thì mới chạy lại API.
             else {
                 console.log("No results in history state, re-fetching...");
-                
+
                 // --- Giữ lại logic cũ của bạn để chạy lại API từ đầu ---
                 let results;
                 if (state.isImageTemporalStart && state.imageTemporalStartPath) {
@@ -3439,38 +4455,45 @@ const handleKeyUp = (e) => {
 
                     const formData = new FormData();
                     formData.append("file", imageFile);
+                    formData.append("user_id", currentUserId);
+                    formData.append("query_id", state.queries[0]?.id || 'img-start-restored');
+                    formData.append("cluster_mode_enabled", String(clusterModeEnabled));
+                    if (state.selectedModel && state.selectedModel !== 'all') {
+                        formData.append("model_name", state.selectedModel);
+                    }
 
-                    const apiResponse = await fetch("/api/search/temporal/start_with_image", {
+                    const apiResponse = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start_with_image`, {
                         method: "POST",
                         body: formData,
                     });
 
                     if (!apiResponse.ok) throw new Error("Failed to restore image-based temporal search.");
-                    
+
                     const resultData = await apiResponse.json();
                     temporalChainId = resultData.chain_id;
                     results = resultData.initial_results;
-                    
+
                 } else if (state.searchMode === 'text-to-image') {
                     const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
-                    const firstSearchGroup = document.querySelector('.search-input-group');
-                    results = await callTextToImageAPI(firstQuery, state.selectedModel, firstSearchGroup);
+                    const restoredFilters = buildFilterOptionsFromState(state);
+                    results = await callTextToImageAPI(firstQuery, state.selectedModel, restoredFilters);
 
                 } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
                     const response = await fetch(state.imageDataUrl);
                     const blob = await response.blob();
                     const file = new File([blob], "restored_image.jpg", { type: blob.type });
                     results = await callImageToImageAPI(file, state.selectedModel);
-                    
+
                 } else if (state.searchMode === 'text-to-text') {
                     const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
-                    results = await callTextToTextAPI(firstQuery);
+                    const restoredFilters = buildFilterOptionsFromState(state);
+                    results = await callTextToTextAPI(firstQuery, state.selectedModel, restoredFilters);
 
                 } else {
                     contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
-                    return; 
+                    return;
                 }
-                
+
                 // Chỉ hiển thị nếu có kết quả từ việc fetch lại
                 if (results) {
                     handleSearchResults(results, false);
@@ -3482,79 +4505,94 @@ const handleKeyUp = (e) => {
     }
 
 
-
-function clearQueueSelection() {
-    document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
-    selectedQueueFrameIds.clear();
-    updateSubmitButtonStates();
-}
-function toggleFilter(filterType) {
-    const activeElement = document.activeElement;
-    const searchGroup = activeElement.closest('.search-input-group');
-    if (!searchGroup) {
-        showToastNotification(`Vui lòng click vào một ô tìm kiếm để dùng bộ lọc ${filterType.toUpperCase()}!`, 'error');
-        return;
+    function buildFilterOptionsFromState(state) {
+        const filters = {};
+        if (state.filters) {
+            if (state.filters.ocr && state.filters.ocr.enabled && state.filters.ocr.value) {
+                filters.ocr = state.filters.ocr.value;
+            }
+            if (state.filters.tag && state.filters.tag.enabled && state.filters.tag.value) {
+                const tags = state.filters.tag.value.split(',').map(t => t.trim()).filter(t => t);
+                if (tags.length > 0) {
+                    filters.use_tag = true;
+                    filters.tags_filter = tags;
+                }
+            }
+            if (state.filters.event) {
+                filters.use_event_filter = true;
+            }
+        }
+        return filters;
     }
-    const containerSelector = `.${filterType}-filter-container`;
-    const inputSelector = `.${filterType}-input`;
-    const buttonSelector = `#${filterType}FilterBtn`;
 
-    const filterContainer = searchGroup.querySelector(containerSelector);
-    const filterInput = searchGroup.querySelector(inputSelector);
-    const mainSearchInput = searchGroup.querySelector('.search-input');
-    const headerButton = document.querySelector(buttonSelector);
 
-    if (filterContainer.classList.contains('visible')) {
-        filterContainer.classList.remove('visible');
-        headerButton.classList.remove('active');
-        mainSearchInput.focus();
-    } else {
-        filterContainer.classList.add('visible');
-        headerButton.classList.add('active');
-        setTimeout(() => filterInput.focus(), 10);
+    function clearQueueSelection() {
+        document.querySelectorAll('.queue-frame-item.selected').forEach(el => el.classList.remove('selected'));
+        selectedQueueFrameIds.clear();
+        updateSubmitButtonStates();
     }
-}
+    function toggleFilter(filterType) {
+        const activeElement = document.activeElement;
+        const searchGroup = activeElement.closest('.search-input-group');
+        if (!searchGroup) {
+            showToastNotification(`Vui lòng click vào một ô tìm kiếm để dùng bộ lọc ${filterType.toUpperCase()}!`, 'error');
+            return;
+        }
+        const containerSelector = `.${filterType}-filter-container`;
+        const inputSelector = `.${filterType}-input`;
+        const buttonSelector = `#${filterType}FilterBtn`;
+
+        const filterContainer = searchGroup.querySelector(containerSelector);
+        const filterInput = searchGroup.querySelector(inputSelector);
+        const mainSearchInput = searchGroup.querySelector('.search-input');
+        const headerButton = document.querySelector(buttonSelector);
+
+        if (filterContainer.classList.contains('visible')) {
+            filterContainer.classList.remove('visible');
+            headerButton.classList.remove('active');
+            mainSearchInput.focus();
+        } else {
+            filterContainer.classList.add('visible');
+            headerButton.classList.add('active');
+            setTimeout(() => filterInput.focus(), 10);
+        }
+    }
 
     function createImageTemporalSearchBlock(imagePath) {
         const imageSearchBlock = document.createElement('div');
         imageSearchBlock.className = 'image-temporal-search-block'; // Dùng class riêng để style
         imageSearchBlock.innerHTML = `
-            <p class="search-block-label">Searching from image:</p>
-            <img src="${imagePath}" alt="Temporal Search Start Image">
+        <p class="search-block-label">Searching from image:</p>
+        <img src="${imagePath}" alt="Temporal Search Start Image">
         `;
         return imageSearchBlock;
     }
 
     async function initiateImageTemporalSearch(imagePath) {
-        searchInputsContainer.innerHTML = '';
-        showLoadingIndicator();
+        // BỎ ĐI: searchInputsContainer.innerHTML = '';
+        // BỎ ĐI: showLoadingIndicator();
 
         try {
-            const imageBlock = createImageTemporalSearchBlock(imagePath);
-            searchInputsContainer.appendChild(imageBlock);
-
-            // --- LOGIC MỚI ĐỂ XỬ LÝ CẢ URL VÀ DATA URL ---
             let imageFile;
             if (imagePath.startsWith('data:')) {
-                // Chuyển đổi Data URL thành File object
                 const response = await fetch(imagePath);
                 const blob = await response.blob();
                 imageFile = new File([blob], "captured_frame.jpg", { type: blob.type });
             } else {
-                // Giữ nguyên logic cũ cho URL thông thường
                 const response = await fetch(imagePath);
                 const blob = await response.blob();
                 imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
             }
-            // --- KẾT THÚC LOGIC MỚI ---
 
+            // --- LOGIC GỌI API VẪN GIỮ NGUYÊN ---
             const queryId = 'img-start-' + Date.now();
             const formData = new FormData();
             formData.append("file", imageFile);
             formData.append("user_id", currentUserId);
             formData.append("query_id", queryId);
+            formData.append("cluster_mode_enabled", String(clusterModeEnabled));
 
-            if (isEventFilterEnabled) { // <<< THÊM KHỐI LỆNH NÀY
+            if (isEventFilterEnabled) {
                 formData.append("use_event_filter", "true");
             }
 
@@ -3562,7 +4600,7 @@ function toggleFilter(filterType) {
                 formData.append("model_name", currentSelectedModel);
             }
 
-            const apiResponse = await fetch("/api/search/temporal/start_with_image", {
+            const apiResponse = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start_with_image`, {
                 method: "POST",
                 body: formData,
             });
@@ -3572,928 +4610,1385 @@ function toggleFilter(filterType) {
             }
 
             const resultsData = await apiResponse.json();
-            handleSearchResults(resultsData.initial_results, false);
-            const nextInput = createNewSearchInput();
-            setTimeout(() => {
-                nextInput.focus();
-                nextInput.scrollIntoView({ behavior: 'auto', block: 'center' });
-            }, 100);
-
-            if (!isRestoringState) {
-                const currentState = buildStateObject();
-                currentState.isImageTemporalStart = true;
-                currentState.imageTemporalStartPath = imagePath;
-                const newUrl = `/?search_timestamp=${Date.now()}`;
-                window.history.pushState(currentState, '', newUrl);
-            }
+            
+            // TRẢ VỀ KẾT QUẢ ĐỂ HÀM MỚI SỬ DỤNG
+            return resultsData.initial_results; 
 
         } catch (error) {
-            handleSearchError(error);
+            console.error('Lỗi trong lúc gọi API Semantic Search:', error);
+            // NÉM LỖI RA NGOÀI ĐỂ HÀM MỚI BẮT ĐƯỢC
+            throw error;
         }
+    }
+
+    async function openSemanticSearchModal(queryFrameData) {
+        if (!queryFrameData || !queryFrameData.path) {
+            showToastNotification("Dữ liệu frame không hợp lệ.", "error");
+            return;
+        }
+        modalQueryFrame = queryFrameData;
+        modalCurrentLayout = 'grid'; // Luôn reset về layout grid
+        updateModalLayoutButton(); // Cập nhật icon cho đúng
+        registerModalOpen(semanticSearchModal, closeSemanticSearchModal);
+        // 1. Hiển thị Modal với trạng thái loading
+        semanticSearchModal.style.display = 'flex';
+        semanticSearchResultsContainer.innerHTML = `
+            <div class="loading-indicator">
+                <div class="loading-spinner"></div>
+                <p>Đang tìm kiếm ngữ nghĩa...</p>
+            </div>`;
+
+        try {
+            // 2. Gọi hàm API đã được chỉnh sửa ở Bước 3.2
+            const results = await initiateImageTemporalSearch(queryFrameData.path);
+            renderResultsInModal(modalQueryFrame, results);
+            // 3. Render kết quả vào modal
+            renderResultsInModal(queryFrameData, results);
+            document.addEventListener('keydown', handleModalKeyDown); 
+        } catch (error) {
+            // 4. Xử lý lỗi nếu API thất bại
+            semanticSearchResultsContainer.innerHTML = `
+                <div class="content-placeholder">
+                    <h2>Lỗi tìm kiếm</h2>
+                    <p>Không thể lấy kết quả. Vui lòng thử lại.</p>
+                </div>`;
+        }
+    }
+
+    /**
+     * Đóng và dọn dẹp modal semantic search
+     */
+    function closeSemanticSearchModal() {
+        semanticSearchModal.style.display = 'none';
+        semanticSearchResultsContainer.innerHTML = ''; // Chỉ cần dòng này là đủ
+        
+        if (modalObserver) {
+            modalObserver.disconnect();
+            modalObserver = null;
+        }
+        registerModalClose(semanticSearchModal);
+        document.removeEventListener('keydown', handleModalKeyDown); // Gỡ trình xử lý keydown
+        modalFrameSelectionManager.clearAllSelections(); // Xóa các lựa chọn trong modal
+    }
+
+    function handleModalKeyDown(e) {
+        // Chỉ hoạt động khi modal đang mở
+        if (semanticSearchModal.style.display !== 'flex') {
+            return;
+        }
+        
+        const videoModal = document.getElementById('videoModal');
+        if (videoModal && videoModal.style.display === 'flex') {
+            return; // Thoát ngay lập tức, nhường quyền cho video modal
+        }
+
+        if (e.key === 'Tab') {
+        e.preventDefault(); // Ngăn hành vi mặc định (chuyển focus)
+        e.stopPropagation(); // << RẤT QUAN TRỌNG: Ngăn sự kiện lan ra các trình xử lý khác
+
+        toggleModalLayout(); // Gọi hàm chuyển layout của modal
+        return; // Dừng lại sau khi xử lý
+    }
+
+        const selectedFramesData = modalFrameSelectionManager.getAllSelectedFrames().map(f => f.data);
+        const selectedCount = selectedFramesData.length;
+
+        // Phím D và A: Thêm vào queue chính
+        if (e.key.toLowerCase() === 'd' || e.key.toLowerCase() === 'a') {
+            if (selectedCount > 0) {
+                e.preventDefault();
+                const isSpecialSubmission = e.key.toLowerCase() === 'a';
+                const framesToAdd = selectedFramesData.map(frame => ({
+                    ...frame,
+                    isSpecial: isSpecialSubmission
+                }));
+                addFramesToQueue(framesToAdd);
+                showToastNotification(`Đã thêm ${selectedCount} frame vào queue.`, "success");
+                closeSemanticSearchModal(); // Đóng modal sau khi thêm
+            }
+        }
+        // Phím S: Tìm kiếm tiếp (nếu chỉ chọn 1)
+        else if (e.key.toLowerCase() === 's') {
+            if (selectedCount === 1) {
+                e.preventDefault();
+                const newQueryFrame = selectedFramesData[0];
+                // Đóng modal cũ và mở một modal mới với frame vừa chọn
+                closeSemanticSearchModal();
+                setTimeout(() => openSemanticSearchModal(newQueryFrame), 100);
+            }
+        }
+        // Phím Escape: Bỏ chọn hoặc đóng modal
+        else if (e.key === 'Escape') {
+            e.preventDefault();
+            if (selectedCount > 0) {
+                modalFrameSelectionManager.clearAllSelections();
+            } else {
+                closeSemanticSearchModal();
+            }
+        }
+    }
+
+    function renderResultsInModal(queryFrame, results) {
+        // 1. Reset trạng thái
+        if (results) {
+            modalAllImages = results.filter(img => img.frameIdentifier !== queryFrame.frameIdentifier);
+        }
+        modalDisplayedImagesCount = 0;
+        modalDisplayedGroupsCount = 0;
+        isModalLoading = false;
+        modalHasReachedEnd = false;
+        if (modalObserver) modalObserver.disconnect();
+        
+        // 2. Dọn dẹp
+        semanticSearchResultsContainer.innerHTML = '';
+        const oldLoader = document.getElementById('modalLoadingMore');
+        if (oldLoader) oldLoader.remove();
+
+        // 3. Xử lý trường hợp không có kết quả
+        if (modalAllImages.length === 0) {
+            semanticSearchResultsContainer.className = ''; // Reset class
+            const queryFrameElement = createImageItemElement(queryFrame);
+            queryFrameElement.classList.add('query-frame');
+            
+            const emptyStateWrapper = document.createElement('div');
+            emptyStateWrapper.className = 'video-group-row';
+            emptyStateWrapper.innerHTML = `<h4 class="video-group-title">Frame Nguồn (Không tìm thấy kết quả nào khác)</h4>`;
+            const frameStrip = document.createElement('div');
+            frameStrip.className = 'frame-strip';
+            frameStrip.appendChild(queryFrameElement);
+            emptyStateWrapper.appendChild(frameStrip);
+            semanticSearchResultsContainer.appendChild(emptyStateWrapper);
+            return;
+        }
+
+        // 4. Tạo loader
+        const loadingMore = document.createElement('div');
+        loadingMore.id = 'modalLoadingMore';
+        loadingMore.className = 'loading-indicator';
+        loadingMore.innerHTML = '<div class="loading-spinner" style="width: 30px; height: 30px;"></div>';
+        
+        // --- PHÂN LUỒNG LOGIC DỰA TRÊN LAYOUT ---
+        if (modalCurrentLayout === 'grid') {
+            semanticSearchResultsContainer.className = '';
+            
+            const numberOfColumns = 6;
+            for (let i = 0; i < numberOfColumns; i++) {
+                const column = document.createElement('div');
+                column.className = 'masonry-column';
+                semanticSearchResultsContainer.appendChild(column);
+            }
+
+            const queryFrameElement = createImageItemElement(queryFrame);
+            queryFrameElement.classList.add('query-frame');
+            semanticSearchResultsContainer.querySelector('.masonry-column').appendChild(queryFrameElement);
+            
+            semanticSearchResultsContainer.appendChild(loadingMore);
+            loadMoreModalImages();
+        } else { // layout === 'grouped'
+            semanticSearchResultsContainer.className = 'grouped-layout';
+            modalAllGroupedData = groupResultsByVideo(modalAllImages);
+
+            const queryFrameElement = createImageItemElement(queryFrame);
+            queryFrameElement.classList.add('query-frame');
+            const queryFrameWrapper = document.createElement('div');
+            queryFrameWrapper.className = 'video-group-row';
+            queryFrameWrapper.innerHTML = '<h4 class="video-group-title">Frame Nguồn</h4>';
+            const frameStrip = document.createElement('div');
+            frameStrip.className = 'frame-strip';
+            frameStrip.appendChild(queryFrameElement);
+            queryFrameWrapper.appendChild(frameStrip);
+            semanticSearchResultsContainer.appendChild(queryFrameWrapper);
+            
+            semanticSearchResultsContainer.appendChild(loadingMore);
+            loadMoreModalGroups();
+        }
+        
+        setupModalInfiniteScroll();
+    }
+
+    function loadMoreModalImages() {
+        if (isModalLoading || modalHasReachedEnd) return;
+
+        isModalLoading = true;
+        const loadingMore = document.getElementById('modalLoadingMore');
+
+        const startIndex = modalDisplayedImagesCount;
+        const endIndex = Math.min(startIndex + MODAL_IMAGES_PER_BATCH, modalAllImages.length);
+
+        const columns = semanticSearchResultsContainer.querySelectorAll('.masonry-column');
+        if (columns.length === 0) {
+            isModalLoading = false;
+            return;
+        }
+
+        setTimeout(() => {
+            for (let i = startIndex; i < endIndex; i++) {
+                const image = modalAllImages[i];
+                const imageItem = createImageItemElement(image);
+                const frameId = image.frameIdentifier;
+                const frameData = { id: image.id, path: image.path, element: imageItem, data: image };
+
+                // LOGIC MOUSE DOWN HOÀN CHỈNH
+                imageItem.addEventListener('mousedown', function(event) {
+                    event.preventDefault();
+                    if (event.button === 0) { // Chuột trái
+                        if (event.ctrlKey) {
+                            modalFrameSelectionManager.toggleSelection(frameId, frameData);
+                        } else {
+                            modalFrameSelectionManager.clearAllSelections();
+                            modalFrameSelectionManager.selectFrame(frameId, frameData);
+                        }
+                    } else if (event.button === 2) { // Chuột phải
+                        openVideoModal(image.videoName, image.timestamp);
+                    }
+                });
+                
+                const columnIndex = i % columns.length;
+                columns[columnIndex].appendChild(imageItem);
+            }
+
+            modalDisplayedImagesCount = endIndex;
+
+            if (modalDisplayedImagesCount >= modalAllImages.length) {
+                modalHasReachedEnd = true;
+                if (loadingMore) loadingMore.remove();
+            }
+
+            isModalLoading = false;
+
+            const container = semanticSearchResultsContainer;
+            const hasScrollbar = container.scrollHeight > container.clientHeight;
+            if (!hasScrollbar && !modalHasReachedEnd) {
+                loadMoreModalImages();
+            }
+
+        }, 100);
+    }
+
+    /**
+     * Thiết lập IntersectionObserver để theo dõi việc cuộn chuột trong modal
+     */
+    function setupModalInfiniteScroll() {
+        const loadingMore = document.getElementById('modalLoadingMore');
+        if (!loadingMore) return;
+
+        // Hàm callback sẽ được gọi mỗi khi loader thay đổi trạng thái "trong tầm nhìn"
+        const observerCallback = (entries) => {
+            // Lấy entry duy nhất cho loader
+            const entry = entries[0];
+            
+            // Nếu loader đang trong tầm nhìn VÀ chúng ta chưa tải hết
+            if (entry.isIntersecting && !modalHasReachedEnd) {
+                // Gọi hàm tải thêm tương ứng với layout hiện tại
+                if (modalCurrentLayout === 'grid') {
+                    loadMoreModalImages();
+                } else {
+                    loadMoreModalGroups();
+                }
+            }
+        };
+
+        // Tạo observer
+        const observer = new IntersectionObserver(observerCallback, {
+            root: semanticSearchResultsContainer, // Vùng chứa có thanh cuộn
+            rootMargin: '0px 0px 600px 0px', // Tăng rootMargin để trigger sớm hơn
+            threshold: 0.01 // Trigger ngay khi 1% của loader hiện ra
+        });
+
+        // Bắt đầu theo dõi loader
+        observer.observe(loadingMore);
+        
+        // Lưu lại observer để dọn dẹp
+        modalObserver = observer;
+
+        // === LOGIC TỰ ĐỘNG KIỂM TRA QUAN TRỌNG NHẤT ===
+        // Sau khi thiết lập, ngay lập tức kiểm tra xem loader có đang trong tầm nhìn không.
+        // Điều này sẽ xử lý trường hợp nội dung ban đầu quá thấp.
+        setTimeout(() => {
+            const isVisible = (loadingMore.getBoundingClientRect().top <= semanticSearchResultsContainer.getBoundingClientRect().bottom);
+            if (isVisible && !modalHasReachedEnd) {
+                 if (modalCurrentLayout === 'grid') {
+                    loadMoreModalImages();
+                } else {
+                    loadMoreModalGroups();
+                }
+            }
+        }, 200); // Đợi 200ms để DOM ổn định sau khi render
     }
 
     function autoResizeTextarea(textareaElement) {
         if (!textareaElement) return;
         textareaElement.style.height = 'auto';
-        const minHeight = 44; 
+        const minHeight = 44;
         textareaElement.style.height = Math.max(minHeight, textareaElement.scrollHeight) + 'px';
     }
     function saveQueryToHistory(query) {
-    if (!query || query.trim() === '') return;
+        if (!query || query.trim() === '') return;
 
-    const trimmedQuery = query.trim();
-    let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
-    history = history.filter(item => item !== trimmedQuery);
+        const trimmedQuery = query.trim();
+        let history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+        history = history.filter(item => item !== trimmedQuery);
 
-    history.unshift(trimmedQuery);
-    if (history.length > 50) {
-        history = history.slice(0, 50);
-    }
-
-    localStorage.setItem('searchHistory', JSON.stringify(history));
-}
-
-function renderSearchHistory() {
-    const history = JSON.parse(localStorage.getItem('searchHistory')) || [];
-    historyListContainer.innerHTML = ''; // Xóa nội dung cũ
-
-    if (history.length === 0) {
-        historyListContainer.innerHTML = '<div class="history-empty">Chưa có lịch sử tìm kiếm.</div>';
-        clearHistoryBtn.style.display = 'none'; // Ẩn nút xóa khi không có gì
-        return;
-    }
-    clearHistoryBtn.style.display = 'flex'; 
-
-    history.forEach(query => {
-        const historyItem = document.createElement('div');
-        historyItem.className = 'history-item';
-        historyItem.textContent = query;
-        historyItem.dataset.query = query;
-        historyListContainer.appendChild(historyItem);
-    });
-}
-
-function copyQueryToClipboard(text) {
-    if (navigator.clipboard && window.isSecureContext) {
-        return navigator.clipboard.writeText(text);
-    } else {
-        return new Promise((resolve, reject) => {
-            const textArea = document.createElement('textarea');
-            textArea.value = text;
-            textArea.style.position = 'fixed';
-            textArea.style.left = '-9999px';
-            document.body.appendChild(textArea);
-            textArea.focus();
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                document.body.removeChild(textArea);
-                resolve();
-            } catch (err) {
-                document.body.removeChild(textArea);
-                reject(err);
-            }
-        });
-    }
-}
-
-function closeHistoryMenu() {
-    historyMenu.classList.remove('visible');
-}
-
-function toggleHistoryMenu(e) {
-    e.stopPropagation(); // Ngăn sự kiện lan ra và đóng menu
-    settingsMenu.classList.remove('visible'); // Đóng các menu khác
-
-    if (historyMenu.classList.contains('visible')) {
-        closeHistoryMenu();
-        return; 
-    }
-    renderSearchHistory();
-    const btnRect = historyBtn.getBoundingClientRect();
-    historyMenu.style.top = `${btnRect.bottom + 5}px`;
-    historyMenu.style.right = '20px';
-    historyMenu.style.left = ''; 
-    historyMenu.classList.add('visible');
-}
-
-function clearSearchHistory(e) {
-    e.stopPropagation(); 
-    if (confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử tìm kiếm không?')) {
-        localStorage.removeItem('searchHistory'); // Xóa dữ liệu trong localStorage
-        renderSearchHistory(); // Vẽ lại danh sách (lúc này sẽ trống)
-        showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
-    }
-}
-async function getAutocorrectSuggestion(text) {
-    if (!text || text.trim() === '') {
-        return null;
-    }
-
-    try {
-        const response = await fetch('http://192.168.20.170:9090/correct', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ text: text }),
-        });
-
-        if (!response.ok) {
-            console.error('Autocorrect API error:', response.statusText);
-            return null;
+        history.unshift(trimmedQuery);
+        if (history.length > 50) {
+            history = history.slice(0, 50);
         }
 
-        const result = await response.json();
-        return result.corrected_text; 
-    } catch (error) {
-        console.error('Failed to fetch autocorrect suggestion:', error);
-        return null;
-    }
-}
-
-async function getFpsForVideo(videoName) {
-    let videoMetadata;
-
-    // 1. Kiểm tra cache (giữ nguyên logic này vì nó hiệu quả)
-    if (metadataCache.has(videoName)) {
-        videoMetadata = metadataCache.get(videoName);
-    } else {
-        // 2. Fetch metadata nếu chưa có trong cache
-        try {
-            const response = await fetch(`/api/metadata/${videoName}`);
-            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-            const fullMetadata = await response.json();
-            
-            videoMetadata = fullMetadata[videoName];
-            
-            if (!videoMetadata) {
-                console.error(`Không tìm thấy metadata cho key '${videoName}' trong file JSON.`);
-                return 25; // Trả về giá trị mặc định nếu không có dữ liệu
-            }
-            
-            metadataCache.set(videoName, videoMetadata); // Cache lại để dùng sau
-        } catch (error)
-        {
-            console.error(`Lỗi khi fetch hoặc parse metadata cho ${videoName}:`, error);
-            return 25; // Trả về giá trị mặc định khi có lỗi
-        }
+        localStorage.setItem('searchHistory', JSON.stringify(history));
     }
 
-    // 3. Lấy FPS trực tiếp từ frame đầu tiên
-    try {
-        // Lấy key của đối tượng đầu tiên trong metadata
-        const firstFrameKey = Object.keys(videoMetadata)[0];
-        
-        if (firstFrameKey && videoMetadata[firstFrameKey] && videoMetadata[firstFrameKey].fps) {
-            return videoMetadata[firstFrameKey].fps;
-        } else {
-            console.warn(`Không tìm thấy FPS trong frame đầu tiên của video ${videoName}. Sử dụng giá trị mặc định 25`);
-            return 25; // Fallback nếu frame đầu tiên không có thông tin fps
-        }
-    } catch (error) {
-        console.error(`Lỗi khi xử lý metadata cho ${videoName}:`, error);
-        return 25; // Fallback cho các lỗi khác (ví dụ metadata trống)
-    }
-}
+    function renderSearchHistory() {
+        const history = JSON.parse(localStorage.getItem('searchHistory')) || [];
+        historyListContainer.innerHTML = ''; // Xóa nội dung cũ
 
-async function showKeyframePreview(frameData) {
-    // Bước 1: Kiểm tra dữ liệu đầu vào
-    if (!frameData || !frameData.videoName || typeof frameData.frame_id_ori === 'undefined') {
-        console.error("Dữ liệu frame không đủ để hiển thị preview.", frameData);
-        return;
-    }
-
-    // Bước 2: Hiển thị giao diện và trạng thái loading
-    header.classList.add('header-expanded');
-    keyframePreviewBar.classList.add('visible');
-    previewThumbnails.innerHTML = '';
-    previewPlaceholder.textContent = 'Đang tải...';
-    previewPlaceholder.style.display = 'block';
-
-    try {
-        // Bước 3: Gọi API để lấy frame được click và 20 frame tiếp theo
-        const response = await fetch(`/api/keyframes/neighbors/${frameData.videoName}/${frameData.frame_id_ori}?look_behind=20&look_ahead=20`);
-        
-        if (!response.ok) {
-            throw new Error(`Lỗi API: ${response.statusText}`);
-        }
-        const neighbors = await response.json();
-
-        if (neighbors.length === 0) {
-            previewPlaceholder.textContent = 'Không tìm thấy frame lân cận.';
+        if (history.length === 0) {
+            historyListContainer.innerHTML = '<div class="history-empty">Chưa có lịch sử tìm kiếm.</div>';
+            clearHistoryBtn.style.display = 'none'; // Ẩn nút xóa khi không có gì
             return;
         }
-        
-        previewPlaceholder.style.display = 'none';
-        const folderUrlPath = `/frames/${frameData.videoName}`;
-        const imageLoadPromises = [];
+        clearHistoryBtn.style.display = 'flex';
 
-        // Bước 4: Tạo các thumbnail, gắn dữ liệu và sự kiện
-        neighbors.forEach(neighborData => {
-            const thumb = document.createElement('img');
-            
-            // Gắn một đối tượng dữ liệu hoàn chỉnh vào mỗi thumbnail
-            const fullFrameData = {
-                ...neighborData,
-                videoName: frameData.videoName,
-                path: `${folderUrlPath}/${neighborData.filename}`,
-                frameIdentifier: `${frameData.videoName}_${neighborData.frame_id_ori}`,
-                timestamp: neighborData.timestamp // Backend đã chuẩn hóa tên này
-            };
-            thumb.frameData = fullFrameData;
-            
-            // Sự kiện để theo dõi frame mục tiêu cho phím tắt
-            thumb.addEventListener('mouseenter', () => { currentlyHoveredPreviewFrameData = thumb.frameData; });
-            thumb.addEventListener('mouseleave', () => { currentlyHoveredPreviewFrameData = null; });
+        history.forEach(query => {
+            const historyItem = document.createElement('div');
+            historyItem.className = 'history-item';
+            historyItem.textContent = query;
+            historyItem.dataset.query = query;
+            historyListContainer.appendChild(historyItem);
+        });
+    }
 
-            // Sự kiện chuột phải để mở video
-            thumb.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
-                const data = thumb.frameData;
-                if (data && data.videoName && data.timestamp) {
-                    openVideoModal(data.videoName, data.timestamp);
-                } else {
-                    showToastNotification("Lỗi: Không đủ dữ liệu để mở video.", "error");
+    function copyQueryToClipboard(text) {
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        } else {
+            return new Promise((resolve, reject) => {
+                const textArea = document.createElement('textarea');
+                textArea.value = text;
+                textArea.style.position = 'fixed';
+                textArea.style.left = '-9999px';
+                document.body.appendChild(textArea);
+                textArea.focus();
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    document.body.removeChild(textArea);
+                    resolve();
+                } catch (err) {
+                    document.body.removeChild(textArea);
+                    reject(err);
                 }
             });
+        }
+    }
 
-            // Sự kiện click chuột trái cũng mở video
-            thumb.addEventListener('click', () => {
-                const data = thumb.frameData;
-                if (data && data.videoName && data.timestamp) {
-                    openVideoModal(data.videoName, data.timestamp);
-                }
+    function closeHistoryMenu() {
+        historyMenu.classList.remove('visible');
+    }
+
+    function toggleHistoryMenu(e) {
+        e.stopPropagation(); // Ngăn sự kiện lan ra và đóng menu
+        settingsMenu.classList.remove('visible'); // Đóng các menu khác
+
+        if (historyMenu.classList.contains('visible')) {
+            closeHistoryMenu();
+            return;
+        }
+        renderSearchHistory();
+        const btnRect = historyBtn.getBoundingClientRect();
+        historyMenu.style.top = `${btnRect.bottom + 5}px`;
+        historyMenu.style.right = '20px';
+        historyMenu.style.left = '';
+        historyMenu.classList.add('visible');
+    }
+
+    function clearSearchHistory(e) {
+        e.stopPropagation();
+        if (confirm('Bạn có chắc chắn muốn xóa toàn bộ lịch sử tìm kiếm không?')) {
+            localStorage.removeItem('searchHistory'); // Xóa dữ liệu trong localStorage
+            renderSearchHistory(); // Vẽ lại danh sách (lúc này sẽ trống)
+showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
+        }
+    }
+    async function getAutocorrectSuggestion(text) {
+        if (!text || text.trim() === '') {
+            return null;
+        }
+        const url = isTranslationEnabled
+        ? 'http://192.168.20.164:9090/translate'
+        : 'http://192.168.20.164:9090/correct';
+        try {
+            const response = await fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ text: text }),
             });
-            
-            // Tạo promise để đợi ảnh tải xong
-            const loadPromise = new Promise((resolve) => {
-                thumb.onload = resolve;
-                thumb.onerror = resolve; // Vẫn resolve để Promise.all không bị lỗi
-            });
-            imageLoadPromises.push(loadPromise);
 
-            thumb.src = thumb.frameData.path;
-            thumb.title = thumb.frameData.frameIdentifier;
-
-            if (neighborData.frame_id_ori === frameData.frame_id_ori) {
-                thumb.classList.add('highlighted');
+            if (!response.ok) {
+                console.error('Autocorrect/Translate API error:', response.statusText);
+                return null;
             }
 
-            previewThumbnails.appendChild(thumb);
+            const result = await response.json();
+            return result.corrected_text || result.translated_text || null;
+        } catch (error) {
+            console.error('Failed to fetch suggestion/translation:', error);
+            return null;
+        }
+    }
+
+    async function getFpsForVideo(videoName) {
+        let videoMetadata;
+
+        // 1. Kiểm tra cache (giữ nguyên logic này vì nó hiệu quả)
+        if (metadataCache.has(videoName)) {
+            videoMetadata = metadataCache.get(videoName);
+        } else {
+            // 2. Fetch metadata nếu chưa có trong cache
+            try {
+                const response = await fetch(getFrameMetadataUrl(videoName, `?t=${Date.now()}`));
+                if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                const fullMetadata = await response.json();
+
+                videoMetadata = fullMetadata[videoName];
+
+                if (!videoMetadata) {
+                    console.error(`Không tìm thấy metadata cho key '${videoName}' trong file JSON.`);
+                    return 25; // Trả về giá trị mặc định nếu không có dữ liệu
+                }
+
+                metadataCache.set(videoName, videoMetadata); // Cache lại để dùng sau
+            } catch (error)
+            {
+                console.error(`Lỗi khi fetch hoặc parse metadata cho ${videoName}:`, error);
+                return 25; // Trả về giá trị mặc định khi có lỗi
+            }
+        }
+
+        // 3. Lấy FPS trực tiếp từ frame đầu tiên
+        try {
+            // Lấy key của đối tượng đầu tiên trong metadata
+            const firstFrameKey = Object.keys(videoMetadata)[0];
+
+            if (firstFrameKey && videoMetadata[firstFrameKey] && videoMetadata[firstFrameKey].fps) {
+                return videoMetadata[firstFrameKey].fps;
+            } else {
+                console.warn(`Không tìm thấy FPS trong frame đầu tiên của video ${videoName}. Sử dụng giá trị mặc định 25`);
+                return 25; // Fallback nếu frame đầu tiên không có thông tin fps
+            }
+        } catch (error) {
+            console.error(`Lỗi khi xử lý metadata cho ${videoName}:`, error);
+            return 25; // Fallback cho các lỗi khác (ví dụ metadata trống)
+        }
+    }
+
+    async function showKeyframePreview(frameData) {
+        // Bước 1 & 2: Giữ nguyên
+        if (!frameData || !frameData.videoName || typeof frameData.frame_id_ori === 'undefined') {
+            console.error("Dữ liệu frame không đủ để hiển thị preview.", frameData);
+            return;
+        }
+
+        header.classList.add('header-expanded');
+        keyframePreviewBar.classList.add('visible');
+        previewThumbnails.innerHTML = '';
+        previewPlaceholder.textContent = 'Đang tải...';
+        previewPlaceholder.style.display = 'block';
+
+        try {
+            // === BẮT ĐẦU PHẦN SỬA LỖI ===
+
+            const metadataUrl = getFrameMetadataUrl(frameData.videoName);
+            const response = await fetch(metadataUrl);
+
+            if (!response.ok) {
+                throw new Error(`Không tìm thấy tệp ${metadataUrl}. Status: ${response.statusText}`);
+            }
+            const metadataFileContent = await response.json();
+            const videoMetadataObject = metadataFileContent[frameData.videoName];
+
+            if (!videoMetadataObject) {
+                throw new Error(`Không tìm thấy key '${frameData.videoName}' trong tệp metadata.json.`);
+            }
+
+            // 3. Chuyển đổi và "CHUẨN HÓA" đối tượng metadata thành một MẢNG
+            const allKeyframes = Object.entries(videoMetadataObject).map(([frameKey, frameInfo]) => ({
+                // Ánh xạ (map) các thuộc tính từ file JSON sang tên mà code đang dùng
+                frame_id_ori: frameInfo.id,         // <-- SỬA Ở ĐÂY: Lấy giá trị từ 'id'
+                timestamp: frameInfo["time-stamp"], // <-- SỬA Ở ĐÂY: Lấy giá trị từ 'time-stamp'
+                
+                // Thêm filename và giữ lại các thuộc tính gốc
+                filename: `${frameKey}.webp`,
+                ...frameInfo // Giữ lại các thuộc tính khác như tags, ocr, fps...
+            }));
+
+            // 4. Sắp xếp mảng theo frame_id_ori (đã được ánh xạ đúng)
+            allKeyframes.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
+
+            // 5. Tìm vị trí (index) của frame được click
+            const targetFrameId = parseInt(frameData.frame_id_ori, 10);
+            const targetIndex = allKeyframes.findIndex(kf => kf.frame_id_ori === targetFrameId);
+
+            if (targetIndex === -1) {
+                // Lỗi vẫn có thể xảy ra ở đây nếu có sự không nhất quán dữ liệu,
+                // nhưng nguyên nhân gốc đã được sửa.
+                throw new Error(`Frame ID ${targetFrameId} không tìm thấy trong metadata của video ${frameData.videoName}.`);
+            }
+
+            // 6. Cắt ra các frame lân cận
+            const lookBehind = 20;
+            const lookAhead = 20;
+            const startIndex = Math.max(0, targetIndex - lookBehind);
+            const endIndex = Math.min(allKeyframes.length, targetIndex + lookAhead + 1);
+            
+            const neighbors = allKeyframes.slice(startIndex, endIndex);
+
+            // === KẾT THÚC PHẦN SỬA LỖI ===
+
+            // Phần còn lại của hàm không cần thay đổi
+            if (neighbors.length === 0) {
+                previewPlaceholder.textContent = 'Không tìm thấy frame lân cận.';
+                return;
+            }
+
+            previewPlaceholder.style.display = 'none';
+            const imageLoadPromises = [];
+
+            neighbors.forEach(neighborData => {
+                const thumb = document.createElement('img');
+                const fullFrameData = {
+                    ...neighborData,
+                    videoName: frameData.videoName,
+                    path: getFrameUrl(frameData.videoName, neighborData.filename),
+                    frameIdentifier: `${frameData.videoName}_${neighborData.frame_id_ori}`
+                    // timestamp đã được ánh xạ đúng ở trên
+                };
+                thumb.frameData = fullFrameData;
+                thumb.addEventListener('mouseenter', () => { currentlyHoveredPreviewFrameData = thumb.frameData; });
+                thumb.addEventListener('mouseleave', () => { currentlyHoveredPreviewFrameData = null; });
+                thumb.addEventListener('contextmenu', (e) => {
+                    e.preventDefault();
+                    const data = thumb.frameData;
+                    if (data && data.videoName && data.timestamp) {
+                        openVideoModal(data.videoName, data.timestamp);
+                    } else {
+                        showToastNotification("Lỗi: Không đủ dữ liệu để mở video.", "error");
+                    }
+                });
+                thumb.addEventListener('click', () => {
+                    const data = thumb.frameData;
+                    if (data && data.videoName && data.timestamp) {
+                        openVideoModal(data.videoName, data.timestamp);
+                    }
+                });
+                const loadPromise = new Promise((resolve) => {
+                    thumb.onload = resolve;
+                    thumb.onerror = resolve; 
+                });
+                imageLoadPromises.push(loadPromise);
+                setFrameImageSource(thumb, thumb.frameData.path);
+                thumb.title = thumb.frameData.frameIdentifier;
+                if (neighborData.frame_id_ori === targetFrameId) {
+                    thumb.classList.add('highlighted');
+                }
+                previewThumbnails.appendChild(thumb);
+            });
+            
+            await Promise.all(imageLoadPromises);
+            
+            setTimeout(() => {
+                const highlightedThumb = previewThumbnails.querySelector('.highlighted');
+                if (highlightedThumb) {
+                    const parent = previewThumbnails;
+                    const offsetLeft = highlightedThumb.offsetLeft;
+                    const thumbWidth = highlightedThumb.offsetWidth;
+                    const parentWidth = parent.offsetWidth;
+                    parent.scrollLeft = offsetLeft - (parentWidth / 2) + (thumbWidth * 1.5);
+                }
+            }, 50);
+
+        } catch (error) {
+            console.error('Lỗi khi tải keyframe lân cận từ file metadata.json:', error);
+            previewPlaceholder.textContent = 'Lỗi khi tải dữ liệu.';
+        }
+    }
+
+    function groupResultsByVideo(images, useTemporalScore = false) {
+        if (!images || images.length === 0) {
+            return [];
+        }
+
+        const getSortScore = image => {
+            const primaryScore = useTemporalScore ? image.temporal_score : image.score;
+            const fallbackScore = useTemporalScore ? image.score : image.temporal_score;
+            return Number(primaryScore ?? fallbackScore ?? 0);
+        };
+
+        // Bước 1: Nhóm các frame vào một object theo videoName
+        const groups = images.reduce((acc, image) => {
+            const videoName = image.videoName;
+            const score = getSortScore(image);
+
+            if (!acc[videoName]) {
+                acc[videoName] = {
+                    videoName: videoName,
+                    bestScore: -1,
+                    frames: []
+                };
+            }
+
+            acc[videoName].frames.push(image);
+            if (score > acc[videoName].bestScore) {
+                acc[videoName].bestScore = score;
+            }
+
+            return acc;
+        }, {});
+
+        // Bước 2: Chuyển object thành mảng và sắp xếp các nhóm dựa trên bestScore
+        const sortedGroups = Object.values(groups).sort((a, b) => b.bestScore - a.bestScore);
+
+        // Bước 3: Sắp xếp các frame bên trong mỗi nhóm theo điểm số
+        sortedGroups.forEach(group => {
+            group.frames.sort((a, b) => getSortScore(b) - getSortScore(a));
         });
 
-        // Bước 5: Đợi tất cả ảnh tải xong để tránh hiệu ứng "pop-in"
-        await Promise.all(imageLoadPromises);
-        
-        setTimeout(() => {
-            const highlightedThumb = previewThumbnails.querySelector('.highlighted');
-            if (highlightedThumb) {
-                // Cuộn đến frame được highlight và đặt nó vào giữa
-                highlightedThumb.scrollIntoView({
-                    behavior: 'auto', // 'smooth' để cuộn mượt, 'auto' để cuộn ngay lập tức
-                    inline: 'start', // Quan trọng: căn giữa theo chiều ngang
-                    block: 'nearest'  // Căn theo chiều dọc
-                });
-            }
-        }, 50);
-
-        // Bước 6: Hoàn tất - không cần cuộn nữa vì thanh preview sẽ tự bắt đầu từ đầu
-
-    } catch (error) {
-        console.error('Lỗi khi tải keyframe lân cận:', error);
-        previewPlaceholder.textContent = 'Lỗi khi tải dữ liệu.';
-    }
-}
-
-function groupResultsByVideo(images) {
-    if (!images || images.length === 0) {
-        return [];
+        return sortedGroups;
     }
 
-    // Bước 1: Nhóm các frame vào một object theo videoName
-    const groups = images.reduce((acc, image) => {
-        const videoName = image.videoName;
-        const score = image.temporal_score || image.score || 0;
-
-        if (!acc[videoName]) {
-            acc[videoName] = {
-                videoName: videoName,
-                bestScore: -1,
-                frames: []
-            };
+    function addFramesToQueue(framesData) {
+        if (!framesData || framesData.length === 0) {
+            return;
         }
 
-        acc[videoName].frames.push(image);
-        if (score > acc[videoName].bestScore) {
-            acc[videoName].bestScore = score;
+        // 1. Set biến ID để target (luôn lấy frame đầu tiên trong danh sách được thêm)
+        lastAddedFrameId = framesData[0].frameIdentifier;
+
+        // 2. Gửi yêu cầu lên server
+        sendWebSocketMessage('add_frames', { frames: framesData });
+
+        // 3. Hiển thị thông báo (có thể tùy chỉnh)
+        const frameCount = framesData.length;
+        showToastNotification(`Đã thêm ${frameCount} frame vào queue.`, 'success');
+
+        // Logic bổ sung nếu cần, ví dụ: xóa lựa chọn hiện tại
+        if (frameSelectionManager.getSelectionCount() > 0) {
+             frameSelectionManager.clearAllSelections();
         }
-
-        return acc;
-    }, {});
-
-    // Bước 2: Chuyển object thành mảng và sắp xếp các nhóm dựa trên bestScore
-    const sortedGroups = Object.values(groups).sort((a, b) => b.bestScore - a.bestScore);
-
-    // Bước 3: Sắp xếp các frame bên trong mỗi nhóm theo điểm số
-    sortedGroups.forEach(group => {
-        group.frames.sort((a, b) => (b.temporal_score || b.score || 0) - (a.temporal_score || a.score || 0));
-    });
-
-    return sortedGroups;
-}
-
-function createImageItemElement(image) {
-    const imageItem = document.createElement('div');
-    const inQueueClass = image.isInQueue ? 'is-in-queue' : '';
-    imageItem.className = `image-item ${inQueueClass}`;
-    const uniqueFrameId = image.frameIdentifier;
-    imageItem.setAttribute('data-frame-id', uniqueFrameId);
-    imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
+    }
 
 
-    let scoreHtml = '';
-    // if (image.temporal_score > 0) {
-    //     scoreHtml = `<div class="score-overlay temporal">T-Score: ${image.temporal_score.toFixed(4)}</div>`;
-    // } 
-    // else if (image.score > 0) {
-    //     scoreHtml = `<div class="score-overlay">${image.score.toFixed(4)}</div>`;
-    // }
-    imageItem.innerHTML = `
-        <img src="${image.path}" alt="${uniqueFrameId}" loading="lazy">
+    function createImageItemElement(image) {
+        const imageItem = document.createElement('div');
+
+        const inQueueClass = image.isInQueue ? 'is-in-queue' : '';
+        imageItem.className = `image-item ${inQueueClass}`;
+        const isWrongClass = wrongSubmissionIds.has(image.frameIdentifier) ? 'is-wrong-submission' : '';
+        imageItem.className = `image-item ${inQueueClass} ${isWrongClass}`;
+        const uniqueFrameId = image.frameIdentifier;
+        imageItem.setAttribute('data-frame-id', uniqueFrameId);
+        imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
+
+
+        let scoreHtml = '';
+        // if (image.temporal_score > 0) {
+        //     scoreHtml = `<div class="score-overlay temporal">T-Score: ${image.temporal_score.toFixed(4)}</div>`;
+        // }
+        // else if (image.score > 0) {
+        //     scoreHtml = `<div class="score-overlay">${image.score.toFixed(4)}</div>`;
+        // }
+        imageItem.innerHTML = `
+        <img src="${resolveFrameUrl(image.path)}" data-frame-source="${image.path}" alt="${uniqueFrameId}" loading="lazy">
         ${scoreHtml}
         <div class="frame-info">${image.frameIdentifier}</div>
-    `;
+        `;
 
-    imageItem.addEventListener('mousedown', function(event) {
-        blurActiveInput();
-        if (event.button === 2) { // Chuột phải
-            event.preventDefault();
-            openVideoModal(image.videoName, image.timestamp);
-        } else if (event.button === 0) { // Chuột trái
-            event.preventDefault();
-            showKeyframePreview(image);
-            if (event.ctrlKey) {
-                frameSelectionManager.toggleSelection(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
-            } else {
-                frameSelectionManager.clearAllSelections();
-                frameSelectionManager.selectFrame(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
+        imageItem.addEventListener('mousedown', function(event) {
+            blurActiveInput();
+            if (event.button === 2) {
+                event.preventDefault();
+                openVideoModal(image.videoName, image.timestamp);
+            } else if (event.button === 0) {
+                event.preventDefault();
+                showKeyframePreview(image);
+                if (event.ctrlKey) {
+                    frameSelectionManager.toggleSelection(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
+                } else {
+                    clearQueueSelection();
+                    frameSelectionManager.clearAllSelections();
+                    frameSelectionManager.selectFrame(uniqueFrameId, { id: image.id, path: image.path, element: imageItem, data: image });
+                }
+            } else if (event.button === 1) {
+                event.preventDefault();
+                openImageModal(image);
             }
-        } else if (event.button === 1) { // Chuột giữa
-            event.preventDefault();
-            openImageModal(image);
+        });
+
+        imageItem.addEventListener('contextmenu', e => e.preventDefault());
+        return imageItem;
+    }
+
+    function renderGridLayout(isReranked = false) {
+        const loadingMore = document.getElementById('loadingMore');
+        let headerHtml = isReranked ? `<h3 class="reranked-results-header">T Reranked</h3>` : '';
+
+        // Tạo container và các cột
+        const masonryContainer = document.createElement('div');
+        masonryContainer.className = 'masonry-container';
+        const numberOfColumns = 6;
+        for (let i = 0; i < numberOfColumns; i++) {
+            const column = document.createElement('div');
+            column.className = 'masonry-column';
+            masonryContainer.appendChild(column);
         }
-    });
 
-    imageItem.addEventListener('contextmenu', e => e.preventDefault());
-    return imageItem;
-}
-
-function renderGridLayout(isReranked = false) {
-    const loadingMore = document.getElementById('loadingMore');
-    let headerHtml = isReranked ? `<h3 class="reranked-results-header">T Reranked</h3>` : '';
-    
-    // Tạo container và các cột
-    const masonryContainer = document.createElement('div');
-    masonryContainer.className = 'masonry-container';
-    const numberOfColumns = 6;
-    for (let i = 0; i < numberOfColumns; i++) {
-        const column = document.createElement('div');
-        column.className = 'masonry-column';
-        masonryContainer.appendChild(column);
-    }
-    
-    // Chèn header và container VÀO TRƯỚC phần tử "loading"
-    if (loadingMore) {
-        if (headerHtml) {
-            // Tạm thời tạo một div để chứa chuỗi HTML
-            const tempDiv = document.createElement('div');
-            tempDiv.innerHTML = headerHtml;
-            contentArea.insertBefore(tempDiv.firstChild, loadingMore);
-        }
-        contentArea.insertBefore(masonryContainer, loadingMore);
-    } else {
-        // Fallback nếu không tìm thấy loadingMore
-        if (headerHtml) contentArea.innerHTML = headerHtml;
-        contentArea.appendChild(masonryContainer);
-    }
-}
-
-function loadMoreGroups() {
-    if (isLoading || hasReachedEnd) return;
-
-    isLoading = true;
-    const loadingMore = document.getElementById('loadingMore');
-    if (loadingMore) loadingMore.style.display = 'flex';
-
-    const startIndex = displayedGroupsCount;
-    const endIndex = Math.min(startIndex + GROUPS_PER_BATCH, allGroupedData.length);
-
-    if (startIndex >= allGroupedData.length) {
-        hasReachedEnd = true;
-        isLoading = false;
-        if (loadingMore) loadingMore.style.display = 'none';
-        return;
-    }
-
-    setTimeout(() => {
-        for (let i = startIndex; i < endIndex; i++) {
-            const group = allGroupedData[i];
-            
-            // (Code tạo groupRow vẫn giữ nguyên...)
-            const groupRow = document.createElement('div');
-            groupRow.className = 'video-group-row';
-            const title = document.createElement('h4');
-            title.className = 'video-group-title';
-            title.innerHTML = `<i class="fas fa-video"></i> ${group.videoName} <span>(${group.frames.length} frames)</span>`;
-            groupRow.appendChild(title);
-            const frameStrip = document.createElement('div');
-            frameStrip.className = 'frame-strip';
-            group.frames.forEach(image => {
-                frameStrip.appendChild(createImageItemElement(image));
-            });
-            groupRow.appendChild(frameStrip);
-
-            // === THAY ĐỔI QUAN TRỌNG NHẤT LÀ ĐÂY ===
-            // Chèn hàng video mới VÀO TRƯỚC phần tử "loading"
-            if (loadingMore) {
-                contentArea.insertBefore(groupRow, loadingMore);
-            } else {
-                contentArea.appendChild(groupRow); // Fallback
+        // Chèn header và container VÀO TRƯỚC phần tử "loading"
+        if (loadingMore) {
+            if (headerHtml) {
+                // Tạm thời tạo một div để chứa chuỗi HTML
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = headerHtml;
+                contentArea.insertBefore(tempDiv.firstChild, loadingMore);
             }
+            contentArea.insertBefore(masonryContainer, loadingMore);
+        } else {
+            // Fallback nếu không tìm thấy loadingMore
+            if (headerHtml) contentArea.innerHTML = headerHtml;
+            contentArea.appendChild(masonryContainer);
         }
+    }
 
-        displayedGroupsCount = endIndex;
+    function loadMoreGroups() {
+        if (isLoading || hasReachedEnd) return;
 
-        if (displayedGroupsCount >= allGroupedData.length) {
+        isLoading = true;
+        const loadingMore = document.getElementById('loadingMore');
+        if (loadingMore) loadingMore.style.display = 'flex';
+
+        const startIndex = displayedGroupsCount;
+        const endIndex = Math.min(startIndex + GROUPS_PER_BATCH, allGroupedData.length);
+
+        if (startIndex >= allGroupedData.length) {
             hasReachedEnd = true;
+            isLoading = false;
             if (loadingMore) loadingMore.style.display = 'none';
+            return;
         }
 
-        isLoading = false;
-    }, 100);
-}
+        setTimeout(() => {
+            for (let i = startIndex; i < endIndex; i++) {
+                const group = allGroupedData[i];
 
-function updateLayoutButton() {
-    if (!toggleLayoutBtn) return;
+                // (Code tạo groupRow vẫn giữ nguyên...)
+                const groupRow = document.createElement('div');
+                groupRow.className = 'video-group-row';
+                const title = document.createElement('h4');
+                title.className = 'video-group-title';
+                title.innerHTML = `<i class="fas fa-video"></i> ${group.videoName} <span>(${group.frames.length} frames)</span>`;
+                groupRow.appendChild(title);
+                const frameStrip = document.createElement('div');
+                frameStrip.className = 'frame-strip';
+                group.frames.forEach(image => {
+                    frameStrip.appendChild(createImageItemElement(image));
+                });
+                groupRow.appendChild(frameStrip);
 
-    if (currentLayout === 'grid') {
-        // Nếu đang ở layout Lưới, nút sẽ hiển thị icon để chuyển sang layout Gom nhóm
-        toggleLayoutBtn.innerHTML = '<i class="fas fa-list"></i>';
-        toggleLayoutBtn.title = 'Chuyển sang layout Gom nhóm (Tab)';
-    } else {
-        // Nếu đang ở layout Gom nhóm, nút sẽ hiển thị icon để chuyển sang layout Lưới
-        toggleLayoutBtn.innerHTML = '<i class="fas fa-th"></i>';
-        toggleLayoutBtn.title = 'Chuyển sang layout Lưới (Tab)';
-    }
-}
-
-
-function toggleLayout() {
-    // Chuyển đổi trạng thái
-    currentLayout = currentLayout === 'grid' ? 'grouped' : 'grid';
-
-    // Cập nhật giao diện nút
-    updateLayoutButton();
-
-    // Hiển thị thông báo
-    const layoutName = currentLayout === 'grid' ? 'Lưới (Grid)' : 'Gom theo Video (Grouped)';
-    showToastNotification(`Đã chuyển sang layout: ${layoutName}`, 'success', 1500);
-
-    // Render lại kết quả với layout mới, nếu có dữ liệu
-    if (allImages && allImages.length > 0) {
-        handleSearchResults(allImages, false); // isReranked là false vì chỉ render lại
-    }
-}
-
-function setupInfiniteScrollForGrid() {
-    if (window.currentInfiniteScrollObserver) {
-        window.currentInfiniteScrollObserver.disconnect();
-    }
-
-    let loadingMore = document.getElementById('loadingMore');
-    if (!loadingMore) return;
-    
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
-                loadMoreImages(); // Gọi hàm tải ảnh
+                // === THAY ĐỔI QUAN TRỌNG NHẤT LÀ ĐÂY ===
+                // Chèn hàng video mới VÀO TRƯỚC phần tử "loading"
+                if (loadingMore) {
+                    contentArea.insertBefore(groupRow, loadingMore);
+                } else {
+                    contentArea.appendChild(groupRow); // Fallback
+                }
             }
-        });
-    }, {
-        root: mainContent,
-        rootMargin: '0px 0px 300px 0px',
-        threshold: 0.1
-    });
-    
-    observer.observe(loadingMore);
-    window.currentInfiniteScrollObserver = observer;
-}
 
-function setupInfiniteScrollForGroups() {
-    // Ngắt kết nối observer cũ nếu có để tránh lỗi
-    if (window.currentInfiniteScrollObserver) {
-        window.currentInfiniteScrollObserver.disconnect();
-    }
+            displayedGroupsCount = endIndex;
 
-    let loadingMore = document.getElementById('loadingMore');
-    if (!loadingMore) {
-        console.error("Phần tử #loadingMore không tồn tại!");
-        return;
-    }
-    
-    const observer = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
-                loadMoreGroups(); // Gọi hàm tải nhóm mới
+            if (displayedGroupsCount >= allGroupedData.length) {
+                hasReachedEnd = true;
+                if (loadingMore) loadingMore.style.display = 'none';
             }
-        });
-    }, {
-        root: mainContent, // Quan sát bên trong vùng main-content
-        rootMargin: '0px 0px 300px 0px', // Trigger trước khi đến cuối 300px
-        threshold: 0.1
-    });
-    
-    observer.observe(loadingMore);
-    window.currentInfiniteScrollObserver = observer; // Lưu lại để có thể ngắt kết nối
-}
 
-function toggleQueueMode() {
-    isFormSubmitMode = !isFormSubmitMode;
-
-    if (isFormSubmitMode) {
-        // Chuyển sang chế độ Form Submit cá nhân
-        submitQueueContainer.style.display = 'none';
-        formSubmitQueueContainer.style.display = 'flex';
-        toggleQueueModeBtn.classList.add('active');
-        toggleQueueModeBtn.title = "Chuyển sang Submit Queue cộng tác";
-        toggleQueueModeBtn.innerHTML = '<i class="fas fa-users"></i>';
-        showToastNotification("Đã chuyển sang chế độ Form Submit cá nhân", "success");
-    } else {
-        // Quay lại chế độ Submit Queue cộng tác
-        formSubmitQueueContainer.style.display = 'none';
-        submitQueueContainer.style.display = 'flex';
-        toggleQueueModeBtn.classList.remove('active');
-        toggleQueueModeBtn.title = "Chuyển sang Form Submit cá nhân";
-        toggleQueueModeBtn.innerHTML = '<i class="fas fa-user"></i>';
-        showToastNotification("Đã quay lại chế độ Submit Queue cộng tác", "success");
-    }
-}
-
-/**
- * Thêm một frame vào Form Submit Queue
- * @param {object} frameData - Dữ liệu đầy đủ của frame
- */
-function addToFormSubmitQueue(frameData) {
-    
-    if (!isFormSubmitMode) {
-        toggleQueueMode();
+            isLoading = false;
+        }, 100);
     }
 
-    const videoId = frameData.videoName;
-    const frameId = frameData.frame_id_ori;
+    function updateLayoutButton() {
+        if (!toggleLayoutBtn) return;
 
-    // 1. Kiểm tra ràng buộc video
-    if (formSubmitLockedVideoId && formSubmitLockedVideoId !== videoId) {
-        showToastNotification(`Queue chỉ chấp nhận frame từ video: ${formSubmitLockedVideoId}`, "error");
-        return;
-    }
-
-    // 2. Kiểm tra trùng lặp
-    if (formSubmitQueue.some(item => item.frame_id_ori === frameId)) {
-        showToastNotification(`Frame ${frameData.frameIdentifier} đã có trong queue.`, "info");
-        return;
-    }
-
-    // 3. Nếu queue rỗng, khóa videoId lại
-    if (formSubmitQueue.length === 0) {
-        formSubmitLockedVideoId = videoId;
-    }
-    
-    // 4. Thêm frame vào mảng và render lại
-    formSubmitQueue.push(frameData);
-    renderFormSubmitQueue();
-    showToastNotification(`Đã thêm ${frameData.frameIdentifier} vào Form Submit.`, "success", 1500);
-}
-
-/**
- * Vẽ lại toàn bộ giao diện của Form Submit Queue từ mảng `formSubmitQueue`
- */
-function renderFormSubmitQueue() {
-
-    if (formSubmitQueue.length > 0) {
-        if (isFormSubmitMode) {
-            formSubmitQueueContainer.classList.add('visible');
+        if (currentLayout === 'grid') {
+            // Nếu đang ở layout Lưới, nút sẽ hiển thị icon để chuyển sang layout Gom nhóm
+            toggleLayoutBtn.innerHTML = '<i class="fas fa-list"></i>';
+            toggleLayoutBtn.title = 'Chuyển sang layout Gom nhóm (Tab)';
+        } else {
+            // Nếu đang ở layout Gom nhóm, nút sẽ hiển thị icon để chuyển sang layout Lưới
+            toggleLayoutBtn.innerHTML = '<i class="fas fa-th"></i>';
+            toggleLayoutBtn.title = 'Chuyển sang layout Lưới (Tab)';
         }
-    } else {
-        formSubmitQueueContainer.classList.remove('visible');
+    }
+
+
+    function toggleLayout() {
+        // Chuyển đổi trạng thái
+        currentLayout = currentLayout === 'grid' ? 'grouped' : 'grid';
+
+        // Cập nhật giao diện nút
+        updateLayoutButton();
+
+        // Hiển thị thông báo
+        const layoutName = currentLayout === 'grid' ? 'Lưới (Grid)' : 'Gom theo Video (Grouped)';
+        showToastNotification(`Đã chuyển sang layout: ${layoutName}`, 'success', 1500);
+
+        // Render lại kết quả với layout mới, nếu có dữ liệu
+        if (allImages && allImages.length > 0) {
+            handleSearchResults(allImages, currentResultsAreReranked);
+        }
+    }
+
+    function setupInfiniteScrollForGrid() {
+        if (window.currentInfiniteScrollObserver) {
+            window.currentInfiniteScrollObserver.disconnect();
+        }
+
+        let loadingMore = document.getElementById('loadingMore');
+        if (!loadingMore) return;
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
+                    loadMoreImages(); // Gọi hàm tải ảnh
+                }
+            });
+        }, {
+            root: mainContent,
+            rootMargin: '0px 0px 300px 0px',
+            threshold: 0.1
+        });
+
+        observer.observe(loadingMore);
+        window.currentInfiniteScrollObserver = observer;
+    }
+
+    function setupInfiniteScrollForGroups() {
+        if (window.currentInfiniteScrollObserver) {
+            window.currentInfiniteScrollObserver.disconnect();
+        }
+
+        let loadingMore = document.getElementById('loadingMore');
+        if (!loadingMore) {
+            console.error("Phần tử #loadingMore không tồn tại!");
+            return;
+        }
+
+        const observer = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting && !isLoading && !hasReachedEnd) {
+                    loadMoreGroups(); // Gọi hàm tải nhóm mới
+                }
+            });
+        }, {
+            root: mainContent, // Quan sát bên trong vùng main-content
+            rootMargin: '0px 0px 300px 0px', // Trigger trước khi đến cuối 300px
+            threshold: 0.1
+        });
+
+        observer.observe(loadingMore);
+        window.currentInfiniteScrollObserver = observer;
+    }
+
+    function toggleQueueMode() {
+        isFormSubmitMode = !isFormSubmitMode;
+
         if (isFormSubmitMode) {
+            // Chuyển sang chế độ Form Submit cá nhân
+            submitQueueContainer.style.display = 'none';
+            formSubmitQueueContainer.style.display = 'flex';
+            toggleQueueModeBtn.classList.add('active');
+            toggleQueueModeBtn.title = "Chuyển sang Submit Queue cộng tác";
+            toggleQueueModeBtn.innerHTML = '<i class="fas fa-users"></i>';
+            showToastNotification("Đã chuyển sang chế độ Form Submit cá nhân", "success");
+        } else {
+            // Quay lại chế độ Submit Queue cộng tác
+            formSubmitQueueContainer.style.display = 'none';
+            submitQueueContainer.style.display = 'flex';
+            toggleQueueModeBtn.classList.remove('active');
+            toggleQueueModeBtn.title = "Chuyển sang Form Submit cá nhân";
+            toggleQueueModeBtn.innerHTML = '<i class="fas fa-user"></i>';
+            showToastNotification("Đã quay lại chế độ Submit Queue cộng tác", "success");
+        }
+    }
+
+    /**
+     * Thêm một frame vào Form Submit Queue
+     * @param {object} frameData - Dữ liệu đầy đủ của frame
+     */
+    function addToFormSubmitQueue(frameData) {
+
+        if (!isFormSubmitMode) {
             toggleQueueMode();
         }
+
+        const videoId = frameData.videoName;
+        const frameId = frameData.frame_id_ori;
+
+        // 1. Kiểm tra ràng buộc video
+        if (formSubmitLockedVideoId && formSubmitLockedVideoId !== videoId) {
+            showToastNotification(`Queue chỉ chấp nhận frame từ video: ${formSubmitLockedVideoId}`, "error");
+            return;
+        }
+
+        // 2. Kiểm tra trùng lặp
+        if (formSubmitQueue.some(item => item.frame_id_ori === frameId)) {
+            showToastNotification(`Frame ${frameData.frameIdentifier} đã có trong queue.`, "info");
+            return;
+        }
+
+        // 3. Nếu queue rỗng, khóa videoId lại
+        if (formSubmitQueue.length === 0) {
+            formSubmitLockedVideoId = videoId;
+        }
+
+        // 4. Thêm frame vào mảng và render lại
+        formSubmitQueue.push(frameData);
+        renderFormSubmitQueue();
+        showToastNotification(`Đã thêm ${frameData.frameIdentifier} vào Form Submit.`, "success", 1500);
     }
 
-    formSubmitQueueFramesContainer.innerHTML = ''; // Xóa sạch
+    /**
+     * Vẽ lại toàn bộ giao diện của Form Submit Queue từ mảng `formSubmitQueue`
+     */
+    function renderFormSubmitQueue() {
 
-    formSubmitQueue.forEach((frameData, index) => {
-        const isFromVideoClass = frameData.isFromVideo ? 'from-video' : '';
-        const frameElement = document.createElement('div');
-        frameElement.className = `queue-frame-item ${isFromVideoClass}`;
-        frameElement.dataset.frameId = frameData.frameIdentifier;
-        frameElement.dataset.index = index; // Lưu index để sắp xếp
-        frameElement.draggable = true;
+        if (formSubmitQueue.length > 0) {
+            if (isFormSubmitMode) {
+                formSubmitQueueContainer.classList.add('visible');
+            }
+        } else {
+            formSubmitQueueContainer.classList.remove('visible');
+            if (isFormSubmitMode) {
+                toggleQueueMode();
+            }
+        }
 
-        frameElement.innerHTML = `
+        formSubmitQueueFramesContainer.innerHTML = ''; // Xóa sạch
+
+        formSubmitQueue.forEach((frameData, index) => {
+            const isFromVideoClass = frameData.isFromVideo ? 'from-video' : '';
+            const frameElement = document.createElement('div');
+            frameElement.className = `queue-frame-item ${isFromVideoClass}`;
+            frameElement.dataset.frameId = frameData.frameIdentifier;
+            frameElement.dataset.index = index; // Lưu index để sắp xếp
+            frameElement.draggable = true;
+
+            frameElement.innerHTML = `
             <div class="queue-frame-image-container">
-                <img src="${frameData.path}" alt="Queued frame">
-                ${frameData.isFromVideo ? `<div class="queue-frame-user">LIVE</div>` : ''}
-                <button class="remove-queue-item-btn" title="Xóa khỏi queue">×</button>
+            <img src="${resolveFrameUrl(frameData.path)}" data-frame-source="${frameData.path}" alt="Queued frame">
+            ${frameData.isFromVideo ? `<div class="queue-frame-user">LIVE</div>` : ''}
+            <button class="remove-queue-item-btn" title="Xóa khỏi queue">×</button>
             </div>
             <div class="queue-frame-info-bar">${frameData.frameIdentifier}</div>
-        `;
+            `;
 
-        frameElement.addEventListener('mouseenter', () => {
-            currentlyHoveredFormQueueFrameData = frameData;
-        });
-        frameElement.addEventListener('mouseleave', () => {
-            currentlyHoveredFormQueueFrameData = null;
-        });
+            frameElement.addEventListener('mouseenter', () => {
+                currentlyHoveredFormQueueFrameData = frameData;
+            });
+            frameElement.addEventListener('mouseleave', () => {
+                currentlyHoveredFormQueueFrameData = null;
+            });
 
-        // Gắn sự kiện xóa
-        frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', (e) => {
-            e.stopPropagation();
-            formSubmitQueue.splice(index, 1);
-            if (formSubmitQueue.length === 0) {
-                formSubmitLockedVideoId = null; // Mở khóa nếu queue rỗng
-            }
-            renderFormSubmitQueue();
-        });
+            // Gắn sự kiện xóa
+            frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', (e) => {
+                e.stopPropagation();
+                formSubmitQueue.splice(index, 1);
+                if (formSubmitQueue.length === 0) {
+                    formSubmitLockedVideoId = null; // Mở khóa nếu queue rỗng
+                }
+                renderFormSubmitQueue();
+            });
 
-        // Gắn các sự kiện tương tác
-        frameElement.addEventListener('contextmenu', e => {
-            e.preventDefault();
-            openVideoModal(frameData.videoName, frameData.timestamp);
-        });
+            // Gắn các sự kiện tương tác
+            frameElement.addEventListener('contextmenu', e => {
+                e.preventDefault();
+                openVideoModal(frameData.videoName, frameData.timestamp);
+            });
 
-        formSubmitQueueFramesContainer.appendChild(frameElement);
-    });
-    
-    // Logic kéo thả
-    setupDragAndDrop();
-
-    // Cập nhật trạng thái nút Submit
-    formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
-}
-
-
-/**
- * Thiết lập sự kiện kéo-thả cho các item trong queue
- */
-function setupDragAndDrop() {
-    const items = formSubmitQueueFramesContainer.querySelectorAll('.queue-frame-item');
-    
-    items.forEach(item => {
-        item.addEventListener('dragstart', () => {
-            draggedItem = item;
-            setTimeout(() => item.style.display = 'none', 0);
+            formSubmitQueueFramesContainer.appendChild(frameElement);
         });
 
-        item.addEventListener('dragend', () => {
-            setTimeout(() => {
-                draggedItem.style.display = '';
-                draggedItem = null;
-            }, 0);
+        // Logic kéo thả
+        setupDragAndDrop();
+
+        // Cập nhật trạng thái nút Submit
+        formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
+    }
+
+
+    /**
+     * Thiết lập sự kiện kéo-thả cho các item trong queue
+     */
+    function setupDragAndDrop() {
+        const items = formSubmitQueueFramesContainer.querySelectorAll('.queue-frame-item');
+
+        items.forEach(item => {
+            item.addEventListener('dragstart', () => {
+                draggedItem = item;
+                setTimeout(() => item.style.display = 'none', 0);
+            });
+
+            item.addEventListener('dragend', () => {
+                setTimeout(() => {
+                    draggedItem.style.display = '';
+                    draggedItem = null;
+                }, 0);
+            });
+
+            item.addEventListener('dragover', e => {
+                e.preventDefault();
+                const afterElement = getDragAfterElement(formSubmitQueueFramesContainer, e.clientX);
+                if (afterElement == null) {
+                    formSubmitQueueFramesContainer.appendChild(draggedItem);
+                } else {
+                    formSubmitQueueFramesContainer.insertBefore(draggedItem, afterElement);
+                }
+            });
         });
 
-        item.addEventListener('dragover', e => {
-            e.preventDefault();
-            const afterElement = getDragAfterElement(formSubmitQueueFramesContainer, e.clientX);
-            if (afterElement == null) {
-                formSubmitQueueFramesContainer.appendChild(draggedItem);
+        formSubmitQueueFramesContainer.addEventListener('drop', () => {
+            // Cập nhật lại mảng `formSubmitQueue` theo thứ tự DOM mới
+            const newOrder = Array.from(formSubmitQueueFramesContainer.querySelectorAll('.queue-frame-item'))
+            .map(el => formSubmitQueue[parseInt(el.dataset.index)]);
+            formSubmitQueue = newOrder;
+                                                        // Render lại để cập nhật dataset.index cho đúng
+                                                        renderFormSubmitQueue();
+        });
+    }
+
+    function getDragAfterElement(container, x) {
+        const draggableElements = [...container.querySelectorAll('.queue-frame-item:not([style*="display: none"])')];
+
+        return draggableElements.reduce((closest, child) => {
+            const box = child.getBoundingClientRect();
+            const offset = x - box.left - box.width / 2;
+            if (offset < 0 && offset > closest.offset) {
+                return { offset: offset, element: child };
             } else {
-                formSubmitQueueFramesContainer.insertBefore(draggedItem, afterElement);
+                return closest;
+            }
+        }, { offset: Number.NEGATIVE_INFINITY }).element;
+    }
+
+    async function handleFormSubmit() {
+        if (formSubmitQueue.length === 0) return;
+
+        const payload = {
+            video_name: formSubmitLockedVideoId,
+            frame_indices: formSubmitQueue.map(f => f.frame_id_ori),
+                          answer: formSubmitText.value.trim(),
+                          filename: formSubmitFilename.value.trim()
+        };
+
+        try {
+            formSubmitBtn.disabled = true;
+            formSubmitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
+
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/form-submit`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (response.ok) {
+                const result = await response.json();
+                showToastNotification(`Thành công: ${result.message}`, "success");
+                clearFormSubmitQueue(); // Tự động xóa sau khi submit thành công
+            } else {
+                const error = await response.json();
+                throw new Error(error.detail || 'Lỗi không xác định từ server');
+            }
+
+        } catch (error) {
+            showToastNotification(`Submit thất bại: ${error.message}`, "error");
+        } finally {
+            formSubmitBtn.disabled = false;
+            formSubmitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
+        }
+    }
+
+    function clearFormSubmitQueue() {
+        formSubmitQueue = [];
+        formSubmitLockedVideoId = null;
+        formSubmitText.value = '';
+        formSubmitFilename.value = '';
+        renderFormSubmitQueue();
+    }
+
+    function toggleTrakeMode(isActive) {
+        isTrakeMode = isActive;
+        videoModal.classList.toggle('trake-active', isActive);
+
+        const player = document.getElementById('videoPlayer');
+        if (isActive) {
+            player.pause();
+            player.addEventListener('wheel', handleVideoScrub, { passive: false });
+            // Lấy giá trị gap từ cache nếu có
+            const savedGap = localStorage.getItem('trake_seek_gap');
+            if (savedGap) {
+                trakeSeekGapInput.value = savedGap;
+            }
+        } else {
+            player.removeEventListener('wheel', handleVideoScrub);
+        }
+    }
+
+    function handleVideoScrub(e) {
+        e.preventDefault();
+        const gap = parseFloat(trakeSeekGapInput.value) || 0.1;
+        const direction = e.deltaY > 0 ? 1 : -1;
+        const player = document.getElementById('videoPlayer');
+
+        let newTime = player.currentTime + (gap * direction);
+        // Đảm bảo không tua ra ngoài khoảng video
+        player.currentTime = Math.max(0, Math.min(player.duration, newTime));
+    }
+
+    async function captureAndSubmitTrakeFrame(eventNumber) {
+        const currentVideoName = currentVideoModalData.videoName;
+        if (trakeQueueState.length > 0) {
+            const lockedVideoName = trakeQueueState[0].videoName;
+            if (currentVideoName !== lockedVideoName) {
+                showToastNotification(`Hàng đợi TRAKE đã bị khóa cho video: ${lockedVideoName}`, "error");
+                return; // Ngăn không cho frame được thêm vào
+            }
+        }
+        const existingFrame = trakeQueueState.find(f => f.eventNumber === eventNumber);
+        if (existingFrame) {
+            const confirmed = confirm(`Sự kiện ${eventNumber} đã có frame do người dùng "${existingFrame.submitted_by}" nộp.\nBạn có chắc chắn muốn GHI ĐÈ không?`);
+            if (!confirmed) {
+                return; // Người dùng hủy
+            }
+        }
+
+        const player = document.getElementById('videoPlayer');
+        player.pause();
+
+        try {
+            const currentTime = player.currentTime;
+            const fps = await getFpsForVideo(currentVideoModalData.videoName);
+            const frameNumber = Math.round(currentTime * fps);
+
+            const captureCanvas = document.getElementById('frameCaptureCanvas');
+            captureCanvas.width = player.videoWidth;
+            captureCanvas.height = player.videoHeight;
+            const context = captureCanvas.getContext('2d');
+            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
+            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
+
+            const minutes = Math.floor(currentTime / 60);
+            const seconds = (currentTime % 60).toFixed(3);
+            const timestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+
+            const frameData = {
+                eventNumber: eventNumber,
+                videoName: currentVideoModalData.videoName,
+                path: imagePathDataUrl,
+                frame_id_ori: frameNumber,
+                timestamp: timestamp,
+                frameIdentifier: `${currentVideoModalData.videoName}_${frameNumber}`,
+                isFromVideo: true
+            };
+
+            // Gửi hành động lên server
+            console.log('[TRAKE] Sending frame to server for event:', eventNumber, frameData);
+            sendWebSocketMessage('add_or_override_trake_frame', frameData);
+            showToastNotification(`Đang gửi frame cho sự kiện ${eventNumber}...`, 'success');
+
+        } catch (error) {
+            console.error("Lỗi khi chụp frame TRAKE:", error);
+            showToastNotification("Không thể chụp frame.", "error");
+        }
+    }
+
+    function renderTrakeQueue(frames = []) {
+        console.log('[TRAKE] Rendering queue with frames:', frames);
+        trakeQueueState = frames;
+
+        const mainContainer = document.querySelector('.main-container');
+        const trakeQueueContainer = document.getElementById('trakeSubmitQueue');
+
+        if (frames.length > 0) {
+            trakeQueueContainer.style.display = '';
+
+            mainContainer.classList.add('trake-active');
+        } else {
+            mainContainer.classList.remove('trake-active');
+        }
+
+        // Cập nhật thanh trạng thái 5 sự kiện (giữ nguyên)
+        const filledEvents = new Set(frames.map(f => f.eventNumber));
+        trakeStatusBar.querySelectorAll('.status-dot').forEach(dot => {
+            const eventNum = parseInt(dot.dataset.event);
+            if (filledEvents.has(eventNum)) {
+                dot.classList.remove('empty');
+                dot.classList.add('filled');
+            } else {
+                dot.classList.remove('filled');
+                dot.classList.add('empty');
             }
         });
-    });
 
-    formSubmitQueueFramesContainer.addEventListener('drop', () => {
-        // Cập nhật lại mảng `formSubmitQueue` theo thứ tự DOM mới
-        const newOrder = Array.from(formSubmitQueueFramesContainer.querySelectorAll('.queue-frame-item'))
-                              .map(el => formSubmitQueue[parseInt(el.dataset.index)]);
-        formSubmitQueue = newOrder;
-        // Render lại để cập nhật dataset.index cho đúng
-        renderFormSubmitQueue(); 
-    });
-}
+        // Render các frame trong queue (giữ nguyên)
+        trakeSubmitQueueFramesContainer.innerHTML = '';
+        frames.forEach(frameData => {
+            const frameElement = document.createElement('div');
+            frameElement.className = 'queue-frame-item trake-item';
+            frameElement.dataset.frameId = frameData.frameIdentifier;
 
-function getDragAfterElement(container, x) {
-    const draggableElements = [...container.querySelectorAll('.queue-frame-item:not([style*="display: none"])')];
-
-    return draggableElements.reduce((closest, child) => {
-        const box = child.getBoundingClientRect();
-        const offset = x - box.left - box.width / 2;
-        if (offset < 0 && offset > closest.offset) {
-            return { offset: offset, element: child };
-        } else {
-            return closest;
-        }
-    }, { offset: Number.NEGATIVE_INFINITY }).element;
-}
-
-
-/**
- * Xử lý khi nhấn nút Submit: Gửi dữ liệu lên backend
- */
-async function handleFormSubmit() {
-    if (formSubmitQueue.length === 0) return;
-
-    const payload = {
-        video_name: formSubmitLockedVideoId,
-        frame_indices: formSubmitQueue.map(f => f.frame_id_ori),
-        answer: formSubmitText.value.trim(),
-        filename: formSubmitFilename.value.trim()
-    };
-
-    try {
-        formSubmitBtn.disabled = true;
-        formSubmitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
-
-        const response = await fetch('/api/form-submit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        if (response.ok) {
-            const result = await response.json();
-            showToastNotification(`Thành công: ${result.message}`, "success");
-            clearFormSubmitQueue(); // Tự động xóa sau khi submit thành công
-        } else {
-            const error = await response.json();
-            throw new Error(error.detail || 'Lỗi không xác định từ server');
-        }
-
-    } catch (error) {
-        showToastNotification(`Submit thất bại: ${error.message}`, "error");
-    } finally {
-        formSubmitBtn.disabled = false;
-        formSubmitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
-    }
-}
-
-/**
- * Xóa sạch Form Submit Queue và reset trạng thái
- */
-function clearFormSubmitQueue() {
-    formSubmitQueue = [];
-    formSubmitLockedVideoId = null;
-    formSubmitText.value = '';
-    formSubmitFilename.value = '';
-    renderFormSubmitQueue(); 
-}
-
-function toggleTrakeMode(isActive) {
-    isTrakeMode = isActive;
-    videoModal.classList.toggle('trake-active', isActive);
-    
-    const player = document.getElementById('videoPlayer');
-    if (isActive) {
-        player.pause();
-        player.addEventListener('wheel', handleVideoScrub, { passive: false });
-        // Lấy giá trị gap từ cache nếu có
-        const savedGap = localStorage.getItem('trake_seek_gap');
-        if (savedGap) {
-            trakeSeekGapInput.value = savedGap;
-        }
-    } else {
-        player.removeEventListener('wheel', handleVideoScrub);
-    }
-}
-
-/**
- * Xử lý việc tua video bằng con lăn chuột.
- */
-function handleVideoScrub(e) {
-    e.preventDefault();
-    const gap = parseFloat(trakeSeekGapInput.value) || 0.1;
-    const direction = e.deltaY > 0 ? 1 : -1;
-    const player = document.getElementById('videoPlayer');
-    
-    let newTime = player.currentTime + (gap * direction);
-    // Đảm bảo không tua ra ngoài khoảng video
-    player.currentTime = Math.max(0, Math.min(player.duration, newTime));
-}
-
-/**
- * Chụp frame hiện tại, kiểm tra ghi đè và gửi lên server.
- * @param {number} eventNumber - Số thứ tự sự kiện (1-5).
- */
-async function captureAndSubmitTrakeFrame(eventNumber) {
-    const existingFrame = trakeQueueState.find(f => f.eventNumber === eventNumber);
-    if (existingFrame) {
-        const confirmed = confirm(`Sự kiện ${eventNumber} đã có frame do người dùng "${existingFrame.submitted_by}" nộp.\nBạn có chắc chắn muốn GHI ĐÈ không?`);
-        if (!confirmed) {
-            return; // Người dùng hủy
-        }
-    }
-
-    const player = document.getElementById('videoPlayer');
-    player.pause();
-    
-    try {
-        const currentTime = player.currentTime;
-        const fps = await getFpsForVideo(currentVideoModalData.videoName);
-        const frameNumber = Math.round(currentTime * fps);
-
-        const captureCanvas = document.getElementById('frameCaptureCanvas');
-        captureCanvas.width = player.videoWidth;
-        captureCanvas.height = player.videoHeight;
-        const context = captureCanvas.getContext('2d');
-        context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-        const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-
-        const minutes = Math.floor(currentTime / 60);
-        const seconds = (currentTime % 60).toFixed(3);
-        const timestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
-        
-        const frameData = {
-            eventNumber: eventNumber,
-            videoName: currentVideoModalData.videoName,
-            path: imagePathDataUrl,
-            frame_id_ori: frameNumber,
-            timestamp: timestamp,
-            frameIdentifier: `${currentVideoModalData.videoName}_${frameNumber}`,
-            isFromVideo: true
-        };
-        
-        // Gửi hành động lên server
-        console.log('[TRAKE] Sending frame to server for event:', eventNumber, frameData);
-        sendWebSocketMessage('add_or_override_trake_frame', frameData);
-        showToastNotification(`Đang gửi frame cho sự kiện ${eventNumber}...`, 'success');
-
-    } catch (error) {
-        console.error("Lỗi khi chụp frame TRAKE:", error);
-        showToastNotification("Không thể chụp frame.", "error");
-    }
-}
-
-function renderTrakeQueue(frames = []) {
-    console.log('[TRAKE] Rendering queue with frames:', frames);
-    trakeQueueState = frames;
-
-    const mainContainer = document.querySelector('.main-container');
-    const trakeQueueContainer = document.getElementById('trakeSubmitQueue');
-
-    if (frames.length > 0) {
-        // === BỔ SUNG ĐỂ CHẮC CHẮN ===
-        // Xóa style display inline (nếu có) để CSS có thể hoạt động
-        trakeQueueContainer.style.display = ''; 
-        // === KẾT THÚC BỔ SUNG ===
-
-        mainContainer.classList.add('trake-active');
-    } else {
-        mainContainer.classList.remove('trake-active');
-    }
-
-    // Cập nhật thanh trạng thái 5 sự kiện (giữ nguyên)
-    const filledEvents = new Set(frames.map(f => f.eventNumber));
-    trakeStatusBar.querySelectorAll('.status-dot').forEach(dot => {
-        const eventNum = parseInt(dot.dataset.event);
-        if (filledEvents.has(eventNum)) {
-            dot.classList.remove('empty');
-            dot.classList.add('filled');
-        } else {
-            dot.classList.remove('filled');
-            dot.classList.add('empty');
-        }
-    });
-
-    // Render các frame trong queue (giữ nguyên)
-    trakeSubmitQueueFramesContainer.innerHTML = '';
-    frames.forEach(frameData => {
-        const frameElement = document.createElement('div');
-        frameElement.className = 'queue-frame-item trake-item';
-        frameElement.dataset.frameId = frameData.frameIdentifier;
-        
-        frameElement.innerHTML = `
+            frameElement.innerHTML = `
             <div class="queue-frame-image-container" data-event-number="${frameData.eventNumber}">
-                <img src="${frameData.path}" alt="TRAKE frame">
-                <div class="queue-frame-user">${frameData.submitted_by}</div>
-                <button class="remove-queue-item-btn" title="Xóa frame này">&times;</button>
+            <img src="${resolveFrameUrl(frameData.path)}" data-frame-source="${frameData.path}" alt="TRAKE frame">
+            <div class="queue-frame-user">${frameData.submitted_by}</div>
+            <button class="remove-queue-item-btn" title="Xóa frame này">&times;</button>
             </div>
             <div class="queue-frame-info-bar">${frameData.frameIdentifier}</div>
-        `;
-        
-        frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', () => {
-             if (confirm(`Bạn có chắc muốn xóa frame cho sự kiện ${frameData.eventNumber} không?`)) {
+            `;
+
+            frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', () => {
+                // if (confirm(`Bạn có chắc muốn xóa frame cho sự kiện ${frameData.eventNumber} không?`)) {
                 sendWebSocketMessage('clear_trake_event', { eventNumber: frameData.eventNumber });
-             }
+                // }
+            });
+
+            frameElement.addEventListener('contextmenu', (e) => {
+                e.preventDefault(); 
+                openVideoModal(frameData.videoName, frameData.timestamp);
+            });
+
+            trakeSubmitQueueFramesContainer.appendChild(frameElement);
         });
 
-        trakeSubmitQueueFramesContainer.appendChild(frameElement);
-    });
+        // Cập nhật trạng thái nút Submit (giữ nguyên)
+        submitTrakeBtn.disabled = frames.length === 0;
+    }
 
-    // Cập nhật trạng thái nút Submit (giữ nguyên)
-    submitTrakeBtn.disabled = frames.length !== 5;
-}
+    function updateWrongSubmissionUI() {
+        console.log('[UI Update] Bắt đầu chạy updateWrongSubmissionUI...');
+        console.log('[UI Update] Danh sách ID sai hiện tại đang được dùng để kiểm tra:', new Set(wrongSubmissionIds));
+        const allFrameElements = document.querySelectorAll('.image-item, .queue-frame-item');
+
+        allFrameElements.forEach(element => {
+            const frameId = element.dataset.frameId || element.dataset.frameIdentifier;
+            if (!frameId) return;
+
+            const isWrong = wrongSubmissionIds.has(frameId);
+            element.classList.toggle('is-wrong-submission', isWrong);
+        });
+    }
+
+    function toggleModalLayout() {
+        modalCurrentLayout = (modalCurrentLayout === 'grid') ? 'grouped' : 'grid';
+        updateModalLayoutButton();
+        
+        // SỬ DỤNG BIẾN TRẠNG THÁI ĐÁNG TIN CẬY
+        if (modalQueryFrame) {
+            // Render lại toàn bộ kết quả với layout mới
+            // `modalAllImages` vẫn được lưu từ lần tải đầu tiên
+            renderResultsInModal(modalQueryFrame, modalAllImages);
+        }
+    }
+
+    /**
+     * Cập nhật icon cho nút chuyển layout của modal
+     */
+    function updateModalLayoutButton() {
+        const btn = document.getElementById('modalToggleLayoutBtn');
+        if (!btn) return;
+
+        if (modalCurrentLayout === 'grid') {
+            btn.innerHTML = '<i class="fas fa-list"></i>';
+            btn.title = 'Chuyển sang layout Gom nhóm (Tab)';
+        } else {
+            btn.innerHTML = '<i class="fas fa-th"></i>';
+            btn.title = 'Chuyển sang layout Lưới (Tab)';
+        }
+    }
+    
+    /**
+     * Tải thêm một đợt NHÓM VIDEO mới vào modal
+     */
+    function loadMoreModalGroups() {
+        if (isModalLoading || modalHasReachedEnd) return;
+        isModalLoading = true;
+
+        const loadingMore = document.getElementById('modalLoadingMore');
+        const startIndex = modalDisplayedGroupsCount;
+        const endIndex = Math.min(startIndex + MODAL_GROUPS_PER_BATCH, modalAllGroupedData.length);
+        
+        // Dùng setTimeout để tránh UI bị "khựng" khi render nhiều
+        setTimeout(() => {
+            for (let i = startIndex; i < endIndex; i++) {
+                const group = modalAllGroupedData[i];
+                const groupRow = document.createElement('div');
+                groupRow.className = 'video-group-row';
+                
+                const title = document.createElement('h4');
+                title.className = 'video-group-title';
+                title.innerHTML = `<i class="fas fa-video"></i> ${group.videoName} <span>(${group.frames.length} frames)</span>`;
+                groupRow.appendChild(title);
+
+                const frameStrip = document.createElement('div');
+                frameStrip.className = 'frame-strip';
+                group.frames.forEach(image => {
+                    const imageItem = createImageItemElement(image);
+                    const frameId = image.frameIdentifier;
+                    const frameData = { id: image.id, path: image.path, element: imageItem, data: image };
+                    
+                    imageItem.addEventListener('mousedown', function(event) {
+                        event.preventDefault();
+                        if (event.button === 0) {
+                            if (event.ctrlKey) {
+                                modalFrameSelectionManager.toggleSelection(frameId, frameData);
+                            } else {
+                                modalFrameSelectionManager.clearAllSelections();
+                                modalFrameSelectionManager.selectFrame(frameId, frameData);
+                            }
+                        } else if (event.button === 2) {
+                            openVideoModal(image.videoName, image.timestamp);
+                        }
+                    });
+                    frameStrip.appendChild(imageItem);
+                });
+                groupRow.appendChild(frameStrip);
+                // Luôn chèn vào trước loader
+                semanticSearchResultsContainer.insertBefore(groupRow, loadingMore);
+            }
+
+            modalDisplayedGroupsCount = endIndex;
+            if (modalDisplayedGroupsCount >= modalAllGroupedData.length) {
+                modalHasReachedEnd = true;
+                if (loadingMore) loadingMore.remove();
+            }
+            
+            isModalLoading = false;
+            
+        }, 100);
+    }
 
 });
+function showToastNotification(message, type = 'success', duration = 2000) {
+    const toast = document.createElement('div');
+    toast.className = `toast-notification ${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Kích hoạt animation
+    setTimeout(() => {
+        toast.classList.add('show');
+    }, 10);
+
+    // Tự động xóa sau một khoảng thời gian
+    setTimeout(() => {
+        toast.classList.remove('show');
+        toast.addEventListener('transitionend', () => toast.remove());
+    }, duration);
+}
