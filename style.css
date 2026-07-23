@@ -617,6 +617,52 @@ color: var(--matcha-cream);
     content: '✓';
     font-weight: bold;
 }
+.serve-location-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 0 5px;
+    color: var(--matcha-dark);
+    cursor: pointer;
+    font-size: 14px;
+}
+.serve-location-toggle input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+.serve-location-switch {
+    position: relative;
+    width: 42px;
+    height: 22px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: #c44747;
+    transition: background-color 0.2s ease;
+}
+.serve-location-switch::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: white;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+    transition: transform 0.2s ease;
+}
+.serve-location-toggle input:checked + .serve-location-switch {
+    background: #3d9c58;
+}
+.serve-location-toggle input:checked + .serve-location-switch::after {
+    transform: translateX(20px);
+}
+.serve-location-toggle input:focus-visible + .serve-location-switch {
+    outline: 2px solid var(--matcha-dark);
+    outline-offset: 2px;
+}
 
 /* Tag Filtering */
 .tag-filter-container,
@@ -2743,7 +2789,7 @@ transition: all 0.3s ease;
 }
 
 /* Container for frames inside the panels */
-#trakeSubmitQueueFrames, #deletionViewerClusters {
+#trakeSubmitQueueFrames {
 display: flex;
 flex: 1; /* <<< CRITICAL FIX: Allows this container to fill available space */
 flex-direction: column;
@@ -2754,7 +2800,7 @@ padding: 10px;
 }
 
 /* Individual items within the panels */
-#trakeSubmitQueue .queue-frame-item, #deletionViewerPanel .cluster-group {
+#trakeSubmitQueue .queue-frame-item {
 width: 100%;
 height: auto;
 }
@@ -2791,18 +2837,6 @@ height: auto;
     display: flex; /* Phải là flex để nội dung bên trong hiển thị */
     opacity: 1;
     transform: translateY(0);
-}
-
-.deletion-queue .submit-queue-header h3 {
-    color: #b71c1c; /* Dark red text */
-}
-
-.deletion-queue .submit-btn {
-    background-color: #D32F2F; /* Red submit button */
-    color: white;
-}
-.deletion-queue .submit-btn:hover {
-    background-color: #b71c1c;
 }
 
 /* Border hiển thị số event trên frame */
@@ -2886,7 +2920,7 @@ height: auto;
 }
 /* At the end of the file or in a relevant section */
 
-.deletion-viewer-modal {
+.semantic-search-modal {
     width: 80vw;
     max-width: 1400px;
     height: auto;
@@ -2899,183 +2933,11 @@ height: auto;
     flex-direction: column;
 }
 
-.deletion-preview-header {
+.modal-section-header {
     flex-shrink: 0;
     margin-bottom: 15px;
     padding-bottom: 10px;
     border-bottom: 1px solid #eee;
-}
-
-/* Override thumbnail-strip styles for deletion viewer */
-.deletion-viewer-modal .thumbnail-strip {
-    flex: 1;
-    width: 100%;
-    padding: 10px;
-    background-color: rgba(0,0,0,0.05);
-    border-radius: 8px;
-    display: grid !important;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-    grid-gap: 10px;
-    overflow-y: auto !important;
-    overflow-x: hidden !important;
-    max-height: 60vh;
-    align-content: start;
-}
-
-#deletionViewerClusters {
-flex: 1;
-width: 100%;
-padding: 10px;
-background-color: rgba(0,0,0,0.05);
-border-radius: 8px;
-display: grid;
-grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
-grid-gap: 10px;
-overflow-y: auto;
-max-height: 60vh;
-align-content: start;
-}
-
-/* Override thumbnail-strip img styles for deletion viewer */
-.deletion-viewer-modal .thumbnail-strip img,
-#deletionViewerClusters img {
-width: 100% !important;
-height: 100px !important;
-border: 2px solid var(--matcha-primary);
-border-radius: 4px;
-cursor: pointer;
-object-fit: cover;
-transition: all 0.2s ease;
-}
-
-.deletion-viewer-modal .thumbnail-strip img:hover,
-#deletionViewerClusters img:hover {
-border-color: var(--matcha-dark);
-transform: scale(1.05);
-}
-
-/* Cluster frame container styles */
-.cluster-frame-container {
-    position: relative;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    background: white;
-    border-radius: 8px;
-    padding: 8px;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    transition: all 0.2s ease;
-}
-
-.cluster-frame-container:hover {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-    transform: translateY(-2px);
-}
-
-.cluster-frame-wrapper {
-    position: relative;
-    width: 100%;
-    border-radius: 4px;
-    overflow: hidden;
-}
-
-.cluster-frame-wrapper img {
-    width: 100%;
-    height: 100px;
-    object-fit: cover;
-    border: 2px solid var(--matcha-primary);
-    border-radius: 4px;
-    transition: all 0.2s ease;
-}
-
-.cluster-frame-wrapper:hover img {
-    border-color: var(--matcha-dark);
-    transform: scale(1.02);
-}
-
-.cluster-undo-btn {
-    position: absolute;
-    top: 4px;
-    right: 4px;
-    width: 20px;
-    height: 20px;
-    background: rgba(255, 255, 255, 0.9);
-    border: 1px solid #ccc;
-    border-radius: 50%;
-    color: #666;
-    font-size: 12px;
-    font-weight: bold;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s ease;
-    z-index: 10;
-    line-height: 1;
-}
-
-.cluster-undo-btn:hover {
-    background: #ff4444;
-    color: white;
-    border-color: #ff4444;
-    transform: scale(1.1);
-}
-
-.cluster-id-label {
-    margin-top: 4px;
-    font-size: 10px;
-    color: #666;
-    font-weight: bold;
-    text-align: center;
-    background: rgba(71, 102, 59, 0.1);
-    padding: 2px 6px;
-    border-radius: 4px;
-    border: 1px solid rgba(71, 102, 59, 0.3);
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-/* Cluster group styling */
-.cluster-group {
-    display: contents; /* This allows grid items to flow naturally */
-}
-
-/* Animation for removing frames */
-.cluster-frame-container.removing {
-    opacity: 0;
-    transform: scale(0.8) translateY(-10px);
-    transition: all 0.3s ease;
-}
-
-/* --- Mark for Deletion State --- */
-.image-item.deletion-candidate {
-    border: 3px solid #FFC107; /* Yellow border */
-    box-shadow: 0 0 12px rgba(255, 193, 7, 0.7);
-}
-
-/* Red minus icon on top right */
-.image-item.deletion-candidate::after {
-    content: '-';
-    position: absolute;
-    top: 5px;
-    right: 5px;
-    background-color: #E53935; /* Red */
-    color: white;
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 20px;
-    font-weight: bold;
-    line-height: 22px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-    z-index: 3;
-    border: 1px solid white;
-    animation: pop-in 0.2s;
 }
 
 /* --- Confirmation Modal --- */
@@ -3108,15 +2970,7 @@ transform: scale(1.05);
 .confirmation-btn.cancel:hover {
     background: #bdbdbd;
 }
-.deletion-preview-modal {
-    width: 60vw;
-    max-width: 1200px;
-    height: auto; /* Height will be determined by content */
-    max-height: 60vh;
-    padding: 15px; /* Add some internal padding */
-}
-
-.deletion-preview-header {
+.modal-section-header {
     width: 100%;
     display: flex;
     justify-content: space-between;
@@ -3126,7 +2980,7 @@ transform: scale(1.05);
     border-bottom: 1px solid var(--matcha-light);
 }
 
-.deletion-preview-header h3 {
+.modal-section-header h3 {
     color: var(--matcha-dark);
     font-size: 18px;
     margin: 0;
@@ -3152,132 +3006,91 @@ transform: scale(1.05);
     background-color: #e0e0e0;
 }
 
-#deletionPreviewFrames {
-width: 100%;
-height: 100%;
-padding: 10px;
-background-color: rgba(0,0,0,0.05);
-border-radius: 8px;
-flex-wrap: wrap; /* Allow frames to wrap to the next line */
-justify-content: flex-start;
-align-content: flex-start;
+.cluster-deletion-modal {
+    width: min(1100px, 90vw);
+    max-height: 82vh;
+    overflow: hidden;
 }
 
-#deletionPreviewFrames img {
-height: 100px; /* Same size as keyframe preview */
-border: 2px solid var(--matcha-primary);
-position: relative;
+.cluster-deletion-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 14px;
+    overflow-y: auto;
+    padding: 2px 4px 8px;
 }
 
-/* Style for unselecting frames in the preview */
-#deletionPreviewFrames img:hover {
-cursor: pointer;
-border-color: #E53935; /* Red border on hover */
-box-shadow: 0 0 10px rgba(229, 57, 53, 0.7);
-}
-
-#deletionPreviewFrames img:hover::after {
-content: '×';
-position: absolute;
-top: 0;
-left: 0;
-width: 100%;
-height: 100%;
-background-color: rgba(229, 57, 53, 0.5); /* Red overlay */
-color: white;
-font-size: 48px;
-font-weight: bold;
-display: flex;
-align-items: center;
-justify-content: center;
-border-radius: 6px; /* Match the image's border-radius */
-}
-
-.cluster-group {
-    background-color: rgba(255, 255, 255, 0.5);
+.deleted-cluster-card {
+    border: 1px solid var(--matcha-light);
     border-radius: 8px;
-    padding: 10px;
-    border: 1px solid #ffcc80;
-}
-
-.cluster-group-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-    padding-bottom: 5px;
-    border-bottom: 1px dashed #ffcc80;
-}
-
-.cluster-group-title {
-    font-weight: 600;
-    font-size: 14px;
-    color: #e65100; /* Dark Orange */
-}
-
-.undo-cluster-btn {
-    background-color: #ffc107;
-    border: none;
-    color: #333;
-    border-radius: 50%;
-    width: 24px;
-    height: 24px;
-    font-size: 16px;
+    background: #fff;
+    padding: 8px;
     cursor: pointer;
-    line-height: 24px;
-    font-weight: bold;
-    transition: all 0.2s ease;
+    text-align: left;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
 
-.undo-cluster-btn:hover {
-    background-color: #E53935;
-    color: white;
-    transform: scale(1.1);
+.deleted-cluster-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 5px 14px rgba(0, 0, 0, 0.14);
 }
 
-.cluster-video-group {
-    margin-bottom: 8px;
-}
-
-.cluster-video-group p {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    margin-bottom: 5px;
-}
-
-.cluster-frame-list {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-}
-
-.cluster-frame-list span {
-    background-color: #fff;
-    border: 1px solid #eee;
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-size: 11px;
-    font-family: 'Courier New', Courier, monospace;
-}
-
-.cluster-frame-thumb {
-    width: 60px;
-    height: 40px;
+.deleted-cluster-card img,
+.cluster-member-card img {
+    display: block;
+    width: 100%;
+    aspect-ratio: 16 / 10;
     object-fit: cover;
-    border: 2px solid #ffcc80;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.2s ease;
+    border-radius: 5px;
+    background: #f0f0f0;
 }
 
-.cluster-frame-thumb:hover {
-    border-color: #ff9800;
-    transform: scale(1.1);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
-    z-index: 10;
-    position: relative;
+.deleted-cluster-card strong,
+.deleted-cluster-card span,
+.cluster-member-card span {
+    display: block;
 }
+
+.deleted-cluster-card strong {
+    margin-top: 8px;
+    color: var(--matcha-dark);
+}
+
+.deleted-cluster-card span,
+.cluster-member-card span {
+    margin-top: 3px;
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.cluster-member-card {
+    min-width: 0;
+}
+
+.cluster-empty-state {
+    grid-column: 1 / -1;
+    color: var(--text-muted);
+    padding: 35px 10px;
+    text-align: center;
+}
+
+@media (max-width: 600px) {
+    .cluster-deletion-modal {
+        width: 95vw;
+        max-height: 88vh;
+        padding: 14px;
+    }
+
+    .cluster-deletion-grid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 10px;
+    }
+
+    .cluster-deletion-modal .modal-section-header {
+        gap: 8px;
+    }
+}
+
 .setting-input-group {
     display: flex;
     align-items: center;
