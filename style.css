@@ -676,9 +676,13 @@ color: var(--matcha-cream);
     pointer-events: none;
 }
 .tag-filter-container.visible,
-.ocr-filter-container.visible,
 .asr-filter-container.visible {
     max-height: 100px;
+    opacity: 1;
+    pointer-events: auto;
+}
+.ocr-filter-container.visible {
+    max-height: 140px;
     opacity: 1;
     pointer-events: auto;
 }
@@ -1234,7 +1238,7 @@ color: var(--matcha-cream);
     padding: 5px;
     max-width: 90%;
     max-height: 90%;
-    z-index: 2; 
+    z-index: 2;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -2607,12 +2611,48 @@ width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
 
 .fuzzy-switch-wrapper {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
     margin-top: 8px;
-    margin-left: 15%; /* Căn lề giống với ô input */
-    font-size: 13px;
+    margin-left: 15%;
+    width: 70%;
+    font-size: 12px;
     color: var(--matcha-dark);
+}
+
+.fuzzy-switch-item,
+.ocr-mode-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+}
+
+.fuzzy-label,
+.ocr-mode-label {
+    white-space: nowrap;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--matcha-dark);
+}
+
+.ocr-mode-select {
+    padding: 3px 6px;
+    font-size: 12px;
+    border: 1.5px solid var(--matcha-light, #a0c890);
+    border-radius: 6px;
+    background-color: #ffffff;
+    color: var(--matcha-dark, #2b4c1f);
+    cursor: pointer;
+    outline: none;
+    transition: var(--transition-smooth);
+    box-shadow: var(--shadow-soft);
+}
+
+.ocr-mode-select:focus {
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.2);
 }
 
 .fuzzy-switch-container {
@@ -3297,12 +3337,12 @@ height: auto;
     height: 100%;
     /* background-color: rgba(255, 255, 255, 0.2); Nền tối mờ */
     border-radius: 10px; /* Bo góc giống với ảnh */
-    
+
     /* Căn giữa icon Play */
     display: flex;
     align-items: center;
     justify-content: center;
-    
+
     /* Hiệu ứng ẩn/hiện */
     opacity: 0; /* Mặc định ẩn đi */
     transition: opacity 0.25s ease-in-out;
