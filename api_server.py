@@ -30,8 +30,8 @@ from pathlib import Path
 FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
 
 PROJECT_DIR = Path(__file__).resolve().parent
-CLUSTER_CATALOG_FILE = Path(os.getenv("CLUSTER_CATALOG_FILE", PROJECT_DIR / "clusters.json"))
-CLUSTER_DELETION_FILE = Path(os.getenv("CLUSTER_DELETION_FILE", PROJECT_DIR / "deleted_clusters.json"))
+CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
+CLUSTER_DELETION_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
 
 
 class ClusterCatalog:
@@ -210,7 +210,12 @@ def get_search_cluster_filter(cluster_mode_enabled: bool) -> list[str]:
 app = FastAPI()
 # Kết nối Redis
 
-allowed_origin_regex = r"https?://(localhost|127\.0\.0\.1|192\.168\.0\.\d{1,3})(:\d+)?"
+allowed_origin_regex = (
+    r"^(?:"
+    r"https?://(?:localhost|127\.0\.0\.1|192\.168\.(?:0|20)\.\d{1,3})(?::\d+)?"
+    r"|https://aic\.mealsretrieval\.site"
+    r")$"
+)
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
