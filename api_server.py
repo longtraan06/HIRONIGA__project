@@ -262,10 +262,6 @@ security = HTTPBasic()
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
-@app.on_event("startup")
-async def startup_event():
-    pass
-
 @app.on_event("shutdown")
 async def shutdown_event():
     milvus.close()
@@ -596,6 +592,7 @@ class ClusterFrameRequest(BaseModel):
 
 class ClusterMutationRequest(BaseModel):
     cluster_id: str
+
 
 def log_search_debug(endpoint: str, **kwargs):
     print(f"\n[SEARCH DEBUG] endpoint={endpoint}")
