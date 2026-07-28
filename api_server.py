@@ -25,6 +25,7 @@ import traceback
 import aioredis
 import asyncio
 import fcntl
+import io
 from contextlib import contextmanager
 from pathlib import Path
 FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
@@ -443,24 +444,75 @@ WEBSOCKET_CHANNEL = "submit_queue_channel"  # Tên kênh chung
 class ConnectionManager:
     """Quản lý các kết nối WebSocket và đồng bộ qua Redis Pub/Sub."""
     def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
+        self.active_connections: Dict[str, set[WebSocket]] = {}
+        self.connection_users: Dict[WebSocket, str] = {}
+        self.connection_queues: Dict[WebSocket, asyncio.PriorityQueue] = {}
+        self.writer_tasks: Dict[WebSocket, asyncio.Task] = {}
+        self.message_sequence = 0
         self.redis_pubsub_client = None
         self.listener_task = None
 
     async def connect(self, websocket: WebSocket, username: str):
         """Chấp nhận kết nối mới và khởi tạo listener nếu cần."""
         await websocket.accept()
-        self.active_connections[username] = websocket
+        self.active_connections.setdefault(username, set()).add(websocket)
+        self.connection_users[websocket] = username
+        self.connection_queues[websocket] = asyncio.PriorityQueue(maxsize=64)
+        self.writer_tasks[websocket] = asyncio.create_task(self._connection_writer(websocket))
         
         # Chỉ khởi tạo một lần cho mỗi worker
         if self.redis_pubsub_client is None:
             self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
             self.listener_task = asyncio.create_task(self._pubsub_listener())
 
-    def disconnect(self, username: str):
-        """Ngắt kết nối của một user."""
-        if username in self.active_connections:
-            del self.active_connections[username]
+    async def _connection_writer(self, websocket: WebSocket):
+        queue = self.connection_queues[websocket]
+        try:
+            while True:
+                _, _, message = await queue.get()
+                await asyncio.wait_for(websocket.send_text(message), timeout=2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            print(f"Could not send WebSocket message: {error}")
+        finally:
+            self._remove_connection(websocket)
+
+    def _remove_connection(self, websocket: WebSocket):
+        username = self.connection_users.pop(websocket, None)
+        if username is not None:
+            user_connections = self.active_connections.get(username)
+            if user_connections:
+                user_connections.discard(websocket)
+                if not user_connections:
+                    self.active_connections.pop(username, None)
+
+        self.connection_queues.pop(websocket, None)
+        writer_task = self.writer_tasks.pop(websocket, None)
+        if writer_task and writer_task is not asyncio.current_task():
+            writer_task.cancel()
+
+    def disconnect(self, username: str, websocket: Optional[WebSocket] = None):
+        """Ngắt đúng connection, không làm ảnh hưởng reconnect mới của user."""
+        connections = list(self.active_connections.get(username, set()))
+        if websocket is not None:
+            connections = [connection for connection in connections if connection is websocket]
+        for connection in connections:
+            self._remove_connection(connection)
+
+    def enqueue(self, websocket: WebSocket, message: str, priority: int = 1) -> bool:
+        queue = self.connection_queues.get(websocket)
+        if queue is None:
+            return False
+        try:
+            self.message_sequence += 1
+            queue.put_nowait((priority, self.message_sequence, message))
+            return True
+        except asyncio.QueueFull:
+            print("[WS] Closing slow client with a full outbound queue")
+            self._remove_connection(websocket)
+            asyncio.create_task(websocket.close(code=1013, reason="Outbound queue full"))
+            return False
 
     async def _pubsub_listener(self):
         """Lắng nghe kênh Redis một cách kiên cường và tự động kết nối lại."""
@@ -478,15 +530,9 @@ class ConnectionManager:
                     while True:
                         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
                         if message and message["type"] == "message":
-                            # Lặp qua một bản sao của danh sách kết nối để tránh lỗi
-                            living_connections = list(self.active_connections.values())
+                            living_connections = list(self.connection_queues)
                             for connection in living_connections:
-                                try:
-                                    # Gửi tin nhắn đến từng client
-                                    await connection.send_text(message["data"])
-                                except Exception as e:
-                                    # Nếu gửi lỗi (vd: client đã ngắt kết nối), chỉ in lỗi và tiếp tục
-                                    print(f"Could not send message to a client: {e}")
+                                self.enqueue(connection, message["data"])
 
             except (aioredis.exceptions.ConnectionError, asyncio.TimeoutError) as e:
                 # Nếu mất kết nối với Redis, in lỗi và thử kết nối lại sau 1 khoảng thời gian
@@ -513,6 +559,11 @@ QUEUE_SORTED_SET_KEY = "submit_queue:order"  # Sorted Set để lưu thứ tự 
 QUEUE_DATA_HASH_KEY = "submit_queue:data"    # Hash để lưu dữ liệu chi tiết (frameIdentifier, jsonData)
 QUEUE_USERS_KEY = "submit_queue:users"
 TRAKE_QUEUE_STATE_KEY = "trake_queue:state"
+TRAKE_QUEUE_VIDEO_KEY = "trake_queue:video"
+TRAKE_SLOT_REVISION_KEY = "trake_queue:revisions"
+TRAKE_REQUEST_PREFIX = "trake_queue:request:"
+TRAKE_THUMBNAIL_DIR = PROJECT_DIR / "trake_thumbnails"
+TRAKE_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 
 def get_color_for_user(username: str) -> str:
     """Tạo một màu sắc cố định dựa trên tên người dùng."""
@@ -1294,6 +1345,272 @@ async def get_single_frame_temporal_chain(user_id: str, frame_identifier: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+async def get_trake_queue_items() -> list[dict]:
+    raw_frames = await redis_async_client.hgetall(TRAKE_QUEUE_STATE_KEY)
+    frames = []
+    for raw_event_number, raw_frame in raw_frames.items():
+        try:
+            frame = json.loads(raw_frame)
+            frame["eventNumber"] = int(raw_event_number)
+            frame.pop("status", None)
+            frame.pop("thumbnailUrl", None)
+            frames.append(frame)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+    return sorted(frames, key=lambda frame: frame["eventNumber"])
+
+
+async def send_trake_message(websocket: WebSocket, action: str, payload):
+    manager.enqueue(websocket, json.dumps({"action": action, "payload": payload}), priority=0)
+
+
+def schedule_trake_broadcast(message: str):
+    async def publish():
+        for attempt, delay in enumerate((0, 0.5, 1.5), start=1):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await manager.publish_update(message)
+                return
+            except Exception as error:
+                print(f"[TRAKE] Broadcast attempt {attempt} failed: {error}")
+
+    asyncio.create_task(publish())
+
+
+TRAKE_ASSIGN_SCRIPT = """
+local cached = redis.call('GET', KEYS[4])
+if cached then
+    return {2, cached}
+end
+local locked_video = redis.call('GET', KEYS[3])
+if locked_video and locked_video ~= ARGV[2] then
+    return {0, locked_video}
+end
+local revision = redis.call('HINCRBY', KEYS[2], ARGV[1], 1)
+local frame = cjson.decode(ARGV[3])
+frame.revision = revision
+local encoded_frame = cjson.encode(frame)
+redis.call('HSET', KEYS[1], ARGV[1], encoded_frame)
+redis.call('SET', KEYS[3], ARGV[2])
+redis.call('SETEX', KEYS[4], 86400, encoded_frame)
+return {1, encoded_frame}
+"""
+
+
+async def assign_trake_slot(websocket: WebSocket, username: str, payload: dict):
+    request_id = str(payload.get("requestId") or "")
+    event_number = payload.get("eventNumber")
+    video_name = str(payload.get("videoName") or "")
+    frame_index = payload.get("frameIndex", payload.get("frame_id_ori"))
+    try:
+        event_number = int(event_number)
+    except (TypeError, ValueError):
+        event_number = 0
+    if not request_id or event_number not in range(1, 6) or not video_name:
+        await send_trake_message(websocket, "trake_conflict", {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "reason": "invalid_payload"
+        })
+        return
+    try:
+        frame_index = int(frame_index)
+    except (TypeError, ValueError):
+        await send_trake_message(websocket, "trake_conflict", {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "reason": "invalid_frame"
+        })
+        return
+
+    try:
+        fps = float(payload.get("fps"))
+        if fps <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        await send_trake_message(websocket, "trake_conflict", {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "reason": "invalid_fps"
+        })
+        return
+
+    timestamp_ms = int(payload.get("timestampMs", round(frame_index / fps * 1000)))
+    frame = {
+        "requestId": request_id,
+        "eventNumber": event_number,
+        "videoName": video_name,
+        "frameIndex": frame_index,
+        "frame_id_ori": frame_index,
+        "timestampMs": timestamp_ms,
+        "timestamp": str(payload.get("timestamp") or ""),
+        "fps": fps,
+        "frameIdentifier": f"{video_name}_{frame_index}",
+        "revision": 0,
+        "submitted_by": username,
+        "user_color": get_color_for_user(username),
+        "isFromVideo": True,
+    }
+    try:
+        result_code, result_data = await redis_async_client.eval(
+            TRAKE_ASSIGN_SCRIPT,
+            4,
+            TRAKE_QUEUE_STATE_KEY,
+            TRAKE_SLOT_REVISION_KEY,
+            TRAKE_QUEUE_VIDEO_KEY,
+            f"{TRAKE_REQUEST_PREFIX}{request_id}",
+            str(event_number),
+            video_name,
+            json.dumps(frame),
+        )
+    except Exception as error:
+        print(f"[TRAKE] Assign temporarily failed: request={request_id}, error={error}")
+        await send_trake_message(websocket, "trake_retry", {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "retryAfterMs": 1500
+        })
+        return
+    result_code = int(result_code)
+    if result_code == 2:
+        frame = json.loads(result_data)
+    elif result_code == 0:
+        await send_trake_message(websocket, "trake_conflict", {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "reason": "video_locked",
+            "lockedVideoName": result_data
+        })
+        return
+    else:
+        frame = json.loads(result_data)
+
+    print(f"[TRAKE] Assigned event={event_number}, frame={frame['frameIdentifier']}, user={username}")
+    await send_trake_message(websocket, "trake_ack", {"requestId": request_id, "frame": frame})
+    schedule_trake_broadcast(json.dumps({"action": "trake_slot_updated", "payload": frame}))
+
+
+TRAKE_CLEAR_SCRIPT = """
+local raw_frame = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw_frame then
+    return {0, ''}
+end
+local frame = cjson.decode(raw_frame)
+local current_revision = tonumber(frame.revision or 0)
+redis.call('HDEL', KEYS[1], ARGV[1])
+redis.call('HSET', KEYS[2], ARGV[1], current_revision)
+if redis.call('HLEN', KEYS[1]) == 0 then
+    redis.call('DEL', KEYS[3])
+end
+return {1, raw_frame}
+"""
+
+
+async def clear_trake_slot(websocket: WebSocket, payload: dict):
+    request_id = str(payload.get("requestId") or "")
+    event_number = payload.get("eventNumber")
+    try:
+        event_number = int(event_number)
+    except (TypeError, ValueError):
+        event_number = 0
+    if not request_id or event_number not in range(1, 6):
+        return
+    result_code, raw_frame = await redis_async_client.eval(
+        TRAKE_CLEAR_SCRIPT,
+        3,
+        TRAKE_QUEUE_STATE_KEY,
+        TRAKE_SLOT_REVISION_KEY,
+        TRAKE_QUEUE_VIDEO_KEY,
+        str(event_number),
+    )
+    result_code = int(result_code)
+    print(f"[TRAKE] Cleared event={event_number}, deleted={result_code == 1}")
+    await send_trake_message(websocket, "trake_ack", {
+        "requestId": request_id,
+        "eventNumber": event_number,
+        "cleared": True
+    })
+    if result_code == 0:
+        return
+    schedule_trake_broadcast(json.dumps({
+        "action": "trake_slot_cleared",
+        "payload": {
+            "requestId": request_id,
+            "eventNumber": event_number,
+            "revision": int(json.loads(raw_frame).get("revision", 0))
+        }
+    }))
+
+
+def save_trake_thumbnail(image_bytes: bytes, output_path: Path):
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((160, 90), Image.Resampling.LANCZOS)
+        temporary_path = output_path.with_suffix(".tmp")
+        image.save(temporary_path, format="WEBP", quality=55, method=6)
+        os.replace(temporary_path, output_path)
+
+
+@app.post("/api/trake-thumbnail")
+async def upload_trake_thumbnail(
+    file: UploadFile = File(...),
+    event_number: int = Form(...),
+    video_name: str = Form(...),
+    frame_index: int = Form(...),
+    revision: int = Form(...),
+    request_id: str = Form(...),
+):
+    if event_number not in range(1, 6):
+        raise HTTPException(status_code=400, detail="Invalid TRAKE event number")
+    frame_json = await redis_async_client.hget(TRAKE_QUEUE_STATE_KEY, str(event_number))
+    if not frame_json:
+        raise HTTPException(status_code=409, detail="TRAKE slot no longer exists")
+    frame = json.loads(frame_json)
+    if (
+        frame.get("videoName") != video_name
+        or int(frame.get("frameIndex", -1)) != frame_index
+        or int(frame.get("revision", -1)) != revision
+        or frame.get("requestId") != request_id
+    ):
+        raise HTTPException(status_code=409, detail="TRAKE slot changed before thumbnail upload")
+
+    image_bytes = await file.read()
+    if not image_bytes or len(image_bytes) > 1_000_000:
+        raise HTTPException(status_code=400, detail="Thumbnail must be between 1 byte and 1 MB")
+    filename = f"{hashlib.sha256(video_name.encode()).hexdigest()[:16]}_{frame_index}_{revision}.webp"
+    output_path = TRAKE_THUMBNAIL_DIR / filename
+    try:
+        await asyncio.to_thread(save_trake_thumbnail, image_bytes, output_path)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Invalid thumbnail: {error}") from error
+
+    thumbnail_path = f"/api/trake-thumbnail/{filename}"
+    frame["thumbnailPath"] = thumbnail_path
+    await redis_async_client.hset(TRAKE_QUEUE_STATE_KEY, str(event_number), json.dumps(frame))
+    payload = {
+        "eventNumber": event_number,
+        "revision": revision,
+        "thumbnailPath": thumbnail_path
+    }
+    await manager.publish_update(json.dumps({"action": "trake_slot_thumbnail_ready", "payload": payload}))
+    return payload
+
+
+@app.get("/api/trake-thumbnail/{filename}")
+async def get_trake_thumbnail(filename: str):
+    if not re.fullmatch(r"[a-f0-9]{16}_\d+_\d+\.webp", filename):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    thumbnail_path = TRAKE_THUMBNAIL_DIR / filename
+    if not thumbnail_path.is_file():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/webp",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
 @app.websocket("/ws/queue/{username}")
 async def websocket_endpoint(websocket: WebSocket, username: str):
     await manager.connect(websocket, username)
@@ -1320,20 +1637,40 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             "wrongSubmissionIds": list(wrong_ids)
         }
     }
-    await websocket.send_text(json.dumps(initial_state))
+    manager.enqueue(websocket, json.dumps(initial_state), priority=0)
 
     join_notification = {
         "action": "user_update",
         "payload": {"users": current_users}
     }
+    manager.enqueue(websocket, json.dumps({
+        "action": "trake_init",
+        "payload": await get_trake_queue_items()
+    }), priority=0)
     await manager.publish_update(json.dumps(join_notification))
-    await broadcast_trake_queue_update(send_to_specific_connection=websocket)
     try:
         while True:
             data = await websocket.receive_text()
             message = json.loads(data)
             action = message.get("action")
             payload = message.get("payload")
+
+            if action == "trake_assign":
+                await assign_trake_slot(websocket, username, payload or {})
+                continue
+            if action in {"trake_clear", "clear_trake_event"}:
+                print(f"[TRAKE] Clear request received: event={(payload or {}).get('eventNumber')}, user={username}")
+                await clear_trake_slot(websocket, payload or {})
+                continue
+            if action == "clear_trake_queue":
+                await redis_async_client.delete(
+                    TRAKE_QUEUE_STATE_KEY,
+                    TRAKE_QUEUE_VIDEO_KEY,
+                    TRAKE_SLOT_REVISION_KEY,
+                )
+                await send_trake_message(websocket, "trake_ack", {"requestId": (payload or {}).get("requestId"), "cleared": True})
+                await manager.publish_update(json.dumps({"action": "trake_init", "payload": []}))
+                continue
             
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
@@ -1433,22 +1770,6 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier_to_vote: new_score})
                     await pipe.execute()
 
-            if action == "add_or_override_trake_frame":
-                frame_data = payload
-                event_number = str(frame_data.get("eventNumber"))
-
-                if event_number:
-                    frame_data['submitted_by'] = username
-                    frame_data['user_color'] = get_color_for_user(username)
-                    await redis_async_client.hset(TRAKE_QUEUE_STATE_KEY, event_number, json.dumps(frame_data))
-                    await broadcast_trake_queue_update()
-
-            elif action == "clear_trake_event":
-                event_number_to_clear = str(payload.get("eventNumber"))
-                if event_number_to_clear:
-                    await redis_async_client.hdel(TRAKE_QUEUE_STATE_KEY, event_number_to_clear)
-                    await broadcast_trake_queue_update()
-
             sorted_identifiers = await redis_async_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
             updated_queue_items = []
             if sorted_identifiers:
@@ -1470,32 +1791,19 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
             await manager.publish_update(json.dumps(full_update_message))
 
     except WebSocketDisconnect:
-        manager.disconnect(username)
+        manager.disconnect(username, websocket)
         
         
 async def broadcast_trake_queue_update(send_to_specific_connection: Optional[WebSocket] = None):
-    all_trake_frames_raw = await redis_async_client.hgetall(TRAKE_QUEUE_STATE_KEY)
-    
-    trake_queue_items = []
-    for event_num, frame_json in all_trake_frames_raw.items():
-        try:
-            frame_data = json.loads(frame_json)
-            frame_data['eventNumber'] = int(event_num)
-            trake_queue_items.append(frame_data)
-        except (json.JSONDecodeError, ValueError):
-            continue
-
-    trake_queue_items.sort(key=lambda x: x.get('eventNumber', 0))
-
     update_message = {
-        "action": "trake_queue_update",
-        "payload": trake_queue_items
+        "action": "trake_init",
+        "payload": await get_trake_queue_items()
     }
     
     message_str = json.dumps(update_message)
 
     if send_to_specific_connection:
-        await send_to_specific_connection.send_text(message_str)
+        manager.enqueue(send_to_specific_connection, message_str)
     else:
         await manager.publish_update(message_str)
 
@@ -1512,7 +1820,11 @@ async def handle_trake_submit(request: TrakeSubmitRequest):
     for frame in submitted_frames:
         print(f"  Event {frame.get('eventNumber')}: {frame.get('frameIdentifier')}")
     
-    await redis_async_client.delete(TRAKE_QUEUE_STATE_KEY)
+    await redis_async_client.delete(
+        TRAKE_QUEUE_STATE_KEY,
+        TRAKE_QUEUE_VIDEO_KEY,
+        TRAKE_SLOT_REVISION_KEY,
+    )
     # Và broadcast một queue rỗng để cập nhật UI của mọi người
     await broadcast_trake_queue_update()
 
