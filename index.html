@@ -7,7 +7,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css?v=cluster-deletion-2">
+    <link rel="stylesheet" href="style.css?v=external-search-1">
 </head>
 
 <body>
@@ -215,6 +215,13 @@
                     </div>
                 </div>
             </div>
+            <section class="external-search-container" aria-labelledby="externalSearchTitle">
+                <h3 id="externalSearchTitle">EXTERNAL SEARCH</h3>
+                <form id="externalSearchForm" class="external-search-form">
+                    <input id="externalSearchInput" name="q" type="search" maxlength="400" autocomplete="off"
+                        placeholder="Search" aria-label="External search query" required>
+                </form>
+            </section>
         </aside>
         <main class="main-content">
             <div class="content-area" id="contentArea">
@@ -611,6 +618,20 @@
             <div id="semanticSearchResultsContainer">
                 <!-- Kết quả sẽ được render vào đây -->
             </div>
+        </div>
+    </div>
+
+    <div id="externalSearchModal" class="image-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content external-search-modal">
+            <div class="external-search-modal-header">
+                <h3>Search</h3>
+                <button id="closeExternalSearchModalBtn" class="queue-action-btn cancel-btn" type="button">
+                    <i class="fas fa-times"></i> Close
+                </button>
+            </div>
+            <p id="externalSearchQuery" class="external-search-query"></p>
+            <div id="externalSearchResults" class="external-search-results"></div>
         </div>
     </div>
 
