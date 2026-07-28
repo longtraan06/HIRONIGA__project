@@ -2738,7 +2738,7 @@ input:checked + .slider:before {
 }
 
 /* Cho phép các thành phần con bên trong overlay nhận sự kiện chuột */
-.trake-status-bar, .trake-seek-controls {
+.trake-status-bar, .trake-frame-readout, .trake-seek-controls {
     pointer-events: auto;
 }
 
@@ -2781,6 +2781,41 @@ input:checked + .slider:before {
     transform: scale(1.1);
 }
 
+.status-dot.pending {
+    background-color: #f6a623;
+    box-shadow: 0 0 10px rgba(246, 166, 35, 0.75);
+}
+
+.status-dot.failed {
+    background-color: #8e2635;
+    box-shadow: 0 0 10px rgba(142, 38, 53, 0.8);
+}
+
+.trake-frame-readout {
+    align-self: center;
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    padding: 7px 14px;
+    border-radius: 8px;
+    color: #fff;
+    background: rgba(0, 0, 0, 0.65);
+    font-variant-numeric: tabular-nums;
+}
+
+.trake-frame-readout strong {
+    color: #9ee7ff;
+}
+
+#trakeFpsStatus {
+    color: #cbd5e1;
+    font-size: 12px;
+}
+
+#trakeFpsStatus.error {
+    color: #ff9b9b;
+}
+
 /* Ô nhập Seek Gap */
 .trake-seek-controls {
     position: absolute;
@@ -2797,7 +2832,7 @@ input:checked + .slider:before {
     font-size: 14px;
 }
 
-#trakeSeekGap {
+#trakeFrameStep {
 background-color: rgba(0, 0, 0, 0.5);
 border: 1px solid #555;
 color: white;
@@ -2806,6 +2841,49 @@ width: 60px;
 text-align: center;
 font-size: 14px;
 padding: 5px;
+}
+
+#trakeSubmitQueue .queue-frame-item.pending {
+    opacity: 0.78;
+}
+
+#trakeSubmitQueue .queue-frame-item.pending .queue-frame-image-container {
+    outline: 2px solid #f6a623;
+}
+
+#trakeSubmitQueue .queue-frame-item.failed .queue-frame-image-container {
+    outline: 2px solid #e53935;
+}
+
+.trake-thumbnail-placeholder {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px;
+    color: #d8dee9;
+    background: linear-gradient(135deg, #263238, #111827);
+    font-size: 12px;
+    text-align: center;
+}
+
+.trake-frame-details {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 5px 6px;
+    color: #214d32;
+    font-size: 11px;
+    word-break: break-word;
+}
+
+.trake-frame-details strong {
+    color: #163b25;
+}
+
+.trake-frame-details span {
+    color: #315f3f;
 }
 
 #trakeSubmitQueue {
