@@ -7,7 +7,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css?v=external-search-1">
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
@@ -318,9 +318,14 @@
                     <div class="status-dot empty" data-event="4">4</div>
                     <div class="status-dot empty" data-event="5">5</div>
                 </div>
+                <div class="trake-frame-readout" id="trakeFrameReadout">
+                    <strong id="trakeFrameIndex">Frame --</strong>
+                    <span id="trakeFrameTimestamp">--:--.---</span>
+                    <span id="trakeFpsStatus">Loading FPS...</span>
+                </div>
                 <div class="trake-seek-controls">
-                    <label for="trakeSeekGap">Seek Gap (s):</label>
-                    <input type="number" id="trakeSeekGap" value="0.2" step="0.1" min="0.1">
+                    <label for="trakeFrameStep">Frame step:</label>
+                    <input type="number" id="trakeFrameStep" value="1" step="1" min="1" max="100">
                 </div>
             </div>
 
@@ -452,6 +457,13 @@
         <label class="serve-location-toggle" for="frameServeLocationToggle">
             <span id="frameServeLocationLabel">Remote serve</span>
             <input id="frameServeLocationToggle" type="checkbox" checked>
+            <span class="serve-location-switch" aria-hidden="true"></span>
+        </label>
+
+        <h4 style="margin-top: 15px;">Video Serve Location</h4>
+        <label class="serve-location-toggle" for="videoServeLocationToggle">
+            <span id="videoServeLocationLabel">Remote HLS</span>
+            <input id="videoServeLocationToggle" type="checkbox" checked>
             <span class="serve-location-switch" aria-hidden="true"></span>
         </label>
 
