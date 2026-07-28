@@ -139,6 +139,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let availableModels = [];
     let currentSelectedModel = 'all';
     let frameServeLocation = 'remote';
+    let videoServeLocation = 'remote';
     let clusterModeEnabled = true;
     let pendingClusterDeletion = null;
     let activeDeletedClusterId = null;
@@ -159,6 +160,23 @@ document.addEventListener('DOMContentLoaded', function () {
     let isTrakeMode = false;
     let trakeQueueState = []; // Lưu trạng thái TRAKE queue từ server
     let currentVideoModalData = {}; // Lưu thông tin video đang mở
+    const trakeFpsCache = new Map();
+    const trakePendingMutations = new Map();
+    const trakePendingClears = new Map();
+    const trakeLocalThumbnailUrls = new Map();
+    const trakeQueuedEvents = new Set();
+    const trakeCapturePlaceholders = new Map();
+    let trakeCaptureChain = Promise.resolve();
+    const trakeController = {
+        fps: null,
+        ready: false,
+        desiredFrameIndex: 0,
+        renderedFrameIndex: 0,
+        seekTimer: null,
+        seekInFlight: false,
+        seekGeneration: 0,
+        waiters: []
+    };
     let queuedFramesSet = new Set();
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let currentDresSessionId = null; // Biến để lưu session ID sẽ được sử dụng
@@ -253,13 +271,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const videoModal = document.getElementById('videoModal'); // Lấy modal chính
     const trakeStatusBar = document.getElementById('trakeStatusBar');
-    const trakeSeekGapInput = document.getElementById('trakeSeekGap');
+    const trakeFrameStepInput = document.getElementById('trakeFrameStep');
+    const trakeFrameIndex = document.getElementById('trakeFrameIndex');
+    const trakeFrameTimestamp = document.getElementById('trakeFrameTimestamp');
+    const trakeFpsStatus = document.getElementById('trakeFpsStatus');
     const trakeSubmitQueueContainer = document.getElementById('trakeSubmitQueue');
     const trakeSubmitQueueFramesContainer = document.getElementById('trakeSubmitQueueFrames');
     const submitTrakeBtn = document.getElementById('submitTrakeBtn');
     const dresSessionIdInput = document.getElementById('dresSessionIdInput');
     const frameServeLocationToggle = document.getElementById('frameServeLocationToggle');
     const frameServeLocationLabel = document.getElementById('frameServeLocationLabel');
+    const videoServeLocationToggle = document.getElementById('videoServeLocationToggle');
+    const videoServeLocationLabel = document.getElementById('videoServeLocationLabel');
     const clusterModeToggle = document.getElementById('clusterModeToggle');
     const clusterModeLabel = document.getElementById('clusterModeLabel');
     const deletedClustersBtn = document.getElementById('deletedClustersBtn');
@@ -357,6 +380,12 @@ document.addEventListener('DOMContentLoaded', function () {
         const remoteServeEnabled = frameServeLocation === 'remote';
         frameServeLocationToggle.checked = remoteServeEnabled;
         frameServeLocationLabel.textContent = remoteServeEnabled ? 'Remote serve' : 'Local serve';
+    }
+
+    function updateVideoServeLocationUI() {
+        const remoteServeEnabled = videoServeLocation === 'remote';
+        videoServeLocationToggle.checked = remoteServeEnabled;
+        videoServeLocationLabel.textContent = remoteServeEnabled ? 'Remote HLS' : 'Local MP4';
     }
 
     function updateClusterModeUI() {
@@ -587,6 +616,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const savedFrameServeLocation = getUserScopedSetting('frame_serve_location', 'remote');
         frameServeLocation = savedFrameServeLocation === 'local' ? 'local' : 'remote';
         updateFrameServeLocationUI();
+        const savedVideoServeLocation = getUserScopedSetting('video_serve_location', 'remote');
+        videoServeLocation = savedVideoServeLocation === 'local' ? 'local' : 'remote';
+        updateVideoServeLocationUI();
         clusterModeEnabled = getUserScopedSetting('cluster_mode_enabled', 'true') !== 'false';
         updateClusterModeUI();
         setupUnloadHandler();
@@ -596,7 +628,17 @@ document.addEventListener('DOMContentLoaded', function () {
             setUserScopedSetting('frame_serve_location', frameServeLocation);
             updateFrameServeLocationUI();
             refreshVisibleFrameSources();
+            if (currentVideoModalData.videoName) {
+                prepareTrakeTimeline(currentVideoModalData.videoName, document.getElementById('videoPlayer').currentTime);
+            }
             showToastNotification(`Frame source: ${frameServeLocation === 'remote' ? 'Remote serve' : 'Local serve'}.`);
+        });
+
+        videoServeLocationToggle.addEventListener('change', () => {
+            videoServeLocation = videoServeLocationToggle.checked ? 'remote' : 'local';
+            setUserScopedSetting('video_serve_location', videoServeLocation);
+            updateVideoServeLocationUI();
+            showToastNotification(`Video source: ${videoServeLocation === 'remote' ? 'Remote HLS' : 'Local MP4'}.`);
         });
 
         clusterModeToggle.addEventListener('change', () => {
@@ -746,8 +788,10 @@ document.addEventListener('DOMContentLoaded', function () {
         historyBtn.addEventListener('click', toggleHistoryMenu);
 
 
-        trakeSeekGapInput.addEventListener('change', () => {
-            localStorage.setItem('trake_seek_gap', trakeSeekGapInput.value);
+        trakeFrameStepInput.addEventListener('change', () => {
+            const frameStep = Math.max(1, Math.min(100, parseInt(trakeFrameStepInput.value, 10) || 1));
+            trakeFrameStepInput.value = frameStep;
+            setUserScopedSetting('trake_frame_step', String(frameStep));
         });
 
         document.addEventListener('click', function (e) {
@@ -1624,6 +1668,14 @@ document.addEventListener('DOMContentLoaded', function () {
         ws.onopen = () => {
             console.log("WebSocket connection established for user:", currentUser);
             wsRetryDelayMs = 3000; // reset backoff
+            trakePendingMutations.forEach(mutation => {
+                if (!mutation.acked) {
+                    sendPendingTrakeMutation(mutation);
+                }
+            });
+            trakePendingClears.forEach(clear => {
+                ws.send(JSON.stringify({ action: 'clear_trake_event', payload: clear.payload }));
+            });
         };
 
         ws.onmessage = (event) => {
@@ -1689,7 +1741,54 @@ document.addEventListener('DOMContentLoaded', function () {
                 break;
             case 'trake_queue_update':
                 console.log('[TRAKE] Received queue update from server:', payload);
+                for (const pendingClear of trakePendingClears.values()) {
+                    if (!payload.some(frame => frame.eventNumber === pendingClear.payload.eventNumber)) {
+                        finishTrakeClear(pendingClear.payload.eventNumber, null, true);
+                    }
+                }
                 renderTrakeQueue(payload);
+                break;
+            case 'trake_init': {
+                const pendingFrames = Array.from(trakePendingMutations.values())
+                    .filter(mutation => !mutation.acked)
+                    .map(mutation => mutation.payload);
+                const pendingEvents = new Set(pendingFrames.map(frame => frame.eventNumber));
+                const serverFrames = payload.filter(frame => {
+                    const pendingClear = trakePendingClears.get(frame.eventNumber);
+                    if (!pendingClear) return !pendingEvents.has(frame.eventNumber);
+                    if ((frame.revision || 0) > pendingClear.payload.expectedRevision) {
+                        pendingClear.frame = frame;
+                        pendingClear.payload.expectedRevision = frame.revision || 0;
+                    }
+                    return false;
+                });
+                renderTrakeQueue([...serverFrames.filter(frame => !pendingEvents.has(frame.eventNumber)), ...pendingFrames]);
+                break;
+            }
+            case 'trake_ack':
+                handleTrakeAck(payload);
+                break;
+            case 'trake_slot_updated':
+                applyTrakeSlotUpdate(payload);
+                break;
+            case 'trake_slot_thumbnail_ready':
+                applyTrakeThumbnailUpdate(payload);
+                break;
+            case 'trake_slot_cleared':
+                {
+                    const currentFrame = trakeQueueState.find(frame => frame.eventNumber === payload.eventNumber);
+                    if (currentFrame?.revision && payload.revision && currentFrame.revision > payload.revision) break;
+                }
+                finishTrakeClear(payload.eventNumber, payload.requestId, true);
+                if (![...trakePendingMutations.values()].some(mutation => !mutation.acked && mutation.payload.eventNumber === payload.eventNumber)) {
+                    renderTrakeQueue(trakeQueueState.filter(frame => frame.eventNumber !== payload.eventNumber));
+                }
+                break;
+            case 'trake_conflict':
+                handleTrakeConflict(payload);
+                break;
+            case 'trake_retry':
+                scheduleTrakeMutationRetry(payload);
                 break;
             case 'special_submission_alert':
                 if (payload && payload.username) {
@@ -1713,9 +1812,196 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function sendWebSocketMessage(action, payload) {
         if (ws && ws.readyState === WebSocket.OPEN) {
-            ws.send(JSON.stringify({ action, payload }));
+            try {
+                ws.send(JSON.stringify({ action, payload }));
+                return true;
+            } catch (error) {
+                console.warn('WebSocket send failed; mutation will retry after reconnect.', error);
+                return false;
+            }
         } else {
             console.error("WebSocket is not connected.");
+            return false;
+        }
+    }
+
+    function createRequestId() {
+        return typeof crypto.randomUUID === 'function'
+            ? crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    }
+
+    function sendPendingTrakeMutation(mutation) {
+        if (!mutation || mutation.acked) return;
+        sendWebSocketMessage('trake_assign', mutation.payload);
+        if (mutation.ackTimer) clearTimeout(mutation.ackTimer);
+        const retryDelay = Math.min(8000, 1500 * (2 ** Math.min(mutation.sendAttempts || 0, 3)));
+        mutation.sendAttempts = (mutation.sendAttempts || 0) + 1;
+        mutation.ackTimer = setTimeout(() => {
+            mutation.ackTimer = null;
+            sendPendingTrakeMutation(mutation);
+        }, retryDelay);
+    }
+
+    function scheduleTrakeMutationRetry(payload) {
+        const mutation = trakePendingMutations.get(payload.requestId);
+        if (!mutation || mutation.acked || mutation.retryTimer) return;
+        mutation.retryTimer = setTimeout(() => {
+            mutation.retryTimer = null;
+            if (!mutation.acked) sendPendingTrakeMutation(mutation);
+        }, Math.max(500, Math.min(5000, Number(payload.retryAfterMs) || 1500)));
+    }
+
+    function applyTrakeSlotUpdate(frame) {
+        const pendingClear = trakePendingClears.get(frame.eventNumber);
+        if (pendingClear) {
+            if ((frame.revision || 0) > pendingClear.payload.expectedRevision) {
+                pendingClear.frame = frame;
+                pendingClear.payload = {
+                    ...pendingClear.payload,
+                    requestId: createRequestId(),
+                    expectedRevision: frame.revision || 0,
+                    force: true
+                };
+                sendWebSocketMessage('clear_trake_event', pendingClear.payload);
+            }
+            return;
+        }
+        const pending = trakePendingMutations.get(frame.requestId);
+        const existing = trakeQueueState.find(item => item.eventNumber === frame.eventNumber);
+        if (existing && existing.revision && frame.revision && existing.revision > frame.revision) return;
+        const localThumbnailUrl = (pending && trakeLocalThumbnailUrls.get(frame.requestId))
+            || (existing?.requestId && trakeLocalThumbnailUrls.get(existing.requestId));
+        const syncedFrame = { ...frame, status: 'filled' };
+        if (localThumbnailUrl && !syncedFrame.thumbnailPath) syncedFrame.thumbnailUrl = localThumbnailUrl;
+        renderTrakeQueue([...trakeQueueState.filter(item => item.eventNumber !== frame.eventNumber), syncedFrame]);
+    }
+
+    async function handleTrakeAck(payload) {
+        if (payload.cleared) {
+            const pendingClear = trakePendingClears.get(payload.eventNumber)
+                || Array.from(trakePendingClears.values())
+                    .find(clear => clear.payload.requestId === payload.requestId);
+            if (pendingClear) {
+                finishTrakeClear(pendingClear.payload.eventNumber, payload.requestId, true);
+                renderTrakeQueue(trakeQueueState);
+            }
+            return;
+        }
+        const mutation = trakePendingMutations.get(payload.requestId);
+        if (!mutation) return;
+        if (mutation.retryTimer) clearTimeout(mutation.retryTimer);
+        if (mutation.ackTimer) clearTimeout(mutation.ackTimer);
+        applyTrakeSlotUpdate(payload.frame);
+        mutation.acked = true;
+        mutation.ackFrame = payload.frame;
+        maybeFinalizeTrakeMutation(payload.requestId);
+    }
+
+    function handleTrakeConflict(payload) {
+        const pendingClear = trakePendingClears.get(payload.eventNumber);
+        if (pendingClear) {
+            pendingClear.payload = {
+                ...pendingClear.payload,
+                requestId: createRequestId(),
+                expectedRevision: payload.frame?.revision || 0,
+                force: true
+            };
+            if (payload.frame) pendingClear.frame = payload.frame;
+            sendWebSocketMessage('clear_trake_event', pendingClear.payload);
+            return;
+        }
+        const mutation = trakePendingMutations.get(payload.requestId);
+        if (!mutation) return;
+        if (mutation.retryTimer) clearTimeout(mutation.retryTimer);
+        if (mutation.ackTimer) clearTimeout(mutation.ackTimer);
+        const localUrl = trakeLocalThumbnailUrls.get(payload.requestId);
+        if (localUrl) URL.revokeObjectURL(localUrl);
+        trakeLocalThumbnailUrls.delete(payload.requestId);
+        trakePendingMutations.delete(payload.requestId);
+        const withoutOptimisticSlot = trakeQueueState.filter(frame => frame.eventNumber !== payload.eventNumber);
+        renderTrakeQueue(payload.frame ? [...withoutOptimisticSlot, payload.frame] : withoutOptimisticSlot);
+        const message = payload.reason === 'video_locked'
+            ? `Hàng đợi TRAKE đang khóa cho video: ${payload.lockedVideoName || 'video khác'}.`
+            : 'Không thể đồng bộ frame TRAKE. Vui lòng thử lại.';
+        showToastNotification(message, 'error');
+    }
+
+    function finishTrakeClear(eventNumber, requestId, acceptOtherRequest = false) {
+        const pendingClear = trakePendingClears.get(eventNumber);
+        if (!pendingClear || (!acceptOtherRequest && requestId && pendingClear.payload.requestId !== requestId)) return;
+        const localUrl = pendingClear.frame.requestId
+            ? trakeLocalThumbnailUrls.get(pendingClear.frame.requestId)
+            : null;
+        if (localUrl) {
+            URL.revokeObjectURL(localUrl);
+            trakeLocalThumbnailUrls.delete(pendingClear.frame.requestId);
+        }
+        trakePendingClears.delete(eventNumber);
+    }
+
+    function clearTrakeFrameOptimistically(frameData) {
+        if (trakePendingClears.has(frameData.eventNumber)) return;
+        const payload = {
+            requestId: createRequestId(),
+            eventNumber: frameData.eventNumber,
+            expectedRevision: frameData.revision || 0,
+            force: true
+        };
+        trakePendingClears.set(frameData.eventNumber, { payload, frame: frameData });
+        renderTrakeQueue(trakeQueueState.filter(frame => frame.eventNumber !== frameData.eventNumber));
+        sendWebSocketMessage('clear_trake_event', payload);
+    }
+
+    function maybeFinalizeTrakeMutation(requestId) {
+        const mutation = trakePendingMutations.get(requestId);
+        if (!mutation || !mutation.acked || !mutation.thumbnailCaptureDone) return;
+        if (!mutation.thumbnailBlob) {
+            trakePendingMutations.delete(requestId);
+            return;
+        }
+        if (mutation.thumbnailUploadStarted) return;
+        mutation.thumbnailUploadStarted = true;
+        uploadTrakeThumbnail(mutation.ackFrame, mutation.thumbnailBlob, requestId)
+            .finally(() => trakePendingMutations.delete(requestId));
+    }
+
+    function applyTrakeThumbnailUpdate(payload) {
+        const frame = trakeQueueState.find(item => item.eventNumber === payload.eventNumber);
+        if (!frame || (payload.revision && frame.revision !== payload.revision)) return;
+        const localUrl = frame.requestId && trakeLocalThumbnailUrls.get(frame.requestId);
+        if (localUrl) {
+            URL.revokeObjectURL(localUrl);
+            trakeLocalThumbnailUrls.delete(frame.requestId);
+        }
+        renderTrakeQueue(trakeQueueState.map(item => item.eventNumber === payload.eventNumber
+            ? { ...item, thumbnailUrl: null, thumbnailPath: payload.thumbnailPath }
+            : item));
+    }
+
+    async function uploadTrakeThumbnail(frame, thumbnailBlob, requestId) {
+        const formData = new FormData();
+        formData.append('file', thumbnailBlob, `${frame.videoName}_${frame.frameIndex}.webp`);
+        formData.append('event_number', String(frame.eventNumber));
+        formData.append('video_name', frame.videoName);
+        formData.append('frame_index', String(frame.frameIndex));
+        formData.append('revision', String(frame.revision));
+        formData.append('request_id', requestId);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+        try {
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/trake-thumbnail`, {
+                method: 'POST',
+                body: formData,
+                signal: controller.signal
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            const result = await response.json();
+            applyTrakeThumbnailUpdate(result);
+        } catch (error) {
+            console.warn('TRAKE thumbnail upload failed; metadata remains synced.', error);
+        } finally {
+            clearTimeout(timeoutId);
         }
     }
 
@@ -3405,8 +3691,21 @@ document.addEventListener('DOMContentLoaded', function () {
         return 0;
     }
 
+    function getVideoPlaybackSource(videoName) {
+        if (videoServeLocation === 'remote') {
+            return {
+                type: 'hls',
+                url: `${APP_CONFIG.REMOTE_BASE_URL}/videos_hls/${encodeURIComponent(videoName)}/playlist.m3u8`
+            };
+        }
+
+        const localVideoName = videoName.toLowerCase().endsWith('.mp4') ? videoName : `${videoName}.mp4`;
+        return { type: 'mp4', url: `/videos/${encodeURIComponent(localVideoName)}` };
+    }
+
+    // Keep legacy form/video capture paths on the same source switch.
     function getHlsPlaylistUrl(videoName) {
-        return `${APP_CONFIG.REMOTE_BASE_URL}/videos_hls/${encodeURIComponent(videoName)}/playlist.m3u8`;
+        return getVideoPlaybackSource(videoName).url;
     }
 
     function openVideoModal(videoName, timestamp) {
@@ -3443,6 +3742,8 @@ document.addEventListener('DOMContentLoaded', function () {
             showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
             return;
         }
+
+        prepareTrakeTimeline(videoName, parseTimestamp(timestamp));
 
         console.log("time:", timestamp);
         const formatTime = (timeInSeconds) => {
@@ -3515,9 +3816,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (document.activeElement === trakeSeekGapInput) {
+            if (document.activeElement === trakeFrameStepInput) {
                 if (e.key === 'Enter' || e.key === 'Escape') {
-                    trakeSeekGapInput.blur(); // Thoát focus khi nhấn Enter hoặc Escape
+                    trakeFrameStepInput.blur();
                 }
                 return; // Không xử lý các phím tắt khác khi đang gõ
             }
@@ -3534,6 +3835,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (!isNaN(eventNumber) && eventNumber >= 1 && eventNumber <= 5) {
                     e.preventDefault();
                     captureAndSubmitTrakeFrame(eventNumber);
+                    return;
+                }
+
+                const frameStep = getTrakeFrameStep() * (e.shiftKey ? 10 : 1);
+                if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+                    e.preventDefault();
+                    queueTrakeFrameStep(e.key === 'ArrowRight' ? frameStep : -frameStep);
+                    return;
+                }
+                if (e.key === ' ') {
+                    e.preventDefault();
+                    togglePlayPause();
                 }
             } else {
 
@@ -3601,6 +3914,7 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         const handleKeyUp = (e) => {
+            if (isTrakeMode) return;
             if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
                 player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
             }
@@ -3745,7 +4059,8 @@ document.addEventListener('DOMContentLoaded', function () {
         document.addEventListener('keyup', handleKeyUp);
 
         const targetTimeInSeconds = parseTimestamp(timestamp);
-        const videoSrc = getHlsPlaylistUrl(videoName);
+        const videoSource = getVideoPlaybackSource(videoName);
+        const videoSrc = videoSource.url;
         const seekAndPlay = () => {
             player.currentTime = targetTimeInSeconds;
             player.play().catch(e => console.error("Lỗi tự động phát video:", e));
@@ -3756,7 +4071,7 @@ document.addEventListener('DOMContentLoaded', function () {
             hlsPlayerInstance = null;
         }
 
-        if (window.Hls && Hls.isSupported()) {
+        if (videoSource.type === 'hls' && window.Hls && Hls.isSupported()) {
             hlsPlayerInstance = new Hls({ enableWorker: true });
             hlsPlayerInstance.loadSource(videoSrc);
             hlsPlayerInstance.attachMedia(player);
@@ -3767,7 +4082,11 @@ document.addEventListener('DOMContentLoaded', function () {
                     showToastNotification(`Lỗi: Không thể tải HLS tại ${videoSrc}`, "error");
                 }
             });
-        } else if (player.canPlayType('application/vnd.apple.mpegurl')) {
+        } else if (videoSource.type === 'hls' && player.canPlayType('application/vnd.apple.mpegurl')) {
+            player.src = videoSrc;
+            nativeLoadedMetadataHandler = seekAndPlay;
+            player.addEventListener('loadedmetadata', nativeLoadedMetadataHandler, { once: true });
+        } else if (videoSource.type === 'mp4') {
             player.src = videoSrc;
             nativeLoadedMetadataHandler = seekAndPlay;
             player.addEventListener('loadedmetadata', nativeLoadedMetadataHandler, { once: true });
@@ -5153,45 +5472,44 @@ document.addEventListener('DOMContentLoaded', function () {
 
     async function getFpsForVideo(videoName) {
         let videoMetadata;
+        const cacheKey = `${frameServeLocation}:${videoName}`;
 
-        // 1. Kiểm tra cache (giữ nguyên logic này vì nó hiệu quả)
-        if (metadataCache.has(videoName)) {
-            videoMetadata = metadataCache.get(videoName);
+        if (trakeFpsCache.has(cacheKey)) {
+            return trakeFpsCache.get(cacheKey);
+        }
+
+        if (metadataCache.has(cacheKey)) {
+            videoMetadata = metadataCache.get(cacheKey);
         } else {
-            // 2. Fetch metadata nếu chưa có trong cache
             try {
-                const response = await fetch(getFrameMetadataUrl(videoName, `?t=${Date.now()}`));
+                const response = await fetch(getFrameMetadataUrl(videoName));
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                 const fullMetadata = await response.json();
 
                 videoMetadata = fullMetadata[videoName];
 
                 if (!videoMetadata) {
-                    console.error(`Không tìm thấy metadata cho key '${videoName}' trong file JSON.`);
-                    return 25; // Trả về giá trị mặc định nếu không có dữ liệu
+                    throw new Error(`Không tìm thấy metadata cho key '${videoName}'.`);
                 }
 
-                metadataCache.set(videoName, videoMetadata); // Cache lại để dùng sau
+                metadataCache.set(cacheKey, videoMetadata);
             } catch (error) {
                 console.error(`Lỗi khi fetch hoặc parse metadata cho ${videoName}:`, error);
-                return 25; // Trả về giá trị mặc định khi có lỗi
+                throw error;
             }
         }
 
-        // 3. Lấy FPS trực tiếp từ frame đầu tiên
         try {
-            // Lấy key của đối tượng đầu tiên trong metadata
             const firstFrameKey = Object.keys(videoMetadata)[0];
-
-            if (firstFrameKey && videoMetadata[firstFrameKey] && videoMetadata[firstFrameKey].fps) {
-                return videoMetadata[firstFrameKey].fps;
-            } else {
-                console.warn(`Không tìm thấy FPS trong frame đầu tiên của video ${videoName}. Sử dụng giá trị mặc định 25`);
-                return 25; // Fallback nếu frame đầu tiên không có thông tin fps
+            const fps = Number(videoMetadata?.fps || videoMetadata?.[firstFrameKey]?.fps);
+            if (!Number.isFinite(fps) || fps <= 0) {
+                throw new Error(`Metadata của ${videoName} không có FPS hợp lệ.`);
             }
+            trakeFpsCache.set(cacheKey, fps);
+            return fps;
         } catch (error) {
             console.error(`Lỗi khi xử lý metadata cho ${videoName}:`, error);
-            return 25; // Fallback cho các lỗi khác (ví dụ metadata trống)
+            throw error;
         }
     }
 
@@ -5838,6 +6156,51 @@ document.addEventListener('DOMContentLoaded', function () {
         renderFormSubmitQueue();
     }
 
+    function getTrakeFrameStep() {
+        return Math.max(1, Math.min(100, parseInt(trakeFrameStepInput.value, 10) || 1));
+    }
+
+    function formatTrakeTimestamp(frameIndex, fps) {
+        const totalMs = Math.max(0, Math.round((frameIndex / fps) * 1000));
+        const minutes = Math.floor(totalMs / 60000);
+        const seconds = Math.floor((totalMs % 60000) / 1000);
+        const milliseconds = totalMs % 1000;
+        return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(milliseconds).padStart(3, '0')}`;
+    }
+
+    function updateTrakeFrameReadout() {
+        if (!trakeController.ready) {
+            trakeFrameIndex.textContent = 'Frame --';
+            trakeFrameTimestamp.textContent = '--:--.---';
+            return;
+        }
+        trakeFrameIndex.textContent = `Frame ${trakeController.desiredFrameIndex}`;
+        trakeFrameTimestamp.textContent = formatTrakeTimestamp(trakeController.desiredFrameIndex, trakeController.fps);
+    }
+
+    async function prepareTrakeTimeline(videoName, initialTime = 0) {
+        trakeController.ready = false;
+        trakeController.fps = null;
+        trakeController.seekGeneration++;
+        trakeFpsStatus.classList.remove('error');
+        trakeFpsStatus.textContent = 'Loading FPS...';
+        updateTrakeFrameReadout();
+        try {
+            const fps = await getFpsForVideo(videoName);
+            if (currentVideoModalData.videoName !== videoName) return;
+            const initialFrame = Math.max(0, Math.round(initialTime * fps));
+            trakeController.fps = fps;
+            trakeController.desiredFrameIndex = initialFrame;
+            trakeController.renderedFrameIndex = initialFrame;
+            trakeController.ready = true;
+            trakeFpsStatus.textContent = `${fps} FPS · ${frameServeLocation}`;
+            updateTrakeFrameReadout();
+        } catch (error) {
+            trakeFpsStatus.classList.add('error');
+            trakeFpsStatus.textContent = 'FPS metadata unavailable';
+        }
+    }
+
     function toggleTrakeMode(isActive) {
         isTrakeMode = isActive;
         videoModal.classList.toggle('trake-active', isActive);
@@ -5846,144 +6209,392 @@ document.addEventListener('DOMContentLoaded', function () {
         if (isActive) {
             player.pause();
             player.addEventListener('wheel', handleVideoScrub, { passive: false });
-            // Lấy giá trị gap từ cache nếu có
-            const savedGap = localStorage.getItem('trake_seek_gap');
-            if (savedGap) {
-                trakeSeekGapInput.value = savedGap;
+            player.addEventListener('timeupdate', handleTrakePlaybackProgress);
+            trakeFrameStepInput.value = getUserScopedSetting('trake_frame_step', '1');
+            if (trakeController.ready) {
+                const currentFrame = Math.max(0, Math.round(player.currentTime * trakeController.fps));
+                trakeController.desiredFrameIndex = currentFrame;
+                trakeController.renderedFrameIndex = currentFrame;
+                updateTrakeFrameReadout();
             }
         } else {
             player.removeEventListener('wheel', handleVideoScrub);
+            player.removeEventListener('timeupdate', handleTrakePlaybackProgress);
+            clearTimeout(trakeController.seekTimer);
         }
+    }
+
+    function handleTrakePlaybackProgress(event) {
+        if (!isTrakeMode || !trakeController.ready || event.currentTarget.paused) return;
+        const frameIndex = Math.max(0, Math.round(event.currentTarget.currentTime * trakeController.fps));
+        trakeController.desiredFrameIndex = frameIndex;
+        trakeController.renderedFrameIndex = frameIndex;
+        updateTrakeFrameReadout();
     }
 
     function handleVideoScrub(e) {
         e.preventDefault();
-        const gap = parseFloat(trakeSeekGapInput.value) || 0.1;
         const direction = e.deltaY > 0 ? 1 : -1;
-        const player = document.getElementById('videoPlayer');
+        const multiplier = e.shiftKey ? 10 : 1;
+        queueTrakeFrameStep(direction * getTrakeFrameStep() * multiplier);
+    }
 
-        let newTime = player.currentTime + (gap * direction);
-        // Đảm bảo không tua ra ngoài khoảng video
-        player.currentTime = Math.max(0, Math.min(player.duration, newTime));
+    function queueTrakeFrameStep(delta) {
+        if (!trakeController.ready) {
+            showToastNotification('FPS metadata is still loading.', 'info');
+            return;
+        }
+        const player = document.getElementById('videoPlayer');
+        player.pause();
+        const maxFrame = Number.isFinite(player.duration)
+            ? Math.max(0, Math.floor(player.duration * trakeController.fps) - 1)
+            : Number.MAX_SAFE_INTEGER;
+        trakeController.desiredFrameIndex = Math.max(0, Math.min(maxFrame, trakeController.desiredFrameIndex + delta));
+        updateTrakeFrameReadout();
+        clearTimeout(trakeController.seekTimer);
+        trakeController.seekTimer = setTimeout(flushTrakeSeek, 45);
+    }
+
+    async function flushTrakeSeek() {
+        if (!trakeController.ready || trakeController.seekInFlight) return;
+        const player = document.getElementById('videoPlayer');
+        const targetFrame = trakeController.desiredFrameIndex;
+        const generation = ++trakeController.seekGeneration;
+        trakeController.seekInFlight = true;
+
+        try {
+            const targetTime = targetFrame / trakeController.fps;
+            await new Promise(resolve => {
+                let settled = false;
+                const finish = () => {
+                    if (settled) return;
+                    settled = true;
+                    player.removeEventListener('seeked', finish);
+                    resolve();
+                };
+                player.addEventListener('seeked', finish, { once: true });
+                player.currentTime = Math.max(0, Math.min(player.duration || targetTime, targetTime));
+                setTimeout(finish, 2500);
+            });
+
+            if (generation !== trakeController.seekGeneration) return;
+            const mediaTime = await new Promise(resolve => {
+                if (typeof player.requestVideoFrameCallback === 'function') {
+                    const fallback = setTimeout(() => resolve(player.currentTime), 250);
+                    player.requestVideoFrameCallback((_, metadata) => {
+                        clearTimeout(fallback);
+                        resolve(metadata.mediaTime);
+                    });
+                } else {
+                    requestAnimationFrame(() => resolve(player.currentTime));
+                }
+            });
+            const renderedFrame = Math.max(0, Math.round(mediaTime * trakeController.fps));
+            trakeController.renderedFrameIndex = renderedFrame;
+            const mustReachExactTarget = trakeController.waiters.some(waiter => waiter.targetFrame === targetFrame);
+            if (trakeController.desiredFrameIndex === targetFrame && !mustReachExactTarget) {
+                trakeController.desiredFrameIndex = renderedFrame;
+                updateTrakeFrameReadout();
+            }
+        } finally {
+            trakeController.seekInFlight = false;
+            const pendingWaiters = [];
+            trakeController.waiters.splice(0).forEach(waiter => {
+                if (waiter.targetFrame === trakeController.renderedFrameIndex) {
+                    waiter.resolve(trakeController.renderedFrameIndex);
+                } else {
+                    pendingWaiters.push(waiter);
+                }
+            });
+            trakeController.waiters.push(...pendingWaiters);
+            if (trakeController.desiredFrameIndex !== trakeController.renderedFrameIndex) {
+                clearTimeout(trakeController.seekTimer);
+                trakeController.seekTimer = setTimeout(flushTrakeSeek, 0);
+            }
+        }
+    }
+
+    async function waitForRenderedTrakeFrame(targetFrame = trakeController.desiredFrameIndex) {
+        if (!trakeController.ready) throw new Error('FPS metadata is not ready.');
+        const player = document.getElementById('videoPlayer');
+        trakeController.desiredFrameIndex = Math.max(0, targetFrame);
+        updateTrakeFrameReadout();
+        if (player.readyState < 2) {
+            await new Promise(resolve => {
+                const finish = () => {
+                    player.removeEventListener('canplay', finish);
+                    resolve();
+                };
+                player.addEventListener('canplay', finish, { once: true });
+                setTimeout(finish, 5000);
+            });
+        }
+        if (!trakeController.seekInFlight && trakeController.desiredFrameIndex === trakeController.renderedFrameIndex) {
+            if (typeof player.requestVideoFrameCallback === 'function') {
+                await new Promise(resolve => {
+                    const fallback = setTimeout(() => resolve(), 250);
+                    player.requestVideoFrameCallback((_, metadata) => {
+                        clearTimeout(fallback);
+                        trakeController.renderedFrameIndex = Math.max(0, Math.round(metadata.mediaTime * trakeController.fps));
+                        trakeController.desiredFrameIndex = trakeController.renderedFrameIndex;
+                        updateTrakeFrameReadout();
+                        resolve();
+                    });
+                });
+            }
+            return trakeController.renderedFrameIndex;
+        }
+        const renderedFrame = await new Promise((resolve, reject) => {
+            const waiter = { targetFrame, resolve };
+            trakeController.waiters.push(waiter);
+            clearTimeout(trakeController.seekTimer);
+            trakeController.seekTimer = setTimeout(flushTrakeSeek, 0);
+            setTimeout(() => {
+                const waiterIndex = trakeController.waiters.indexOf(waiter);
+                if (waiterIndex === -1) return;
+                trakeController.waiters.splice(waiterIndex, 1);
+                trakeController.desiredFrameIndex = trakeController.renderedFrameIndex;
+                clearTimeout(trakeController.seekTimer);
+                updateTrakeFrameReadout();
+                reject(new Error(`Không thể render chính xác frame ${targetFrame}.`));
+            }, 6000);
+        });
+        return renderedFrame;
+    }
+
+    function captureTrakeThumbnail(player) {
+        if (!player.videoWidth || !player.videoHeight) return Promise.resolve(null);
+        const canvas = document.createElement('canvas');
+        const width = 160;
+        canvas.width = width;
+        canvas.height = Math.max(1, Math.round(width * player.videoHeight / player.videoWidth));
+        try {
+            canvas.getContext('2d').drawImage(player, 0, 0, canvas.width, canvas.height);
+            return new Promise(resolve => {
+                let settled = false;
+                const finish = blob => {
+                    if (settled) return;
+                    settled = true;
+                    resolve(blob);
+                };
+                canvas.toBlob(finish, 'image/webp', 0.55);
+                setTimeout(() => finish(null), 1000);
+            });
+        } catch (error) {
+            console.warn('TRAKE local thumbnail capture skipped:', error);
+            return Promise.resolve(null);
+        }
+    }
+
+    async function captureThumbnailForMutation(requestId, player) {
+        const mutation = trakePendingMutations.get(requestId);
+        if (!mutation) return;
+        try {
+            mutation.thumbnailBlob = await captureTrakeThumbnail(player);
+            if (mutation.thumbnailBlob) {
+                const thumbnailUrl = URL.createObjectURL(mutation.thumbnailBlob);
+                trakeLocalThumbnailUrls.set(requestId, thumbnailUrl);
+                mutation.payload.thumbnailUrl = thumbnailUrl;
+                renderTrakeQueue(trakeQueueState.map(frame => frame.requestId === requestId
+                    ? { ...frame, thumbnailUrl }
+                    : frame));
+            }
+        } finally {
+            mutation.thumbnailCaptureDone = true;
+            maybeFinalizeTrakeMutation(requestId);
+        }
     }
 
     async function captureAndSubmitTrakeFrame(eventNumber) {
         const currentVideoName = currentVideoModalData.videoName;
-        if (trakeQueueState.length > 0) {
-            const lockedVideoName = trakeQueueState[0].videoName;
-            if (currentVideoName !== lockedVideoName) {
-                showToastNotification(`Hàng đợi TRAKE đã bị khóa cho video: ${lockedVideoName}`, "error");
-                return; // Ngăn không cho frame được thêm vào
-            }
+        if (trakeQueuedEvents.has(eventNumber)) {
+            showToastNotification(`Đang chuẩn bị frame cho sự kiện ${eventNumber}.`, 'info', 1200);
+            return;
         }
-        const existingFrame = trakeQueueState.find(f => f.eventNumber === eventNumber);
-        if (existingFrame) {
-            const confirmed = confirm(`Sự kiện ${eventNumber} đã có frame do người dùng "${existingFrame.submitted_by}" nộp.\nBạn có chắc chắn muốn GHI ĐÈ không?`);
-            if (!confirmed) {
-                return; // Người dùng hủy
-            }
+        const lockedFrame = trakeQueueState.find(frame => frame.status !== 'failed');
+        if (lockedFrame && currentVideoName !== lockedFrame.videoName) {
+            showToastNotification(`Hàng đợi TRAKE đã bị khóa cho video: ${lockedFrame.videoName}`, 'error');
+            return;
         }
 
+        const existingFrame = trakeQueueState.find(frame => frame.eventNumber === eventNumber);
+        const pendingAssignment = [...trakePendingMutations.values()]
+            .find(mutation => !mutation.acked && mutation.payload.eventNumber === eventNumber);
+        if (pendingAssignment) {
+            showToastNotification(`Đang đồng bộ frame cho sự kiện ${eventNumber}.`, 'info', 1200);
+            return;
+        }
+        if (existingFrame && existingFrame.submitted_by !== currentUser) {
+            const confirmed = confirm(`Sự kiện ${eventNumber} đã có frame do "${existingFrame.submitted_by}" chọn.\nBạn có chắc muốn ghi đè không?`);
+            if (!confirmed) return;
+        }
+
+        const targetFrame = trakeController.desiredFrameIndex;
+        const placeholder = {
+            requestId: `capture-${eventNumber}-${createRequestId()}`,
+            eventNumber,
+            videoName: currentVideoName,
+            frameIdentifier: `Preparing frame ${targetFrame}...`,
+            timestamp: 'Preparing frame...',
+            submitted_by: currentUser,
+            status: 'pending',
+            isPlaceholder: true,
+            isFromVideo: true
+        };
+        trakeCapturePlaceholders.set(eventNumber, { placeholder, previousFrame: existingFrame });
+        trakeQueueState = [...trakeQueueState.filter(frame => frame.eventNumber !== eventNumber), placeholder]
+            .sort((a, b) => a.eventNumber - b.eventNumber);
+        renderTrakeQueue(trakeQueueState);
+        trakeQueuedEvents.add(eventNumber);
+        const assignment = trakeCaptureChain.then(() => processTrakeFrameAssignment(
+            eventNumber,
+            targetFrame,
+            currentVideoName,
+            existingFrame
+        ));
+        trakeCaptureChain = assignment.catch(() => {});
+        assignment.then(
+            () => finishTrakeCapturePlaceholder(eventNumber),
+            () => finishTrakeCapturePlaceholder(eventNumber)
+        );
+        return assignment;
+    }
+
+    function finishTrakeCapturePlaceholder(eventNumber) {
+        trakeQueuedEvents.delete(eventNumber);
+        const capture = trakeCapturePlaceholders.get(eventNumber);
+        if (!capture) return;
+        const placeholderStillVisible = trakeQueueState.some(frame => frame.requestId === capture.placeholder.requestId);
+        if (placeholderStillVisible) {
+            const restored = capture.previousFrame
+                ? [...trakeQueueState.filter(frame => frame.eventNumber !== eventNumber), capture.previousFrame]
+                : trakeQueueState.filter(frame => frame.eventNumber !== eventNumber);
+            renderTrakeQueue(restored);
+        }
+        trakeCapturePlaceholders.delete(eventNumber);
+    }
+
+    async function processTrakeFrameAssignment(eventNumber, targetFrame, currentVideoName, existingFrame) {
+        if (currentVideoModalData.videoName !== currentVideoName) return;
         const player = document.getElementById('videoPlayer');
         player.pause();
-
         try {
-            const currentTime = player.currentTime;
-            const fps = await getFpsForVideo(currentVideoModalData.videoName);
-            const frameNumber = Math.round(currentTime * fps);
-
-            const captureCanvas = document.getElementById('frameCaptureCanvas');
-            captureCanvas.width = player.videoWidth;
-            captureCanvas.height = player.videoHeight;
-            const context = captureCanvas.getContext('2d');
-            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-
-            const minutes = Math.floor(currentTime / 60);
-            const seconds = (currentTime % 60).toFixed(3);
-            const timestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
-
+            const frameNumber = await waitForRenderedTrakeFrame(targetFrame);
+            const timestamp = formatTrakeTimestamp(frameNumber, trakeController.fps);
+            const requestId = createRequestId();
             const frameData = {
-                eventNumber: eventNumber,
-                videoName: currentVideoModalData.videoName,
-                path: imagePathDataUrl,
+                requestId,
+                eventNumber,
+                videoName: currentVideoName,
+                frameIndex: frameNumber,
                 frame_id_ori: frameNumber,
-                timestamp: timestamp,
-                frameIdentifier: `${currentVideoModalData.videoName}_${frameNumber}`,
+                timestampMs: Math.round(frameNumber / trakeController.fps * 1000),
+                timestamp,
+                fps: trakeController.fps,
+                frameIdentifier: `${currentVideoName}_${frameNumber}`,
+                expectedRevision: existingFrame?.revision
+                    || trakePendingClears.get(eventNumber)?.payload.expectedRevision
+                    || 0,
+                submitted_by: currentUser,
+                status: 'pending',
+                thumbnailUrl: null,
                 isFromVideo: true
             };
 
-            // Gửi hành động lên server
-            console.log('[TRAKE] Sending frame to server for event:', eventNumber, frameData);
-            sendWebSocketMessage('add_or_override_trake_frame', frameData);
-            showToastNotification(`Đang gửi frame cho sự kiện ${eventNumber}...`, 'success');
-
+            trakePendingMutations.set(requestId, {
+                payload: frameData,
+                thumbnailBlob: null,
+                thumbnailCaptureDone: false,
+                acked: false,
+                thumbnailUploadStarted: false,
+                sendAttempts: 0,
+                ackTimer: null,
+                retryTimer: null
+            });
+            trakeQueueState = [...trakeQueueState.filter(frame => frame.eventNumber !== eventNumber), frameData]
+                .sort((a, b) => a.eventNumber - b.eventNumber);
+            renderTrakeQueue(trakeQueueState);
+            sendPendingTrakeMutation(trakePendingMutations.get(requestId));
+            void captureThumbnailForMutation(requestId, player);
         } catch (error) {
-            console.error("Lỗi khi chụp frame TRAKE:", error);
-            showToastNotification("Không thể chụp frame.", "error");
+            console.error('Lỗi khi chọn frame TRAKE:', error);
+            showToastNotification(error.message || 'Không thể chọn frame.', 'error');
+            throw error;
         }
     }
 
+    function getTrakeThumbnailUrl(frameData) {
+        if (frameData.thumbnailUrl) return frameData.thumbnailUrl;
+        if (!frameData.thumbnailPath) return null;
+        return frameData.thumbnailPath.startsWith('http')
+            ? frameData.thumbnailPath
+            : `${APP_CONFIG.REMOTE_BASE_URL}${frameData.thumbnailPath}`;
+    }
+
     function renderTrakeQueue(frames = []) {
-        console.log('[TRAKE] Rendering queue with frames:', frames);
-        trakeQueueState = frames;
-
+        trakeQueueState = [...frames].sort((a, b) => a.eventNumber - b.eventNumber);
         const mainContainer = document.querySelector('.main-container');
-        const trakeQueueContainer = document.getElementById('trakeSubmitQueue');
+        mainContainer.classList.toggle('trake-active', frames.length > 0);
 
-        if (frames.length > 0) {
-            trakeQueueContainer.style.display = '';
-
-            mainContainer.classList.add('trake-active');
-        } else {
-            mainContainer.classList.remove('trake-active');
-        }
-
-        // Cập nhật thanh trạng thái 5 sự kiện (giữ nguyên)
-        const filledEvents = new Set(frames.map(f => f.eventNumber));
         trakeStatusBar.querySelectorAll('.status-dot').forEach(dot => {
-            const eventNum = parseInt(dot.dataset.event);
-            if (filledEvents.has(eventNum)) {
-                dot.classList.remove('empty');
-                dot.classList.add('filled');
-            } else {
-                dot.classList.remove('filled');
-                dot.classList.add('empty');
-            }
+            const eventNumber = parseInt(dot.dataset.event, 10);
+            const frame = frames.find(item => item.eventNumber === eventNumber);
+            dot.classList.remove('empty', 'filled', 'pending', 'failed');
+            dot.classList.add(frame ? (frame.status || 'filled') : (trakePendingClears.has(eventNumber) ? 'pending' : 'empty'));
         });
 
-        // Render các frame trong queue (giữ nguyên)
-        trakeSubmitQueueFramesContainer.innerHTML = '';
-        frames.forEach(frameData => {
+        trakeSubmitQueueFramesContainer.replaceChildren();
+        trakeQueueState.forEach(frameData => {
             const frameElement = document.createElement('div');
-            frameElement.className = 'queue-frame-item trake-item';
+            frameElement.className = `queue-frame-item trake-item ${frameData.status || 'filled'}`;
             frameElement.dataset.frameId = frameData.frameIdentifier;
 
-            frameElement.innerHTML = `
-            <div class="queue-frame-image-container" data-event-number="${frameData.eventNumber}">
-            <img src="${resolveFrameUrl(frameData.path)}" data-frame-source="${frameData.path}" alt="TRAKE frame">
-            <div class="queue-frame-user">${frameData.submitted_by}</div>
-            <button class="remove-queue-item-btn" title="Xóa frame này">&times;</button>
-            </div>
-            <div class="queue-frame-info-bar">${frameData.frameIdentifier}</div>
-            `;
+            const imageContainer = document.createElement('div');
+            imageContainer.className = 'queue-frame-image-container';
+            imageContainer.dataset.eventNumber = frameData.eventNumber;
+            const thumbnailUrl = getTrakeThumbnailUrl(frameData);
+            if (thumbnailUrl) {
+                const image = document.createElement('img');
+                image.src = thumbnailUrl;
+                image.alt = 'TRAKE frame';
+                image.loading = 'lazy';
+                imageContainer.appendChild(image);
+            } else {
+                const placeholder = document.createElement('div');
+                placeholder.className = 'trake-thumbnail-placeholder';
+                placeholder.textContent = frameData.status === 'failed' ? 'Sync failed' : 'Loading preview...';
+                imageContainer.appendChild(placeholder);
+            }
 
-            frameElement.querySelector('.remove-queue-item-btn').addEventListener('click', () => {
-                // if (confirm(`Bạn có chắc muốn xóa frame cho sự kiện ${frameData.eventNumber} không?`)) {
-                sendWebSocketMessage('clear_trake_event', { eventNumber: frameData.eventNumber });
-                // }
+            const user = document.createElement('div');
+            user.className = 'queue-frame-user';
+            user.textContent = frameData.submitted_by || 'Pending';
+            imageContainer.appendChild(user);
+            const removeButton = document.createElement('button');
+            removeButton.className = 'remove-queue-item-btn';
+            removeButton.title = 'Xóa frame này';
+            removeButton.textContent = '×';
+            removeButton.addEventListener('click', () => {
+                clearTrakeFrameOptimistically(frameData);
             });
+            imageContainer.appendChild(removeButton);
 
-            frameElement.addEventListener('contextmenu', (e) => {
-                e.preventDefault();
+            const details = document.createElement('div');
+            details.className = 'trake-frame-details';
+            const identifier = document.createElement('strong');
+            identifier.textContent = frameData.frameIdentifier;
+            const timestamp = document.createElement('span');
+            timestamp.textContent = frameData.timestamp;
+            details.append(identifier, timestamp);
+            frameElement.append(imageContainer, details);
+            frameElement.addEventListener('contextmenu', event => {
+                event.preventDefault();
                 openVideoModal(frameData.videoName, frameData.timestamp);
             });
-
             trakeSubmitQueueFramesContainer.appendChild(frameElement);
         });
 
-        // Cập nhật trạng thái nút Submit (giữ nguyên)
-        submitTrakeBtn.disabled = frames.length === 0;
+        submitTrakeBtn.disabled = frames.length === 0 || frames.some(frame => frame.status === 'pending');
     }
 
     function updateWrongSubmissionUI() {
