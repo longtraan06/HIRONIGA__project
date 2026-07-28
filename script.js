@@ -285,6 +285,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const semanticSearchModal = document.getElementById('semanticSearchModal');
     const closeSemanticSearchModalBtn = document.getElementById('closeSemanticSearchModalBtn');
     const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
+    const externalSearchForm = document.getElementById('externalSearchForm');
+    const externalSearchInput = document.getElementById('externalSearchInput');
+    const externalSearchModal = document.getElementById('externalSearchModal');
+    const closeExternalSearchModalBtn = document.getElementById('closeExternalSearchModalBtn');
+    const externalSearchQuery = document.getElementById('externalSearchQuery');
+    const externalSearchResults = document.getElementById('externalSearchResults');
 
     initializeEventListeners();
     function getOrCreateUserId() {
@@ -631,6 +637,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 semanticSearchModal.querySelector('.modal-overlay').addEventListener('click', closeSemanticSearchModal);
             }
         }
+
+        externalSearchForm.addEventListener('submit', handleExternalSearchSubmit);
+        closeExternalSearchModalBtn.addEventListener('click', closeExternalSearchModal);
+        externalSearchModal.querySelector('.modal-overlay').addEventListener('click', closeExternalSearchModal);
 
 
         const savedModel = getUserScopedSetting('selected_model', null, 'user_selected_model');
@@ -4688,6 +4698,37 @@ document.addEventListener('DOMContentLoaded', function () {
             // NÉM LỖI RA NGOÀI ĐỂ HÀM MỚI BẮT ĐƯỢC
             throw error;
         }
+    }
+
+    function handleExternalSearchSubmit(event) {
+        event.preventDefault();
+        const query = externalSearchInput.value.trim();
+        if (!query) {
+            externalSearchInput.focus();
+            return;
+        }
+
+        openExternalSearchModal(query);
+    }
+
+    function openExternalSearchModal(query) {
+        if (externalSearchModal.style.display !== 'flex') {
+            registerModalOpen(externalSearchModal, closeExternalSearchModal);
+            externalSearchModal.style.display = 'flex';
+        }
+
+        externalSearchQuery.textContent = `Results for "${query}"`;
+        externalSearchResults.replaceChildren();
+        const placeholder = document.createElement('div');
+        placeholder.className = 'external-search-state';
+        placeholder.textContent = 'Search results will appear here.';
+        externalSearchResults.appendChild(placeholder);
+    }
+
+    function closeExternalSearchModal() {
+        externalSearchModal.style.display = 'none';
+        externalSearchResults.replaceChildren();
+        registerModalClose(externalSearchModal);
     }
 
     async function openSemanticSearchModal(queryFrameData) {
