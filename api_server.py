@@ -1607,7 +1607,11 @@ async def get_trake_thumbnail(filename: str):
     return FileResponse(
         thumbnail_path,
         media_type="image/webp",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
     )
 
 
