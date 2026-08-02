@@ -7,7 +7,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="style.css?v=trake-semantic-1">
 </head>
 
 <body>
@@ -146,7 +146,7 @@
     </header>
     <div class="main-container">
         <aside class="sidebar">
-            <div class="search-container">
+            <div id="normalSearchPanel" class="search-container">
                 <h3>SEARCH</h3>
                 <div class="search-mode-buttons" id="searchModeButtons" style="display: none;">
                     <button class="mode-btn active" data-mode="text-to-image">
@@ -215,12 +215,19 @@
                     </div>
                 </div>
             </div>
-            <section class="external-search-container" aria-labelledby="externalSearchTitle">
-                <h3 id="externalSearchTitle">EXTERNAL SEARCH</h3>
-                <form id="externalSearchForm" class="external-search-form">
-                    <input id="externalSearchInput" name="q" type="search" maxlength="400" autocomplete="off"
-                        placeholder="Search" aria-label="External search query" required>
+            <section id="googleSearchPanel" class="google-search-panel" aria-labelledby="googleSearchTitle" hidden>
+                <div class="google-search-panel-header">
+                    <h3 id="googleSearchTitle">GOOGLE SEARCH</h3>
+                    <span>Shift + Tab to return</span>
+                </div>
+                <form id="googleSearchForm" class="google-search-form">
+                    <input id="googleSearchInput" name="q" type="search" maxlength="400" autocomplete="off"
+                        placeholder="Search Google" aria-label="Google search query" required>
                 </form>
+                <div id="googleSearchPanelState" class="google-search-panel-state">
+                    Enter a query to search the web.
+                </div>
+                <div id="googleSearchResults" class="google-search-results"></div>
             </section>
         </aside>
         <main class="main-content">
@@ -480,6 +487,27 @@
             <button id="applyDresSessionBtn" class="apply-btn">Apply</button>
         </div>
 
+        <h4 style="margin-top: 15px;">Serper API Key</h4>
+        <div class="setting-input-group">
+            <input type="password" id="serperApiKeyInput" name="serperApiKey" placeholder="Enter Serper API key..."
+                aria-label="Serper API key" autocomplete="off">
+            <button id="saveSerperApiKeyBtn" class="apply-btn" type="button">Save</button>
+        </div>
+
+        <h4 style="margin-top: 15px;">Gemini API Key</h4>
+        <div class="setting-input-group">
+            <input type="password" id="geminiApiKeyInput" name="geminiApiKey" placeholder="Enter Gemini API key..."
+                aria-label="Gemini API key" autocomplete="off">
+            <button id="saveGeminiApiKeyBtn" class="apply-btn" type="button">Save</button>
+        </div>
+
+        <h4 style="margin-top: 15px;">AI Summary</h4>
+        <label class="serve-location-toggle" for="googleAiSummaryToggle">
+            <span id="googleAiSummaryLabel">Enabled</span>
+            <input id="googleAiSummaryToggle" type="checkbox" checked>
+            <span class="serve-location-switch" aria-hidden="true"></span>
+        </label>
+
     </div>
 
     <div id="evaluationSelectionModal" class="vqa-modal" style="display: none;">
@@ -633,20 +661,6 @@
         </div>
     </div>
 
-    <div id="externalSearchModal" class="image-modal" style="display: none;">
-        <div class="modal-overlay"></div>
-        <div class="modal-content external-search-modal">
-            <div class="external-search-modal-header">
-                <h3>Search</h3>
-                <button id="closeExternalSearchModalBtn" class="queue-action-btn cancel-btn" type="button">
-                    <i class="fas fa-times"></i> Close
-                </button>
-            </div>
-            <p id="externalSearchQuery" class="external-search-query"></p>
-            <div id="externalSearchResults" class="external-search-results"></div>
-        </div>
-    </div>
-
     <div id="clusterDeletionConfirmModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
         <div class="modal-content">
@@ -683,7 +697,7 @@
 
     <canvas id="frameCaptureCanvas" style="display: none;"></canvas>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="script.js"></script>
+    <script src="script.js?v=trake-semantic-1"></script>
 </body>
 
 </html>
