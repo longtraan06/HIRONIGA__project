@@ -1,7 +1,12 @@
 DRES_IP = 'http://192.168.28.151:5000/api';
+// const APP_CONFIG = {
+//     REMOTE_BASE_URL: 'https://aic.mealsretrieval.site',
+//     WEBSOCKET_URL: 'wss://aic.mealsretrieval.site'
+// };
+
 const APP_CONFIG = {
-    REMOTE_BASE_URL: 'https://aic.mealsretrieval.site',
-    WEBSOCKET_URL: 'wss://aic.mealsretrieval.site'
+    REMOTE_BASE_URL: 'http://localhost:16010',
+    WEBSOCKET_URL: 'ws://localhost:16010'
 };
 
 // const APP_CONFIG = {
@@ -192,6 +197,22 @@ document.addEventListener('DOMContentLoaded', function () {
     let userColors = {}; // Lưu màu của tất cả user
 
     let metadataCache = new Map();
+    let isGoogleSearchMode = false;
+    let googleSearchRequestId = 0;
+    let lastGoogleSearchQuery = '';
+    const googleSearchCache = new Map();
+    const googleImageSearchCache = new Map();
+    const googleImageSearchInFlight = new Map();
+    const googleSummaryCache = new Map();
+    const googleSummaryInFlight = new Map();
+    let googleAiSummaryEnabled = true;
+    let hoveredGoogleImage = null;
+    const GOOGLE_SEARCH_COUNTRY = 'vn';
+    const GOOGLE_SEARCH_LANGUAGE = 'vi';
+    const GOOGLE_IMAGE_RESULT_COUNT = 10;
+    const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+    const GEMINI_SUMMARY_MODEL = 'gemini-3.1-flash-lite';
+    const GOOGLE_SUMMARY_SOURCE_LIMIT = 8;
 
     const IMAGES_PER_BATCH = 60; // Số lượng ảnh hiển thị mỗi lần
     let isLoading = false; // Flag để kiểm tra đang tải thêm ảnh hay không
@@ -203,6 +224,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let wrongSubmissionIds = new Set();
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
+    let currentlyTargetedTrakeFrameData = null;
     let resolveInitialStatePromise;
     const initialStateReady = new Promise(resolve => {
         resolveInitialStatePromise = resolve;
@@ -308,12 +330,18 @@ document.addEventListener('DOMContentLoaded', function () {
     const semanticSearchModal = document.getElementById('semanticSearchModal');
     const closeSemanticSearchModalBtn = document.getElementById('closeSemanticSearchModalBtn');
     const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
-    const externalSearchForm = document.getElementById('externalSearchForm');
-    const externalSearchInput = document.getElementById('externalSearchInput');
-    const externalSearchModal = document.getElementById('externalSearchModal');
-    const closeExternalSearchModalBtn = document.getElementById('closeExternalSearchModalBtn');
-    const externalSearchQuery = document.getElementById('externalSearchQuery');
-    const externalSearchResults = document.getElementById('externalSearchResults');
+    const normalSearchPanel = document.getElementById('normalSearchPanel');
+    const googleSearchPanel = document.getElementById('googleSearchPanel');
+    const googleSearchForm = document.getElementById('googleSearchForm');
+    const googleSearchInput = document.getElementById('googleSearchInput');
+    const googleSearchPanelState = document.getElementById('googleSearchPanelState');
+    const googleSearchResults = document.getElementById('googleSearchResults');
+    const serperApiKeyInput = document.getElementById('serperApiKeyInput');
+    const saveSerperApiKeyBtn = document.getElementById('saveSerperApiKeyBtn');
+    const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
+    const saveGeminiApiKeyBtn = document.getElementById('saveGeminiApiKeyBtn');
+    const googleAiSummaryToggle = document.getElementById('googleAiSummaryToggle');
+    const googleAiSummaryLabel = document.getElementById('googleAiSummaryLabel');
 
     initializeEventListeners();
     function getOrCreateUserId() {
@@ -660,6 +688,14 @@ document.addEventListener('DOMContentLoaded', function () {
 
         currentDresSessionId = getUserScopedSetting('dres_session_id', DEFAULT_DRES_SESSION_ID, 'dres_session_id');
         dresEvaluationId = getUserScopedSetting('dres_evaluation_id', null, 'dres_evaluation_id'); // Tải evaluationId đã chọn
+        if (serperApiKeyInput) {
+            serperApiKeyInput.value = getUserScopedSetting('serper_api_key', '');
+        }
+        if (geminiApiKeyInput) {
+            geminiApiKeyInput.value = getUserScopedSetting('gemini_api_key', '');
+        }
+        googleAiSummaryEnabled = getUserScopedSetting('google_ai_summary_enabled', 'true') !== 'false';
+        updateGoogleAiSummaryUI();
 
         if (dresSessionIdInput) {
             dresSessionIdInput.value = currentDresSessionId;
@@ -680,9 +716,32 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        externalSearchForm.addEventListener('submit', handleExternalSearchSubmit);
-        closeExternalSearchModalBtn.addEventListener('click', closeExternalSearchModal);
-        externalSearchModal.querySelector('.modal-overlay').addEventListener('click', closeExternalSearchModal);
+        googleSearchForm.addEventListener('submit', handleGoogleSearchSubmit);
+        saveSerperApiKeyBtn.addEventListener('click', saveSerperApiKey);
+        saveGeminiApiKeyBtn.addEventListener('click', saveGeminiApiKey);
+        googleAiSummaryToggle.addEventListener('change', () => {
+            googleAiSummaryEnabled = googleAiSummaryToggle.checked;
+            setUserScopedSetting('google_ai_summary_enabled', String(googleAiSummaryEnabled));
+            updateGoogleAiSummaryUI();
+            refreshVisibleGoogleSearchResults();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key !== 'Tab' || !e.shiftKey) return;
+            if (isModalKeyboardActive() && !isGoogleSearchMode) return;
+
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            setGoogleSearchMode(!isGoogleSearchMode);
+        }, true);
+
+        document.addEventListener('keydown', (e) => {
+            if (e.repeat || e.key.toLowerCase() !== 's' || !hoveredGoogleImage || isModalKeyboardActive()) return;
+
+            e.preventDefault();
+            e.stopImmediatePropagation();
+            openGoogleImageSemanticSearch(hoveredGoogleImage);
+        }, true);
 
 
         const savedModel = getUserScopedSetting('selected_model', null, 'user_selected_model');
@@ -4432,7 +4491,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 let frameToSearch = null;
 
-                if (currentlyHoveredPreviewFrameData) {
+                if (currentlyTargetedTrakeFrameData) {
+                    const thumbnailUrl = getTrakeThumbnailUrl(currentlyTargetedTrakeFrameData)
+                        || currentlyTargetedTrakeFrameData.path;
+                    if (!thumbnailUrl) {
+                        showToastNotification('Thumbnail TRAKE chưa sẵn sàng để semantic search.', 'info');
+                        return;
+                    }
+                    frameToSearch = { ...currentlyTargetedTrakeFrameData, path: thumbnailUrl };
+                }
+                else if (currentlyHoveredPreviewFrameData) {
                     frameToSearch = currentlyHoveredPreviewFrameData;
                 }
                 else if (currentlyHoveredFormQueueFrameData) {
@@ -4977,7 +5045,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 const blob = await response.blob();
                 imageFile = new File([blob], "captured_frame.jpg", { type: blob.type });
             } else {
-                const response = await fetch(imagePath);
+                const response = await fetch(imagePath, {
+                    mode: 'cors',
+                    credentials: 'omit',
+                    cache: 'force-cache'
+                });
+                if (!response.ok) throw new Error(`Thumbnail request failed: ${response.status}`);
                 const blob = await response.blob();
                 imageFile = new File([blob], "temporal_start_image.jpg", { type: blob.type });
             }
@@ -5019,35 +5092,515 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function handleExternalSearchSubmit(event) {
-        event.preventDefault();
-        const query = externalSearchInput.value.trim();
-        if (!query) {
-            externalSearchInput.focus();
+    function saveSerperApiKey() {
+        const apiKey = serperApiKeyInput.value.trim();
+        if (!apiKey) {
+            localStorage.removeItem(getUserScopedStorageKey('serper_api_key'));
+            showToastNotification('Serper API key đã được xóa.', 'info');
             return;
         }
 
-        openExternalSearchModal(query);
+        setUserScopedSetting('serper_api_key', apiKey);
+        showToastNotification('Serper API key đã được lưu.', 'success');
     }
 
-    function openExternalSearchModal(query) {
-        if (externalSearchModal.style.display !== 'flex') {
-            registerModalOpen(externalSearchModal, closeExternalSearchModal);
-            externalSearchModal.style.display = 'flex';
+    function updateGoogleAiSummaryUI() {
+        googleAiSummaryToggle.checked = googleAiSummaryEnabled;
+        googleAiSummaryLabel.textContent = googleAiSummaryEnabled ? 'Enabled' : 'Disabled';
+    }
+
+    function saveGeminiApiKey() {
+        const apiKey = geminiApiKeyInput.value.trim();
+        if (!apiKey) {
+            localStorage.removeItem(getUserScopedStorageKey('gemini_api_key'));
+            showToastNotification('Gemini API key đã được xóa.', 'info');
+            refreshVisibleGoogleSearchResults();
+            return;
         }
 
-        externalSearchQuery.textContent = `Results for "${query}"`;
-        externalSearchResults.replaceChildren();
-        const placeholder = document.createElement('div');
-        placeholder.className = 'external-search-state';
-        placeholder.textContent = 'Search results will appear here.';
-        externalSearchResults.appendChild(placeholder);
+        setUserScopedSetting('gemini_api_key', apiKey);
+        for (const [cacheKey, summaryState] of googleSummaryCache) {
+            if (summaryState.status === 'error') googleSummaryCache.delete(cacheKey);
+        }
+        showToastNotification('Gemini API key đã được lưu.', 'success');
+        refreshVisibleGoogleSearchResults();
     }
 
-    function closeExternalSearchModal() {
-        externalSearchModal.style.display = 'none';
-        externalSearchResults.replaceChildren();
-        registerModalClose(externalSearchModal);
+    function refreshVisibleGoogleSearchResults() {
+        if (!lastGoogleSearchQuery || !isGoogleSearchMode) return;
+        const data = googleSearchCache.get(getGoogleSearchCacheKey(lastGoogleSearchQuery));
+        if (data) renderGoogleSearchResults(lastGoogleSearchQuery, data);
+    }
+
+    function setGoogleSearchMode(enabled) {
+        isGoogleSearchMode = enabled;
+        document.querySelector('.sidebar').classList.toggle('google-search-mode', enabled);
+        normalSearchPanel.hidden = enabled;
+        googleSearchPanel.hidden = !enabled;
+
+        if (!enabled) {
+            hoveredGoogleImage = null;
+            const normalSearchInput = normalSearchPanel.querySelector('.search-input');
+            if (normalSearchInput) normalSearchInput.focus();
+            return;
+        }
+
+        googleSearchInput.value = lastGoogleSearchQuery;
+        setTimeout(() => googleSearchInput.focus(), 0);
+    }
+
+    function getGoogleSearchCacheKey(query) {
+        return `${query}|${GOOGLE_SEARCH_COUNTRY}|${GOOGLE_SEARCH_LANGUAGE}`;
+    }
+
+    function startGoogleImageSearch(query, apiKey) {
+        const cacheKey = getGoogleSearchCacheKey(query);
+        if (googleImageSearchCache.has(cacheKey) || googleImageSearchInFlight.has(cacheKey)) return;
+
+        const request = fetch('https://google.serper.dev/images', {
+            method: 'POST',
+            headers: {
+                'X-API-KEY': apiKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                q: query,
+                gl: GOOGLE_SEARCH_COUNTRY,
+                hl: GOOGLE_SEARCH_LANGUAGE,
+                num: GOOGLE_IMAGE_RESULT_COUNT
+            })
+        })
+            .then(async response => {
+                if (!response.ok) {
+                    throw new Error(`Serper image request failed with status ${response.status}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                googleImageSearchCache.set(cacheKey, Array.isArray(data?.images) ? data.images : []);
+            })
+            .catch(error => {
+                console.error('Google Image Search request failed:', error);
+                googleImageSearchCache.set(cacheKey, []);
+            })
+            .finally(() => {
+                googleImageSearchInFlight.delete(cacheKey);
+                if (isGoogleSearchMode && lastGoogleSearchQuery === query) {
+                    const cachedSearch = googleSearchCache.get(cacheKey);
+                    if (cachedSearch) renderGoogleSearchResults(query, cachedSearch);
+                }
+            });
+
+        googleImageSearchInFlight.set(cacheKey, request);
+    }
+
+    function openGoogleImageSemanticSearch(image) {
+        const imagePath = image?.thumbnailUrl || image?.imageUrl;
+        if (!imagePath) {
+            showToastNotification('Google image does not include a usable thumbnail.', 'error');
+            return;
+        }
+
+        openSemanticSearchModal({
+            id: `google-image-${image.position || Date.now()}`,
+            path: imagePath,
+            frameIdentifier: image.title || 'Google image result'
+        });
+    }
+
+    function getGoogleSearchSources(data) {
+        const organic = Array.isArray(data?.organic) ? data.organic : [];
+        return organic.slice(0, GOOGLE_SUMMARY_SOURCE_LIMIT).map((result, index) => ({
+            number: index + 1,
+            title: result.title || result.link || `Result ${index + 1}`,
+            link: result.link || '',
+            snippet: result.snippet || ''
+        }));
+    }
+
+    function buildGeminiSummaryPrompt(query, data) {
+        const answerBox = data?.answerBox;
+        const answerBoxText = answerBox && typeof answerBox === 'object'
+            ? [answerBox.title, answerBox.answer || answerBox.snippet].filter(Boolean).join(': ')
+            : '';
+        const sources = getGoogleSearchSources(data);
+        const sourceText = sources.map(source => [
+            `[${source.number}] ${source.title}`,
+            `Snippet: ${source.snippet || 'Unavailable'}`
+        ].join('\n')).join('\n\n');
+
+        return `Answer the Google search query directly using only the supplied sources.\n\n`
+            + `Rules:\n`
+            + `- Start with the answer. Do not repeat or restate the query.\n`
+            + `- Focus only on information needed to answer the query. Omit background details.\n`
+            + `- Write in Vietnamese unless the query clearly requires another language.\n`
+            + `- Keep the answer under 100 words in one short paragraph.\n`
+            + `- Cite factual claims with source markers such as [1] or [2]. Use only listed source numbers.\n`
+            + `- If the sources are insufficient or conflict, say so clearly.\n`
+            + `- Return plain text only. Do not add a heading, markdown, or a source list.\n\n`
+            + `QUERY: ${query}\n\n`
+            + `ANSWER BOX: ${answerBoxText || 'Not available'}\n\n`
+            + `SOURCES:\n${sourceText}`;
+    }
+
+    function getGeminiInteractionText(interaction) {
+        if (typeof interaction?.output_text === 'string' && interaction.output_text.trim()) {
+            return interaction.output_text.trim();
+        }
+
+        const outputText = (interaction?.steps || [])
+            .filter(step => step?.type === 'model_output')
+            .flatMap(step => step.content || [])
+            .filter(content => content?.type === 'text' && typeof content.text === 'string')
+            .map(content => content.text.trim())
+            .filter(Boolean)
+            .join('\n');
+        if (!outputText) {
+            throw new Error('Gemini returned an empty interaction output.');
+        }
+        return outputText;
+    }
+
+    function startGoogleAiSummary(query, data) {
+        if (!googleAiSummaryEnabled) return;
+
+        const cacheKey = getGoogleSearchCacheKey(query);
+        const cachedSummary = googleSummaryCache.get(cacheKey);
+        if (cachedSummary?.status === 'ready' || cachedSummary?.status === 'error') return;
+        if (googleSummaryInFlight.has(cacheKey)) return;
+
+        const apiKey = getUserScopedSetting('gemini_api_key', '').trim();
+        if (!apiKey) return;
+
+        googleSummaryCache.set(cacheKey, { status: 'loading' });
+        const request = fetch(GEMINI_INTERACTIONS_URL, {
+            method: 'POST',
+            headers: {
+                'x-goog-api-key': apiKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                model: GEMINI_SUMMARY_MODEL,
+                input: buildGeminiSummaryPrompt(query, data)
+            })
+        })
+            .then(async response => {
+                const interaction = await response.json();
+                if (!response.ok) {
+                    throw new Error(`Gemini request failed with status ${response.status}`);
+                }
+                return getGeminiInteractionText(interaction);
+            })
+            .then(summary => {
+                googleSummaryCache.set(cacheKey, { status: 'ready', summary });
+            })
+            .catch(error => {
+                console.error('Google AI Summary request failed:', error);
+                googleSummaryCache.set(cacheKey, { status: 'error' });
+            })
+            .finally(() => {
+                googleSummaryInFlight.delete(cacheKey);
+                if (isGoogleSearchMode && lastGoogleSearchQuery === query) {
+                    const cachedSearch = googleSearchCache.get(cacheKey);
+                    if (cachedSearch) renderGoogleSearchResults(query, cachedSearch);
+                }
+            });
+
+        googleSummaryInFlight.set(cacheKey, request);
+    }
+
+    async function handleGoogleSearchSubmit(event) {
+        event.preventDefault();
+        const query = googleSearchInput.value.trim();
+        if (!query) {
+            googleSearchInput.focus();
+            return;
+        }
+
+        lastGoogleSearchQuery = query;
+        const cacheKey = getGoogleSearchCacheKey(query);
+        const cachedResponse = googleSearchCache.get(cacheKey);
+        if (cachedResponse) {
+            const cachedApiKey = getUserScopedSetting('serper_api_key', '').trim();
+            if (cachedApiKey) startGoogleImageSearch(query, cachedApiKey);
+            renderGoogleSearchResults(query, cachedResponse);
+            return;
+        }
+
+        const apiKey = getUserScopedSetting('serper_api_key', '').trim();
+        if (!apiKey) {
+            console.error('Google Search cannot run because the Serper API key is missing.');
+            googleSearchPanelState.textContent = 'Add a Serper API key in Settings first.';
+            return;
+        }
+
+        const requestId = ++googleSearchRequestId;
+        renderGoogleSearchLoading();
+        startGoogleImageSearch(query, apiKey);
+
+        try {
+            const response = await fetch('https://google.serper.dev/search', {
+                method: 'POST',
+                headers: {
+                    'X-API-KEY': apiKey,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    q: query,
+                    gl: GOOGLE_SEARCH_COUNTRY,
+                    hl: GOOGLE_SEARCH_LANGUAGE,
+                    num: 15
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error(`Serper request failed with status ${response.status}`);
+            }
+
+            const data = await response.json();
+            googleSearchCache.set(cacheKey, data);
+            if (requestId === googleSearchRequestId) {
+                renderGoogleSearchResults(query, data);
+            }
+        } catch (error) {
+            console.error('Google Search request failed:', error);
+            if (requestId === googleSearchRequestId) {
+                renderGoogleSearchError('Không thể tải kết quả Google Search.');
+            }
+        }
+    }
+
+    function renderGoogleSearchLoading() {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'google-search-state';
+        placeholder.textContent = 'Searching Google...';
+        googleSearchResults.replaceChildren(placeholder);
+        googleSearchPanelState.textContent = 'Searching Google...';
+    }
+
+    function renderGoogleSearchError(message) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'google-search-state';
+        placeholder.textContent = message;
+        googleSearchResults.replaceChildren(placeholder);
+        googleSearchPanelState.textContent = message;
+    }
+
+    function appendGoogleSearchText(parent, text, className = '') {
+        if (!text) return;
+        const element = document.createElement('p');
+        if (className) element.className = className;
+        element.textContent = text;
+        parent.appendChild(element);
+    }
+
+    function renderGoogleAnswerBox(answerBox) {
+        if (!answerBox || typeof answerBox !== 'object') return null;
+
+        const container = document.createElement('section');
+        container.className = 'google-answer-box';
+        const heading = document.createElement('h4');
+        heading.textContent = 'Answer';
+        container.appendChild(heading);
+
+        appendGoogleSearchText(container, answerBox.answer, 'google-answer-text');
+        appendGoogleSearchText(container, answerBox.snippet, 'google-result-snippet');
+
+        if (answerBox.title && answerBox.link) {
+            const link = document.createElement('a');
+            link.href = answerBox.link;
+            link.target = '_blank';
+            link.rel = 'noopener noreferrer';
+            link.textContent = answerBox.title;
+            container.appendChild(link);
+        }
+
+        return container;
+    }
+
+    function renderGoogleAiSummarySources(data) {
+        const sources = getGoogleSearchSources(data);
+        if (!sources.length) return null;
+
+        const details = document.createElement('details');
+        details.className = 'google-ai-summary-sources';
+        const summary = document.createElement('summary');
+        summary.textContent = `Sources (${sources.length})`;
+        details.appendChild(summary);
+
+        const list = document.createElement('ol');
+        sources.forEach(source => {
+            const item = document.createElement('li');
+            if (source.link) {
+                const link = document.createElement('a');
+                link.href = source.link;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = source.title;
+                item.appendChild(link);
+            } else {
+                item.textContent = source.title;
+            }
+            list.appendChild(item);
+        });
+        details.appendChild(list);
+        return details;
+    }
+
+    function renderGoogleAiSummary(query, data) {
+        if (!googleAiSummaryEnabled) return null;
+
+        const container = document.createElement('section');
+        container.className = 'google-ai-summary';
+        const header = document.createElement('div');
+        header.className = 'google-ai-summary-header';
+        const heading = document.createElement('h4');
+        heading.textContent = 'AI Summary';
+        const badge = document.createElement('span');
+        badge.textContent = 'Gemini';
+        header.append(heading, badge);
+        container.appendChild(header);
+
+        const cacheKey = getGoogleSearchCacheKey(query);
+        const summaryState = googleSummaryCache.get(cacheKey);
+        const apiKey = getUserScopedSetting('gemini_api_key', '').trim();
+
+        if (!apiKey) {
+            appendGoogleSearchText(container, 'Add a Gemini API key in Settings to generate a summary.', 'google-ai-summary-state');
+            return container;
+        }
+
+        if (summaryState?.status === 'ready') {
+            summaryState.summary.split(/\n+/).filter(Boolean).forEach(paragraph => {
+                appendGoogleSearchText(container, paragraph, 'google-ai-summary-text');
+            });
+            const sources = renderGoogleAiSummarySources(data);
+            if (sources) container.appendChild(sources);
+            return container;
+        }
+
+        if (summaryState?.status === 'error') {
+            appendGoogleSearchText(container, 'AI Summary is unavailable for this search.', 'google-ai-summary-state');
+            return container;
+        }
+
+        appendGoogleSearchText(container, 'Generating AI summary...', 'google-ai-summary-state');
+        return container;
+    }
+
+    function renderGoogleImageSearchResults(query) {
+        const images = googleImageSearchCache.get(getGoogleSearchCacheKey(query));
+        if (!Array.isArray(images) || !images.length) return null;
+
+        const container = document.createElement('section');
+        container.className = 'google-image-search-results';
+        const header = document.createElement('div');
+        header.className = 'google-image-search-header';
+        const heading = document.createElement('h4');
+        heading.textContent = 'Images';
+        const shortcut = document.createElement('span');
+        shortcut.textContent = 'Hover + S';
+        header.append(heading, shortcut);
+        container.appendChild(header);
+
+        const strip = document.createElement('div');
+        strip.className = 'google-image-strip';
+        strip.setAttribute('aria-label', 'Google image search results');
+        strip.addEventListener('wheel', event => {
+            const scrollAmount = event.deltaY || event.deltaX;
+            if (!scrollAmount) return;
+            event.preventDefault();
+            strip.scrollLeft += scrollAmount;
+        }, { passive: false });
+
+        images.slice(0, GOOGLE_IMAGE_RESULT_COUNT).forEach(image => {
+            const thumbnailUrl = image.thumbnailUrl || image.imageUrl;
+            if (!thumbnailUrl) return;
+
+            const item = document.createElement('article');
+            item.className = 'google-image-result-item';
+            item.tabIndex = 0;
+            item.title = `${image.title || 'Google image'}\nPress S to search semantically`;
+            item.addEventListener('mouseenter', () => {
+                hoveredGoogleImage = image;
+            });
+            item.addEventListener('mouseleave', () => {
+                if (hoveredGoogleImage === image) hoveredGoogleImage = null;
+            });
+
+            const thumbnail = document.createElement('img');
+            thumbnail.src = thumbnailUrl;
+            thumbnail.alt = image.title || 'Google image result';
+            thumbnail.loading = 'lazy';
+            thumbnail.decoding = 'async';
+            thumbnail.referrerPolicy = 'no-referrer';
+            item.appendChild(thumbnail);
+
+            const title = document.createElement('p');
+            title.textContent = image.title || 'Untitled image';
+            item.appendChild(title);
+            strip.appendChild(item);
+        });
+
+        if (!strip.childElementCount) return null;
+        container.appendChild(strip);
+        return container;
+    }
+
+    function renderGoogleOrganicResult(result) {
+        const item = document.createElement('article');
+        item.className = 'google-result-item';
+
+        const title = document.createElement('a');
+        title.className = 'google-result-title';
+        title.href = result.link || '#';
+        title.target = '_blank';
+        title.rel = 'noopener noreferrer';
+        title.textContent = result.title || result.link || 'Untitled result';
+        item.appendChild(title);
+
+        if (result.link) {
+            const url = document.createElement('div');
+            url.className = 'google-result-url';
+            url.textContent = result.link;
+            item.appendChild(url);
+        }
+
+        appendGoogleSearchText(item, result.snippet, 'google-result-snippet');
+        return item;
+    }
+
+    function renderGoogleSearchResults(query, data) {
+        const organic = Array.isArray(data?.organic) ? data.organic : [];
+        hoveredGoogleImage = null;
+        googleSearchPanelState.textContent = organic.length
+            ? `${organic.length} organic results cached for this page.`
+            : 'No organic results returned.';
+        googleSearchResults.replaceChildren();
+
+        const aiSummary = renderGoogleAiSummary(query, data);
+        if (aiSummary) googleSearchResults.appendChild(aiSummary);
+
+        const imageSearchResults = renderGoogleImageSearchResults(query);
+        if (imageSearchResults) googleSearchResults.appendChild(imageSearchResults);
+
+        const answerBox = renderGoogleAnswerBox(data?.answerBox);
+        if (answerBox) googleSearchResults.appendChild(answerBox);
+
+        if (!organic.length) {
+            console.error('Google Search response does not contain organic results.', data);
+            const emptyState = document.createElement('div');
+            emptyState.className = 'google-search-state';
+            emptyState.textContent = 'No organic results were returned.';
+            googleSearchResults.appendChild(emptyState);
+            return;
+        }
+
+        const list = document.createElement('div');
+        list.className = 'google-organic-list';
+        organic.forEach(result => list.appendChild(renderGoogleOrganicResult(result)));
+        googleSearchResults.appendChild(list);
+        startGoogleAiSummary(query, data);
     }
 
     async function openSemanticSearchModal(queryFrameData) {
@@ -6533,6 +7086,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function renderTrakeQueue(frames = []) {
         trakeQueueState = [...frames].sort((a, b) => a.eventNumber - b.eventNumber);
+        currentlyTargetedTrakeFrameData = null;
         const mainContainer = document.querySelector('.main-container');
         mainContainer.classList.toggle('trake-active', frames.length > 0);
 
@@ -6548,6 +7102,24 @@ document.addEventListener('DOMContentLoaded', function () {
             const frameElement = document.createElement('div');
             frameElement.className = `queue-frame-item trake-item ${frameData.status || 'filled'}`;
             frameElement.dataset.frameId = frameData.frameIdentifier;
+            frameElement.tabIndex = 0;
+            frameElement.title = 'Di chuột hoặc focus và nhấn S để semantic search';
+            frameElement.addEventListener('mouseenter', () => {
+                if (!frameData.isPlaceholder) currentlyTargetedTrakeFrameData = frameData;
+            });
+            frameElement.addEventListener('mouseleave', () => {
+                if (currentlyTargetedTrakeFrameData === frameData && document.activeElement !== frameElement) {
+                    currentlyTargetedTrakeFrameData = null;
+                }
+            });
+            frameElement.addEventListener('focus', () => {
+                if (!frameData.isPlaceholder) currentlyTargetedTrakeFrameData = frameData;
+            });
+            frameElement.addEventListener('blur', () => {
+                if (currentlyTargetedTrakeFrameData === frameData && !frameElement.matches(':hover')) {
+                    currentlyTargetedTrakeFrameData = null;
+                }
+            });
 
             const imageContainer = document.createElement('div');
             imageContainer.className = 'queue-frame-image-container';
