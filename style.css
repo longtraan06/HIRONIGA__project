@@ -2640,7 +2640,9 @@ width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
     color: var(--matcha-dark);
 }
 
-.ocr-mode-select {
+.ocr-mode-select,
+.asr-mode-select,
+.asr-topk-select {
     padding: 3px 6px;
     font-size: 12px;
     border: 1.5px solid var(--matcha-light, #a0c890);
@@ -2653,7 +2655,9 @@ width: 100%; /* Đảm bảo input chiếm hết chiều rộng của wrapper */
     box-shadow: var(--shadow-soft);
 }
 
-.ocr-mode-select:focus {
+.ocr-mode-select:focus,
+.asr-mode-select:focus,
+.asr-topk-select:focus {
     border-color: var(--matcha-primary);
     box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.2);
 }
