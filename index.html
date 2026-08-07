@@ -7,7 +7,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AIC Lunch Retrieval</title>
-    <link rel="stylesheet" href="style.css?v=trake-semantic-1">
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
@@ -56,7 +56,7 @@
                         <path d="M7 15h4" />
                     </svg>
                 </button>
-                <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F5)">
+                <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F3)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                         class="lucide lucide-tags">
@@ -66,7 +66,7 @@
                         <path d="m13.5 15.5 5-5" />
                     </svg>
                 </button>
-                <button id="asrFilterBtn" class="header-btn" title="Enable/Disable ASR Filter (F4)">
+                <button id="asrFilterBtn" class="header-btn" title="Enable/Disable ASR Filter (F2)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
                         class="lucide lucide-mic">
@@ -187,12 +187,23 @@
                             </div>
                             <div class="asr-filter-container">
                                 <input type="text" class="asr-input" placeholder="Enter ASR">
-                                <div class="fuzzy-switch-wrapper">
-                                    <label class="fuzzy-switch-container">
-                                        <input type="checkbox" id="asrFuzzySwitch">
-                                        <span class="slider round"></span>
-                                    </label>
-                                    <span>Fuzzy Search</span>
+                                <div class="ocr-mode-container" style="margin-left: 6px;">
+                                    <span class="ocr-mode-label">Mode:</span>
+                                    <select class="asr-mode-select" title="ASR Filter Mode">
+                                        <option value="keyword" selected>Keyword</option>
+                                        <option value="fuzzy">Fuzzy</option>
+                                        <option value="embedding">Embedding</option>
+                                    </select>
+                                </div>
+                                <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 4px;">
+                                    <span class="ocr-mode-label">Top K:</span>
+                                    <select class="asr-topk-select" title="ASR Embedding Top K">
+                                        <option value="80">Low (80)</option>
+                                        <option value="110" selected>Medium (110)</option>
+                                        <option value="200">High (200)</option>
+                                        <option value="custom">Custom</option>
+                                    </select>
+                                    <input type="number" class="asr-topk-custom-input" min="1" max="5000" value="110" placeholder="Top K" style="display: none; width: 65px; padding: 2px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff;">
                                 </div>
                             </div>
                             <div class="image-upload-area" style="display: none;">
@@ -374,12 +385,16 @@
                     <span class="shortcut-key">F1</span>
                 </div>
                 <div class="shortcut-item">
-                    <span class="shortcut-description">On/Off Tag Filter</span>
+                    <span class="shortcut-description">On/Off ASR Filter</span>
                     <span class="shortcut-key">F2</span>
                 </div>
                 <div class="shortcut-item">
-                    <span class="shortcut-description">On/Off Translate</span>
+                    <span class="shortcut-description">On/Off Tag Filter</span>
                     <span class="shortcut-key">F3</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">On/Off Event Filter</span>
+                    <span class="shortcut-key">F4</span>
                 </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">Model Setting</span>
@@ -480,6 +495,13 @@
             <input id="clusterModeToggle" type="checkbox" checked>
             <span class="serve-location-switch" aria-hidden="true"></span>
         </label>
+
+        <h4 style="margin-top: 15px;">Username</h4>
+        <div class="setting-input-group">
+            <input type="text" id="usernameInput" name="username" placeholder="Enter username..."
+                aria-label="Username" autocomplete="off">
+            <button id="saveUsernameBtn" class="apply-btn" type="button">Save</button>
+        </div>
 
         <h4 style="margin-top: 15px;">DRES Session ID</h4>
         <div class="setting-input-group">
@@ -697,7 +719,7 @@
 
     <canvas id="frameCaptureCanvas" style="display: none;"></canvas>
     <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="script.js?v=trake-semantic-1"></script>
+    <script src="script.js"></script>
 </body>
 
 </html>
