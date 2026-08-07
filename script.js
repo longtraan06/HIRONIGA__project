@@ -1,9 +1,4 @@
 DRES_IP = 'http://192.168.28.151:5000/api';
-// const APP_CONFIG = {
-//     REMOTE_BASE_URL: 'https://aic.mealsretrieval.site',
-//     WEBSOCKET_URL: 'wss://aic.mealsretrieval.site'
-// };
-
 const APP_CONFIG = {
     REMOTE_BASE_URL: 'http://localhost:16010',
     WEBSOCKET_URL: 'ws://localhost:16010'
@@ -336,6 +331,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const googleSearchInput = document.getElementById('googleSearchInput');
     const googleSearchPanelState = document.getElementById('googleSearchPanelState');
     const googleSearchResults = document.getElementById('googleSearchResults');
+    const usernameInput = document.getElementById('usernameInput');
+    const saveUsernameBtn = document.getElementById('saveUsernameBtn');
     const serperApiKeyInput = document.getElementById('serperApiKeyInput');
     const saveSerperApiKeyBtn = document.getElementById('saveSerperApiKeyBtn');
     const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
@@ -688,6 +685,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
         currentDresSessionId = getUserScopedSetting('dres_session_id', DEFAULT_DRES_SESSION_ID, 'dres_session_id');
         dresEvaluationId = getUserScopedSetting('dres_evaluation_id', null, 'dres_evaluation_id'); // Tải evaluationId đã chọn
+        if (usernameInput) {
+            usernameInput.value = currentUser || '';
+        }
+        if (saveUsernameBtn) {
+            saveUsernameBtn.addEventListener('click', saveUsername);
+        }
         if (serperApiKeyInput) {
             serperApiKeyInput.value = getUserScopedSetting('serper_api_key', '');
         }
@@ -1003,7 +1006,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             else if (e.key === 'F2') {
                 e.preventDefault();
-                toggleFilter('tag');
+                toggleFilter('asr');
             }
             else if (e.key === 'F1') {
                 e.preventDefault();
@@ -1011,7 +1014,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             else if (e.key === 'F3') {
                 e.preventDefault();
-                toggleFilter('asr');
+                toggleFilter('tag');
             }
             else if (e.key === 'F9') {
                 e.preventDefault();
@@ -1642,8 +1645,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 const timeMs = Math.round((frameIdOri / fps) * 1000);
 
                 // 4. Xây dựng chuỗi văn bản theo đúng định dạng yêu cầu
-                const finalText = `QA-${qaText}-${videoId}-${timeMs}`;
-
+                // const finalText = `QA-${qaText}-${videoId}-${timeMs}`;
+                const finalText = `${qaText}`;
                 console.log("submit info: ", finalText);
                 // 5. Tạo submissionBody theo cấu trúc của QA
                 submissionBody = {
@@ -2601,12 +2604,23 @@ document.addEventListener('DOMContentLoaded', function () {
         </div>
         <div class="asr-filter-container">
         <input type="text" class="asr-input" placeholder="Enter ASR">
-        <div class="fuzzy-switch-wrapper">
-        <label class="fuzzy-switch-container">
-        <input type="checkbox">
-        <span class="slider round"></span>
-        </label>
-        <span>Fuzzy Search</span>
+        <div class="ocr-mode-container" style="margin-left: 6px;">
+        <span class="ocr-mode-label">Mode:</span>
+        <select class="asr-mode-select" title="ASR Filter Mode">
+            <option value="keyword" selected>Keyword</option>
+            <option value="fuzzy">Fuzzy</option>
+            <option value="embedding">Embedding</option>
+        </select>
+        </div>
+        <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 4px;">
+        <span class="ocr-mode-label">Top K:</span>
+        <select class="asr-topk-select" title="ASR Embedding Top K">
+            <option value="80">Low (80)</option>
+            <option value="110" selected>Medium (110)</option>
+            <option value="200">High (200)</option>
+            <option value="custom">Custom</option>
+        </select>
+        <input type="number" class="asr-topk-custom-input" min="1" max="5000" value="110" placeholder="Top K" style="display: none; width: 65px; padding: 2px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff;">
         </div>
         </div>
         <div class="image-upload-area" style="display: none;">
@@ -2682,6 +2696,71 @@ document.addEventListener('DOMContentLoaded', function () {
                     e.preventDefault(); // Ngăn hành vi mặc định
                     textInput.focus(); // Chuyển focus trở lại ô tìm kiếm chính
                 }
+            });
+        }
+
+        // Restore & persist OCR mode selection across refreshes
+        const ocrModeSelect = searchGroup.querySelector('.ocr-mode-select');
+        if (ocrModeSelect) {
+            const savedOcrMode = localStorage.getItem('saved_ocr_mode');
+            if (savedOcrMode) {
+                ocrModeSelect.value = savedOcrMode;
+            }
+            ocrModeSelect.addEventListener('change', function () {
+                localStorage.setItem('saved_ocr_mode', this.value);
+            });
+        }
+
+        // Restore & persist ASR mode selection across refreshes
+        const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
+        const asrTopKContainer = searchGroup.querySelector('.asr-topk-container');
+        const asrTopKSelect = searchGroup.querySelector('.asr-topk-select');
+        const asrTopKCustomInput = searchGroup.querySelector('.asr-topk-custom-input');
+
+        if (asrModeSelect) {
+            const savedAsrMode = localStorage.getItem('saved_asr_mode');
+            if (savedAsrMode) {
+                asrModeSelect.value = savedAsrMode;
+            }
+            const updateAsrTopKVisibility = () => {
+                if (asrTopKContainer) {
+                    asrTopKContainer.style.display = asrModeSelect.value === 'embedding' ? 'flex' : 'none';
+                }
+            };
+            updateAsrTopKVisibility();
+
+            asrModeSelect.addEventListener('change', function () {
+                localStorage.setItem('saved_asr_mode', this.value);
+                updateAsrTopKVisibility();
+            });
+        }
+
+        if (asrTopKSelect) {
+            const savedAsrTopK = localStorage.getItem('saved_asr_top_k');
+            if (savedAsrTopK) {
+                asrTopKSelect.value = savedAsrTopK;
+            }
+            const savedAsrTopKCustom = localStorage.getItem('saved_asr_top_k_custom');
+            if (savedAsrTopKCustom && asrTopKCustomInput) {
+                asrTopKCustomInput.value = savedAsrTopKCustom;
+            }
+
+            const updateCustomInputVisibility = () => {
+                if (asrTopKCustomInput) {
+                    asrTopKCustomInput.style.display = asrTopKSelect.value === 'custom' ? 'inline-block' : 'none';
+                }
+            };
+            updateCustomInputVisibility();
+
+            asrTopKSelect.addEventListener('change', function () {
+                localStorage.setItem('saved_asr_top_k', this.value);
+                updateCustomInputVisibility();
+            });
+        }
+
+        if (asrTopKCustomInput) {
+            asrTopKCustomInput.addEventListener('change', function () {
+                localStorage.setItem('saved_asr_top_k_custom', this.value);
             });
         }
         textInput.addEventListener('keydown', function (e) {
@@ -2956,9 +3035,28 @@ document.addEventListener('DOMContentLoaded', function () {
                 const asrInput = searchGroup.querySelector('.asr-input');
                 if (asrInput && asrInput.value.trim() !== '') {
                     filterOptions.asr = asrInput.value.trim();
-                    const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
-                    if (asrFuzzySwitch && asrFuzzySwitch.checked) {
-                        filterOptions.asr_fuzzy = true;
+                    const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
+                    if (asrModeSelect) {
+                        filterOptions.asr_mode = asrModeSelect.value;
+                        if (asrModeSelect.value === 'embedding') {
+                            const asrTopKSelect = searchGroup.querySelector('.asr-topk-select');
+                            const asrTopKCustomInput = searchGroup.querySelector('.asr-topk-custom-input');
+                            if (asrTopKSelect) {
+                                if (asrTopKSelect.value === 'custom' && asrTopKCustomInput) {
+                                    filterOptions.asr_top_k = parseInt(asrTopKCustomInput.value) || 110;
+                                } else {
+                                    filterOptions.asr_top_k = parseInt(asrTopKSelect.value) || 110;
+                                }
+                            }
+                        }
+                    } else {
+                        const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
+                        if (asrFuzzySwitch && asrFuzzySwitch.checked) {
+                            filterOptions.asr_fuzzy = true;
+                            filterOptions.asr_mode = "fuzzy";
+                        } else {
+                            filterOptions.asr_mode = "keyword";
+                        }
                     }
                 }
             }
@@ -3095,6 +3193,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
+            if (filterOptions.asr_mode) {
+                body.asr_mode = filterOptions.asr_mode;
+            }
+            if (filterOptions.asr_top_k) {
+                body.asr_top_k = filterOptions.asr_top_k;
+            }
         }
 
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/text-to-text`, {
@@ -3138,6 +3242,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
+            if (filterOptions.asr_mode) {
+                body.asr_mode = filterOptions.asr_mode;
+            }
+            if (filterOptions.asr_top_k) {
+                body.asr_top_k = filterOptions.asr_top_k;
+            }
         }
 
         if (filterOptions.ocr_fuzzy) {
@@ -3179,6 +3289,12 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
+            if (filterOptions.asr_mode) {
+                body.asr_mode = filterOptions.asr_mode;
+            }
+            if (filterOptions.asr_top_k) {
+                body.asr_top_k = filterOptions.asr_top_k;
+            }
         }
         if (filterOptions.ocr_fuzzy) {
             body.ocr_fuzzy = true;
@@ -3209,9 +3325,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
+            if (filterOptions.ocr_mode) {
+                body.ocr_mode = filterOptions.ocr_mode;
+            }
         }
         if (filterOptions.asr) {
             body.asr = filterOptions.asr;
+            if (filterOptions.asr_mode) {
+                body.asr_mode = filterOptions.asr_mode;
+            }
+            if (filterOptions.asr_top_k) {
+                body.asr_top_k = filterOptions.asr_top_k;
+            }
         }
 
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/text-to-image`, {
@@ -3272,7 +3397,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 ...image, // Giữ lại tất cả thông tin cũ của frame
                 isInQueue: queuedFramesSet.has(image.frameIdentifier) // Thêm thuộc tính mới
             };
-        }).sort((a, b) => getSortScore(b) - getSortScore(a));
+        });
 
         allImages = markedImages;
         frameSelectionManager.clearAllSelections();
@@ -5090,6 +5215,31 @@ document.addEventListener('DOMContentLoaded', function () {
             // NÉM LỖI RA NGOÀI ĐỂ HÀM MỚI BẮT ĐƯỢC
             throw error;
         }
+    }
+
+    function saveUsername() {
+        if (!usernameInput) return;
+        const newUsername = usernameInput.value.trim();
+        if (!newUsername) {
+            showToastNotification('Username cannot be empty.', 'error');
+            return;
+        }
+        if (newUsername === currentUser) {
+            showToastNotification('Username is unchanged.', 'info');
+            return;
+        }
+        currentUser = newUsername;
+        localStorage.setItem('aic_lunch_username', newUsername);
+
+        if (ws) {
+            try {
+                ws.close();
+            } catch (e) {
+                console.error("Error closing WebSocket for old username:", e);
+            }
+        }
+        connectWebSocket();
+        showToastNotification(`Username updated to '${newUsername}'.`, 'success');
     }
 
     function saveSerperApiKey() {
