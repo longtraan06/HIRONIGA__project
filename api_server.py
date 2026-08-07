@@ -240,18 +240,19 @@ Available models:
 "google/siglip2-giant-opt-patch16-384"
 """
 
-model_paths=[
-    "google/siglip2-large-patch16-512",
-]
+def resolve_config_path() -> str:
+    for i, arg in enumerate(sys.argv):
+        if arg in ("--config", "--config-path", "--database-config") and i + 1 < len(sys.argv):
+            return sys.argv[i + 1]
+        elif arg.startswith("--config="):
+            return arg.split("=", 1)[1]
+        elif arg.startswith("--config-path="):
+            return arg.split("=", 1)[1]
+    return os.getenv("DATABASE_CONFIG_PATH", "configs/database.yaml")
 
-milvus = MilvusManager(
-                        host="192.168.20.150",
-                        port='6050',
-                        es_host=os.getenv("ES_HOST", "http://192.168.20.150:9250"),
-                        model_paths=model_paths,
-                        mode = 'AIC',
-                        prefix=None
-                    )
+config_path = resolve_config_path()
+print(f"[API_SERVER] Initializing database using config '{config_path}'...")
+milvus = MilvusManager.from_config(config_path=config_path)
 
 
 # clear cache method
@@ -589,11 +590,14 @@ class TemporalStartRequest(BaseModel):
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
+    ocr_mode: Optional[str] = "cascading"
     user_id: Optional[str] = None    # <<< THÊM VÀO
     query_id: Optional[str] = None 
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
+    asr_mode: Optional[str] = "keyword"
+    asr_top_k: Optional[int] = None
     cluster_mode_enabled: bool = True
 
 class TemporalContinueRequest(BaseModel):
@@ -605,11 +609,14 @@ class TemporalContinueRequest(BaseModel):
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
+    ocr_mode: Optional[str] = "cascading"
     query_id: Optional[str] = None 
     user_id: Optional[str] = None
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
+    asr_mode: Optional[str] = "keyword"
+    asr_top_k: Optional[int] = None
     cluster_mode_enabled: bool = True
 
 class TextToImageRequest(BaseModel):
@@ -621,6 +628,9 @@ class TextToImageRequest(BaseModel):
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
+    ocr_mode: Optional[str] = "cascading"
+    asr_mode: Optional[str] = "keyword"
+    asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
     cluster_mode_enabled: bool = True
 
@@ -633,6 +643,9 @@ class TextToTextRequest(BaseModel):
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
+    ocr_mode: Optional[str] = "cascading"
+    asr_mode: Optional[str] = "keyword"
+    asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
     cluster_mode_enabled: bool = True
 
@@ -680,7 +693,8 @@ async def get_available_models():
     """
     Trả về danh sách các model có sẵn để tìm kiếm.
     """
-    return {"models": model_paths}
+    models = getattr(milvus, "model_names", ["google/siglip2-large-patch16-512"])
+    return {"models": models}
 
 
 @app.post("/api/clusters/resolve-frame")
@@ -865,7 +879,10 @@ async def search_text_to_image(req: TextToImageRequest):
         top_k_tags=req.top_k_tags,
         tags_filter=req.tags_filter,
         ocr=req.ocr,
+        ocr_mode=getattr(req, "ocr_mode", "cascading"),
         asr=req.asr,
+        asr_mode=getattr(req, "asr_mode", "keyword"),
+        asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter
     )
@@ -902,7 +919,10 @@ async def search_text_to_text(req: TextToTextRequest):
         top_k_tags=req.top_k_tags,
         tags_filter=req.tags_filter,
         ocr=req.ocr,
+        ocr_mode=getattr(req, "ocr_mode", "cascading"),
         asr=req.asr,
+        asr_mode=getattr(req, "asr_mode", "keyword"),
+        asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter
     )
@@ -933,7 +953,7 @@ async def search_image(
         search_in="image",
         top_k=min(top_k, 1000),
         requested_top_k=top_k,
-        model_name=model_name,
+        model_name="google/siglip2-large-patch16-512",
         use_tag=use_tag,
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
@@ -948,7 +968,7 @@ async def search_image(
         mode="image",
         search_in="image",
         top_k=min(top_k, 1000),  # Giới hạn top_k
-        model_name=model_name,
+        model_name="google/siglip2-large-patch16-512",
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
@@ -1201,7 +1221,10 @@ async def temporal_search_start(req: TemporalStartRequest):
             top_k_tags=req.top_k_tags,
             tags_filter=req.tags_filter,
             ocr = req.ocr,
+            ocr_mode = getattr(req, "ocr_mode", "cascading"),
             asr = req.asr,
+            asr_mode = getattr(req, "asr_mode", "keyword"),
+            asr_top_k = getattr(req, "asr_top_k", None),
             user_id=req.user_id,    # <<< THÊM VÀO
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
@@ -1255,7 +1278,10 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             top_k_tags=req.top_k_tags,
             tags_filter=req.tags_filter,
             ocr = req.ocr,
+            ocr_mode = getattr(req, "ocr_mode", "cascading"),
             asr = req.asr,
+            asr_mode = getattr(req, "asr_mode", "keyword"),
+            asr_top_k = getattr(req, "asr_top_k", None),
             user_id=req.chain_id,  # <<< THÊM VÀO (chain_id từ client chính là user_id)
             query_id=req.query_id,
             use_event_filter=req.use_event_filter,
@@ -1881,4 +1907,18 @@ if os.path.isdir(static_dir):
 else:
     print("Static frontend directory not found; serving API endpoints only.")
 
-# usage uvicorn api_server:app --host 0.0.0.0 --port 80 --workers 1 --ws-ping-interval 5 --ws-ping-timeout 5
+# usage: python -m src.backend.api_server --config configs/database.yaml --port 8000
+if __name__ == "__main__":
+    import argparse
+    import uvicorn
+
+    parser = argparse.ArgumentParser(description="AIC2026 Backend API Server")
+    parser.add_argument("--config", "--config-path", default="configs/database.yaml", help="Path to database YAML config file")
+    parser.add_argument("--host", default="0.0.0.0", help="Host address to bind to (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    parser.add_argument("--workers", type=int, default=1, help="Worker count (default: 1)")
+    args, unknown = parser.parse_known_args()
+
+    os.environ["DATABASE_CONFIG_PATH"] = args.config
+    print(f"Starting API Server on {args.host}:{args.port} using config '{args.config}'...")
+    uvicorn.run("src.backend.api_server:app", host=args.host, port=args.port, workers=args.workers, reload=False)
