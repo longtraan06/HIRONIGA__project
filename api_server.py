@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request, HTTPException, Depends, status, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, UploadFile, File, Form, Request, Response, HTTPException, Depends, Query, status, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
@@ -22,10 +22,14 @@ import json
 import hashlib
 import secrets
 import traceback
-import aioredis
+try:
+    import redis.asyncio as aioredis
+except ImportError:
+    import aioredis
 import asyncio
 import fcntl
 import io
+from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
 FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
@@ -221,16 +225,17 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=allowed_origin_regex,
-    allow_credentials=True, 
-    allow_methods=["*"],    
-    allow_headers=["*"],    
-)   
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 REDIS_URL = "redis://192.168.20.156:6060"
 redis_async_client = aioredis.from_url(REDIS_URL, decode_responses=True)
 keysframe_path_root = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/frames"
 video_path_root = "/mlcv1/Datasets/HCMAI25/full"
 hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
+#hls_path = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/video_480p/" # encoded 480p
 
 """
 Available models:
@@ -267,12 +272,12 @@ ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 @app.on_event("shutdown")
 async def shutdown_event():
     milvus.close()
-    
+
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     """Hàm xác thực admin qua Basic Auth"""
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME)
     correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD)
-    
+
     if not (correct_username and correct_password):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -312,7 +317,7 @@ async def get_hls_segment(video_name: str, segment_filename: str):
         media_type = "video/mp2t"
     elif segment_filename.endswith('.m4s') or segment_filename.endswith('.mp4'):
         media_type = "video/mp4"
-    
+
     return FileResponse(segment_path, media_type=media_type)
 
 @app.post("/api/admin/clear-cache")
@@ -322,7 +327,7 @@ async def clear_redis_cache(
 ):
     """
     Xóa cache trong Redis.
-    
+
     - cache_type="all": Xóa tất cả cache
     - cache_type="temporal": Chỉ xóa temporal chains
     - cache_type="search": Chỉ xóa cache tìm kiếm
@@ -332,41 +337,41 @@ async def clear_redis_cache(
         if cache_type == "all":
             await redis_async_client.flushall()
             return {"success": True, "message": "All Redis cache cleared", "count": "all"}
-        
+
         deleted_count = 0
-        
+
         if cache_type == "temporal" or cache_type == "all":
             pattern = "temporal_chain:*"
             keys = await get_keys_by_pattern(pattern)
             if keys:
                 deleted_count += await redis_async_client.delete(*keys)
-        
+
         if cache_type == "search" or cache_type == "all":
             pattern = "search_text:*"
             keys = await redis_async_client.keys(pattern)
             if keys:
                 deleted_count += await redis_async_client.delete(*keys)
-                
+
             for func_name in ["get_video_info", "search_image"]:
                 pattern = f"{func_name}:*"
                 keys = await redis_async_client.keys(pattern)
                 if keys:
                     deleted_count += await redis_async_client.delete(*keys)
-        
+
         if cache_type == "rate_limit" or cache_type == "all":
             pattern = "rate_limit:*"
             keys = await redis_async_client.keys(pattern)
             if keys:
                 deleted_count += await redis_async_client.delete(*keys)
-        
+
         return {
             "success": True,
             "message": f"Cleared {cache_type} cache from Redis",
             "deleted_count": deleted_count
         }
-    
+
     except Exception as e:
-        
+
         traceback.print_exc()
         return {
             "success": False,
@@ -379,17 +384,17 @@ async def redis_stats():
     """Lấy thống kê về dữ liệu trong Redis."""
     try:
         info = await redis_async_client.info()
-        
+
         temporal_keys = len(await redis_async_client.keys("temporal_chain:*"))
         search_cache_keys = len(await redis_async_client.keys("search_text:*")) + len(await redis_async_client.keys("get_video_info:*"))
         rate_limit_keys = len(await redis_async_client.keys("rate_limit:*"))
-        
+
         total_keys = int(info.get("db0", {}).get("keys", 0))
-        
+
         # Sử dụng bộ nhớ
         used_memory = info.get("used_memory_human", "unknown")
         used_memory_peak = info.get("used_memory_peak_human", "unknown")
-        
+
         return {
             "success": True,
             "total_keys": total_keys,
@@ -414,27 +419,27 @@ async def redis_stats():
 # clear rate limit counters: curl -X POST -u "admin:hlgay" http://localhost:34267/api/admin/clear-cache?cache_type=rate_limit
 # get redis stats: curl http://192.168.20.156:8080/api/admin/redis-stats
 
- 
+
 def cache_result(permanent=True, expire_time=300):
     def decorator(func):
         @wraps(func)
         async def wrapper(*args, **kwargs):
             cache_key = f"{func.__name__}:{hashlib.md5(str(args).encode() + str(kwargs).encode()).hexdigest()}"
-            
+
             # NON-BLOCKING: await the async call
             cached_result = await redis_async_client.get(cache_key)
             if cached_result:
                 # No need to decode here if you set decode_responses=True
-                return json.loads(cached_result) 
-            
+                return json.loads(cached_result)
+
             result = await func(*args, **kwargs)
-            
+
             # NON-BLOCKING: await the async call
             if permanent:
                 await redis_async_client.set(cache_key, json.dumps(result, default=str))
             else:
                 await redis_async_client.setex(cache_key, expire_time, json.dumps(result, default=str))
-            
+
             return result
         return wrapper
     return decorator
@@ -460,7 +465,7 @@ class ConnectionManager:
         self.connection_users[websocket] = username
         self.connection_queues[websocket] = asyncio.PriorityQueue(maxsize=64)
         self.writer_tasks[websocket] = asyncio.create_task(self._connection_writer(websocket))
-        
+
         # Chỉ khởi tạo một lần cho mỗi worker
         if self.redis_pubsub_client is None:
             self.redis_pubsub_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
@@ -526,7 +531,7 @@ class ConnectionManager:
                 async with self.redis_pubsub_client.pubsub() as pubsub:
                     await pubsub.subscribe(WEBSOCKET_CHANNEL)
                     print(f"Worker (PID: {os.getpid()}) subscribed to '{WEBSOCKET_CHANNEL}'")
-                    
+
                     # Vòng lặp lắng nghe tin nhắn
                     while True:
                         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
@@ -543,11 +548,11 @@ class ConnectionManager:
             except Exception as e:
                 # Bắt các lỗi không lường trước khác, chờ và thử lại
                 print(f"An unexpected error occurred in pubsub listener: {e}. Restarting in 5 seconds...")
-                
+
                 traceback.print_exc()
                 self.redis_pubsub_client = None # Reset để kết nối lại
                 await asyncio.sleep(5)
-    
+
     async def publish_update(self, message: str):
         """Đăng (publish) một tin nhắn cập nhật lên kênh Redis."""
         await redis_async_client.publish(WEBSOCKET_CHANNEL, message)
@@ -586,13 +591,13 @@ class TemporalStartRequest(BaseModel):
     top_k: int = 650
     model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
-    top_k_tags: Optional[int] = 5 
+    top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
     ocr_mode: Optional[str] = "cascading"
     user_id: Optional[str] = None    # <<< THÊM VÀO
-    query_id: Optional[str] = None 
+    query_id: Optional[str] = None
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
@@ -610,7 +615,7 @@ class TemporalContinueRequest(BaseModel):
     ocr: str = None
     asr: str = None
     ocr_mode: Optional[str] = "cascading"
-    query_id: Optional[str] = None 
+    query_id: Optional[str] = None
     user_id: Optional[str] = None
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
@@ -676,7 +681,7 @@ async def test_redis_connection():
         test_value = "working"
         await redis_async_client.setex(test_key, 60, test_value)
         retrieved = await redis_async_client.get(test_key)
-        
+
         return {
             "status": "success",
             "message": "Redis connection is working",
@@ -761,17 +766,17 @@ async def debug_temporal_chain(chain_id: str):
     try:
         chain_key = f"temporal_chain:{chain_id}"
         chain_data_str = await redis_async_client.get(chain_key)
-        
+
         if not chain_data_str:
             return {
                 "exists": False,
                 "message": "Chain not found in Redis"
             }
-        
+
         try:
             chain_data = json.loads(chain_data_str)
             state_keys = list(chain_data.get("state", {}).keys())
-            
+
             return {
                 "exists": True,
                 "last_update": chain_data.get("last_update"),
@@ -793,10 +798,10 @@ async def debug_temporal_chain(chain_id: str):
 @app.get("/frames/{video_name}/{frame_name}")
 async def get_frame(video_name: str, frame_name: str):
     frame_path = f"{keysframe_path_root}/{video_name}/{frame_name}"
-    
+
     if not os.path.exists(frame_path):
         raise HTTPException(status_code=404, detail="Frame not found")
-    
+
     return FileResponse(
         frame_path,
         media_type="image/webp",
@@ -809,11 +814,11 @@ async def get_frame(video_name: str, frame_name: str):
 @app.get("/videos/{video_name}")
 async def get_video(video_name: str):
     video_path = f"{video_path_root}/{video_name}"
-    
+
     # Kiểm tra file tồn tại
     if not os.path.exists(video_path):
         raise HTTPException(status_code=404, detail="Video not found")
-    
+
     # Trả về FileResponse với headers phù hợp
     return FileResponse(
         video_path,
@@ -829,7 +834,7 @@ def check_video(video_name: str):
     import os
     video_path = f"{video_path_root}/{video_name}.mp4"
     exists = os.path.exists(video_path)
-    
+
     if exists:
         file_size = os.path.getsize(video_path)
         return {
@@ -932,8 +937,8 @@ async def search_text_to_text(req: TextToTextRequest):
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
     top_k: int = Form(600, description="Số lượng kết quả trả về"),
-    model_name = "google/siglip2-large-patch16-512",  # Mặc định model 
-    use_tag: bool = Form(False, description="Enable tag filtering"), 
+    model_name = "google/siglip2-large-patch16-512",  # Mặc định model
+    use_tag: bool = Form(False, description="Enable tag filtering"),
     top_k_tags: int = Form(5, description="Top K tags to use"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
     cluster_mode_enabled: bool = Form(True, description="Apply global cluster exclusions")
@@ -944,7 +949,7 @@ async def search_image(
     """
     # Đọc nội dung của file ảnh dưới dạng bytes
     image_bytes = await file.read()
-    
+
     cluster_filter = get_search_cluster_filter(cluster_mode_enabled)
     log_search_debug(
         "image-to-image",
@@ -961,7 +966,7 @@ async def search_image(
         uploaded_bytes=len(image_bytes),
         cluster_mode_enabled=cluster_mode_enabled,
     )
-    
+
     # Gọi hàm search của Milvus với mode="image"
     results = milvus.search(
         query=image_bytes,
@@ -974,7 +979,7 @@ async def search_image(
         use_event_filter=use_event_filter,
         user_filter=cluster_filter
     )
-    
+
     return process_milvus_results_for_frontend(results)
 
 
@@ -1011,10 +1016,10 @@ async def temporal_search_start_with_image(
     try:
         # 1. Tạo một chain_id mới và duy nhất
         chain_id = str(uuid.uuid4())
-        
+
         # 2. Đọc nội dung ảnh
         image_bytes = await file.read()
-        
+
         cluster_filter = get_search_cluster_filter(cluster_mode_enabled)
         log_search_debug(
             "temporal-start-with-image",
@@ -1032,7 +1037,7 @@ async def temporal_search_start_with_image(
             uploaded_bytes=len(image_bytes),
             cluster_mode_enabled=cluster_mode_enabled,
         )
-        
+
         initial_results = milvus.search(
             query=image_bytes,
             mode="image",
@@ -1045,15 +1050,101 @@ async def temporal_search_start_with_image(
             use_event_filter=use_event_filter,
             user_filter=cluster_filter
         )
-        
+
         return {
             "chain_id": chain_id,
             "initial_results": process_milvus_results_for_frontend(initial_results)
         }
-        
+
     except Exception as e:
-        
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/asr_transcript", tags=["Transcripts & Text"])
+async def fetch_asr_transcript(
+    frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
+    video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
+    timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    model_name: Optional[str] = Query(None, description="Target Milvus model name"),
+):
+    """Fetches ASR transcript details for a frame or video timestamp."""
+    if not frame_specify and not (video_name and timestamp is not None):
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+        )
+    try:
+        result = milvus.get_asr_transcript_for_frame(
+            frame_specify=frame_specify,
+            video_name=video_name,
+            timestamp=timestamp,
+            model_name=model_name,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ocr_text", tags=["Transcripts & Text"])
+async def fetch_ocr_text(
+    frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
+    video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
+    timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    model_name: Optional[str] = Query(None, description="Target Milvus model name"),
+):
+    """Fetches OCR text recognized on a specific frame."""
+    if not frame_specify and not (video_name and timestamp is not None):
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+        )
+    try:
+        result = milvus.get_ocr_text_for_frame(
+            frame_specify=frame_specify,
+            video_name=video_name,
+            timestamp=timestamp,
+            model_name=model_name,
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/frame_text", tags=["Transcripts & Text"])
+async def fetch_frame_text(
+    frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
+    video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
+    timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    model_name: Optional[str] = Query(None, description="Target Milvus model name"),
+):
+    """Fetches both ASR transcript and OCR text for a specific frame."""
+    if not frame_specify and not (video_name and timestamp is not None):
+        raise HTTPException(
+            status_code=400,
+            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+        )
+    try:
+        asr_data = milvus.get_asr_transcript_for_frame(
+            frame_specify=frame_specify,
+            video_name=video_name,
+            timestamp=timestamp,
+            model_name=model_name,
+        )
+        ocr_data = milvus.get_ocr_text_for_frame(
+            frame_specify=frame_specify,
+            video_name=video_name,
+            timestamp=timestamp,
+            model_name=model_name,
+        )
+        return {
+            "frame_specify": frame_specify or ocr_data.get("frame_specify"),
+            "video_name": video_name or asr_data.get("video_name"),
+            "timestamp": timestamp if timestamp is not None else asr_data.get("timestamp"),
+            "asr": asr_data,
+            "ocr": ocr_data,
+        }
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1064,14 +1155,14 @@ async def get_frame_metadata(video_id: str):
     """
     # Đường dẫn đến file metadata.json trên server
     metadata_path = f"{keysframe_path_root}/{video_id}/metadata.json"
-    
+
     # Kiểm tra xem file có tồn tại không
     if not os.path.exists(metadata_path):
         raise HTTPException(
-            status_code=404, 
+            status_code=404,
             detail=f"Metadata file not found for video {video_id}"
         )
-    
+
     # Trả về file dưới dạng JSON
     return FileResponse(
         metadata_path,
@@ -1090,17 +1181,17 @@ async def get_video_info(video_id: str):
     """
     # THAY ĐỔI: Đường dẫn mới
     video_path_image = f"{keysframe_path_root}/{video_id}"
-    
+
     if not os.path.isdir(video_path_image):
         raise HTTPException(status_code=404, detail="Video folder not found")
-    
+
     try:
         # Lấy tất cả file .webp trong thư mục
         all_files = [f for f in os.listdir(video_path_image) if f.lower().endswith('.webp')]
-        
+
         # Sắp xếp theo thứ tự frame
         all_files.sort(key=lambda name: int(name.split('_')[1].split('.')[0]))
-        
+
         return {
             "total_frames": len(all_files),
             "frame_filenames": all_files,
@@ -1119,7 +1210,7 @@ def _load_and_sort_metadata(video_id: str):
 
     with open(metadata_path, 'r') as f:
         metadata_file_content = json.load(f)
-    
+
     # Metadata có thể nằm trong một key trùng tên với video_id
     video_metadata = metadata_file_content.get(video_id, metadata_file_content)
 
@@ -1136,10 +1227,52 @@ def _load_and_sort_metadata(video_id: str):
     frames_list.sort(key=lambda x: x['frame_id_ori'])
     return frames_list
 
+def _metadata_timestamp_to_seconds(value):
+    if isinstance(value, (int, float)):
+        return max(0.0, float(value))
+    if not isinstance(value, str):
+        return 0.0
+
+    parts = value.strip().split(':')
+    try:
+        if len(parts) == 3:
+            return max(0.0, int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2]))
+        if len(parts) == 2:
+            return max(0.0, int(parts[0]) * 60 + float(parts[1]))
+        return max(0.0, float(parts[0]))
+    except (TypeError, ValueError):
+        return 0.0
+
+@lru_cache(maxsize=128)
+def _load_keyframe_index(video_id: str):
+    sorted_frames = _load_and_sort_metadata(video_id)
+    if sorted_frames is None:
+        return None
+
+    compact_frames = []
+    fps = None
+    for frame in sorted_frames:
+        timestamp = _metadata_timestamp_to_seconds(frame.get('time-stamp', frame.get('timestamp', 0)))
+        frame_fps = frame.get('fps')
+        if fps is None and isinstance(frame_fps, (int, float)) and frame_fps > 0:
+            fps = float(frame_fps)
+        compact_frames.append({
+            'frame_id_ori': frame['frame_id_ori'],
+            'timestamp': timestamp,
+            'filename': frame['filename'],
+        })
+
+    compact_frames.sort(key=lambda frame: (frame['timestamp'], frame['frame_id_ori']))
+    return {
+        'fps': fps,
+        'frames': compact_frames,
+        'timestamps': [frame['timestamp'] for frame in compact_frames],
+    }
+
 @app.get("/api/keyframes/neighbors/{video_id}/{frame_id_ori}")
 async def get_neighboring_keyframes(
-    video_id: str, 
-    frame_id_ori: int, 
+    video_id: str,
+    frame_id_ori: int,
     look_behind: int = 50, # Mặc định cho openImageModal
     look_ahead: int = 50   # Mặc định cho openImageModal
 ):
@@ -1158,9 +1291,9 @@ async def get_neighboring_keyframes(
     # >>> LOGIC MỚI: Tính toán khoảng dựa trên look_behind và look_ahead <<<
     start_index = max(0, target_index - look_behind)
     end_index = min(len(sorted_frames), target_index + look_ahead + 1)
-    
+
     neighboring_frames = sorted_frames[start_index:end_index]
-    
+
     # Chuẩn hóa tên thuộc tính trước khi trả về
     normalized_frames = []
     for frame in neighboring_frames:
@@ -1168,8 +1301,46 @@ async def get_neighboring_keyframes(
         if 'time-stamp' in new_frame:
             new_frame['timestamp'] = new_frame.pop('time-stamp')
         normalized_frames.append(new_frame)
-    
+
     return normalized_frames
+
+@app.get("/api/keyframes/window/{video_id}")
+async def get_keyframe_window(
+    video_id: str,
+    response: Response,
+    timestamp: float = Query(0.0, ge=0.0),
+    before: int = Query(25, ge=0, le=100),
+    after: int = Query(25, ge=0, le=100),
+):
+    """Return only the keyframe fields needed by the video workbench."""
+    keyframe_index = _load_keyframe_index(video_id)
+    if keyframe_index is None:
+        raise HTTPException(status_code=404, detail=f"Metadata for video {video_id} not found.")
+
+    frames = keyframe_index['frames']
+    if not frames:
+        return {
+            'video_name': video_id,
+            'fps': keyframe_index['fps'],
+            'center_index': -1,
+            'has_previous': False,
+            'has_next': False,
+            'frames': [],
+        }
+
+    center_index = max(0, bisect_right(keyframe_index['timestamps'], timestamp) - 1)
+    start_index = max(0, center_index - before)
+    end_index = min(len(frames), center_index + after + 1)
+    response.headers['Cache-Control'] = 'public, max-age=3600, stale-while-revalidate=86400'
+    return {
+        'video_name': video_id,
+        'fps': keyframe_index['fps'],
+        'center_index': center_index,
+        'window_start_index': start_index,
+        'has_previous': start_index > 0,
+        'has_next': end_index < len(frames),
+        'frames': frames[start_index:end_index],
+    }
 
 
 
@@ -1179,7 +1350,7 @@ async def temporal_search_start(req: TemporalStartRequest):
         # 1. Sử dụng user_id từ request làm chain_id
         if not req.user_id: # <<< THÊM VÀO
             raise HTTPException(status_code=400, detail="user_id is required to start a temporal chain.") # <<< THÊM VÀO
-        
+
         chain_id = req.user_id # <<< THAY ĐỔI
 
         cluster_filter = get_search_cluster_filter(req.cluster_mode_enabled)
@@ -1217,7 +1388,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             start_temporal_chain=True,
             top_k=min(req.top_k, 1000),
             model_name=req.model_name,
-            use_tag=req.use_tag,    
+            use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
             tags_filter=req.tags_filter,
             ocr = req.ocr,
@@ -1236,7 +1407,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             "chain_id": chain_id,
             "initial_results": process_milvus_results_for_frontend(initial_results)
         }
-    
+
     except Exception as e:
         print(f"ERROR in temporal_search_start: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1245,7 +1416,7 @@ async def temporal_search_start(req: TemporalStartRequest):
 async def temporal_search_continue(req: TemporalContinueRequest):
     try:
         # 1. Kiểm tra xem chain_id có tồn tại trong Redis không
-        
+
         cluster_filter = get_search_cluster_filter(req.cluster_mode_enabled)
         log_search_debug(
             "temporal-continue",
@@ -1289,19 +1460,19 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             asr_fuzzy=req.asr_fuzzy,
             user_filter=cluster_filter
         )
-        
+
         reranked_list = temporal_answer.get("query_A_reranked", [])
         processed_reranked_list = process_milvus_results_for_frontend(reranked_list)
-        
+
         # current_query_results = temporal_answer.get("current_query_results", [])
         # )
-        
+
         return {
             "query_idx": temporal_answer.get("query_idx"),
             # "current_query_results": current_query_results,
             "query_A_reranked": processed_reranked_list
         }
-    
+
     except Exception as e:
         print(f"ERROR in temporal_search_continue: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1316,17 +1487,17 @@ def process_milvus_results_for_frontend(results: list) -> list:
             video_name = metadata.get("video_name")
         except:
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail="Metadata missing 'video_name' field"
             )
-        
+
         # THAY ĐỔI: Đường dẫn mới cho frames
         full_frame_name = frame_name if frame_name.endswith('.webp') else f"{frame_name}.webp"
         #normal
         path = f"/frames/{video_name}/{full_frame_name}"  # Đường dẫn URL mới
         # Đường dẫn video giữ nguyên
         video_path = f"/videos/{video_name}.mp4"
-        
+
         match = re.search(r'_(\d+)', frame_name)
         frame_id = int(match.group(1)) if match else 0
         temporal_chain_data = res.get("temporal_chain", {})
@@ -1370,7 +1541,7 @@ async def get_single_frame_temporal_chain(user_id: str, frame_identifier: str):
         return chain_data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
 async def get_trake_queue_items() -> list[dict]:
     raw_frames = await redis_async_client.hgetall(TRAKE_QUEUE_STATE_KEY)
     frames = []
@@ -1647,7 +1818,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
     user_color = get_color_for_user(username)
     await redis_async_client.hset(QUEUE_USERS_KEY, username, user_color)
-    
+
     sorted_identifiers = await redis_async_client.zrevrange(QUEUE_SORTED_SET_KEY, 0, -1)
     current_queue_items = []
     if sorted_identifiers:
@@ -1701,7 +1872,7 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 await send_trake_message(websocket, "trake_ack", {"requestId": (payload or {}).get("requestId"), "cleared": True})
                 await manager.publish_update(json.dumps({"action": "trake_init", "payload": []}))
                 continue
-            
+
             if action == "add_frames":
                 frames_to_add = payload.get("frames", [])
                 VOTE_PRIORITY_MULTIPLIER = 10**10
@@ -1822,14 +1993,14 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
 
     except WebSocketDisconnect:
         manager.disconnect(username, websocket)
-        
-        
+
+
 async def broadcast_trake_queue_update(send_to_specific_connection: Optional[WebSocket] = None):
     update_message = {
         "action": "trake_init",
         "payload": await get_trake_queue_items()
     }
-    
+
     message_str = json.dumps(update_message)
 
     if send_to_specific_connection:
@@ -1849,7 +2020,7 @@ async def handle_trake_submit(request: TrakeSubmitRequest):
     print("--- NHẬN DỮ LIỆU SUBMIT TỪ TRAKE QUEUE ---")
     for frame in submitted_frames:
         print(f"  Event {frame.get('eventNumber')}: {frame.get('frameIdentifier')}")
-    
+
     await redis_async_client.delete(
         TRAKE_QUEUE_STATE_KEY,
         TRAKE_QUEUE_VIDEO_KEY,
@@ -1869,7 +2040,7 @@ async def handle_form_submit(request: FormSubmitRequest):
         # Đảm bảo thư mục lưu trữ tồn tại
         os.makedirs(FORM_SUBMIT_SAVE_PATH, exist_ok=True)
 
-        # Tạo một tên file 
+        # Tạo một tên file
         safe_filename_base = re.sub(r'[\\/*?:"<>|]', "", request.filename)
         safe_filename = f"{safe_filename_base}.csv"
 
@@ -1885,7 +2056,7 @@ async def handle_form_submit(request: FormSubmitRequest):
                 # Ghi mỗi frame trên một dòng
                 for frame_index in request.frame_indices:
                     writer.writerow([request.video_name, frame_index, request.answer])
-            
+
             # Trường hợp 2: User không nhập "answer"
             else:
                 # Ghi tất cả trên một dòng
@@ -1897,7 +2068,7 @@ async def handle_form_submit(request: FormSubmitRequest):
 
     except Exception as e:
         print(f"ERROR saving form submit data: {e}")
-        
+
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to save data: {str(e)}")
 static_dir = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/frontend"
