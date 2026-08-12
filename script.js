@@ -175,7 +175,10 @@ document.addEventListener('DOMContentLoaded', function () {
         seekTimer: null,
         seekInFlight: false,
         seekGeneration: 0,
-        waiters: []
+        settlePromise: null,
+        settleResolve: null,
+        settleTargetFrame: null,
+        settleStatus: 'idle'
     };
     let queuedFramesSet = new Set();
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
@@ -192,12 +195,27 @@ document.addEventListener('DOMContentLoaded', function () {
     let userColors = {}; // Lưu màu của tất cả user
 
     let metadataCache = new Map();
+    const videoKeyframeWindowCache = new Map();
+    const legacyVideoKeyframeIndexCache = new Map();
+    const unavailableKeyframeWindowSources = new Set();
+    const VIDEO_PLAYBACK_RATES = [0.25, 0.5, 1, 1.25, 1.5, 1.75, 2];
+    const VIDEO_WHEEL_STEPS = [0.25, 0.5, 1, 2, 5, 10];
+    let videoWorkbenchSessionId = 0;
+    let videoWorkbenchState = null;
+    let videoPreferences = {
+        playbackRate: 1,
+        wheelSeekSeconds: 1,
+        volume: 1,
+        muted: true
+    };
     let isGoogleSearchMode = false;
     let googleSearchRequestId = 0;
     let lastGoogleSearchQuery = '';
     const googleSearchCache = new Map();
     const googleImageSearchCache = new Map();
     const googleImageSearchInFlight = new Map();
+    const googleOverviewCache = new Map();
+    const googleOverviewInFlight = new Map();
     const googleSummaryCache = new Map();
     const googleSummaryInFlight = new Map();
     let googleAiSummaryEnabled = true;
@@ -205,6 +223,9 @@ document.addEventListener('DOMContentLoaded', function () {
     const GOOGLE_SEARCH_COUNTRY = 'vn';
     const GOOGLE_SEARCH_LANGUAGE = 'vi';
     const GOOGLE_IMAGE_RESULT_COUNT = 10;
+    const SEARCHAPI_BASE_URL = 'https://www.searchapi.io/api/v1/search';
+    const SEARCHAPI_API_KEY = 'X6LVWQjUXXALdQUXJSnPQCkN';
+    const SEARCHAPI_TIMEOUT_MS = 30000;
     const GEMINI_INTERACTIONS_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
     const GEMINI_SUMMARY_MODEL = 'gemini-3.1-flash-lite';
     const GOOGLE_SUMMARY_SOURCE_LIMIT = 8;
@@ -371,6 +392,41 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function setUserScopedSetting(key, value) {
         localStorage.setItem(getUserScopedStorageKey(key), value);
+    }
+
+    function loadVideoPreferencesForCurrentUser() {
+        const savedRate = Number(getUserScopedSetting('video_playback_rate', '1'));
+        const savedWheelStep = Number(getUserScopedSetting('video_wheel_seek_seconds', '1'));
+        const savedVolume = Number(getUserScopedSetting('video_volume', '1'));
+        videoPreferences = {
+            playbackRate: VIDEO_PLAYBACK_RATES.includes(savedRate) ? savedRate : 1,
+            wheelSeekSeconds: VIDEO_WHEEL_STEPS.includes(savedWheelStep) ? savedWheelStep : 1,
+            volume: Number.isFinite(savedVolume) ? Math.max(0, Math.min(1, savedVolume)) : 1,
+            muted: getUserScopedSetting('video_muted', 'true') !== 'false'
+        };
+        applyVideoPreferencesToOpenWorkbench();
+    }
+
+    function applyVideoPreferencesToOpenWorkbench() {
+        const player = document.getElementById('videoPlayer');
+        const rateContainer = document.getElementById('videoPlaybackRates');
+        const rateReadout = document.getElementById('videoPlaybackRateReadout');
+        const wheelSelect = document.getElementById('videoWheelSeekSelect');
+        const wheelHint = document.getElementById('videoWheelHint');
+        const volumeSlider = document.getElementById('volumeSlider');
+        if (player) {
+            player.defaultPlaybackRate = videoPreferences.playbackRate;
+            player.playbackRate = videoPreferences.playbackRate;
+            player.volume = videoPreferences.volume;
+            player.muted = videoPreferences.muted;
+        }
+        rateContainer?.querySelectorAll('[data-rate]').forEach(button => {
+            button.classList.toggle('active', Number(button.dataset.rate) === videoPreferences.playbackRate);
+        });
+        if (rateReadout) rateReadout.textContent = `${videoPreferences.playbackRate}×`;
+        if (wheelSelect) wheelSelect.value = String(videoPreferences.wheelSeekSeconds);
+        if (wheelHint) wheelHint.textContent = `Wheel ±${videoPreferences.wheelSeekSeconds}s`;
+        if (volumeSlider) volumeSlider.value = String(videoPreferences.volume);
     }
 
     function getFrameUrl(videoName, frameName) {
@@ -638,6 +694,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         currentUserId = getOrCreateUserId(); // <<< THÊM VÀO
         currentUser = getUsername();
+        loadVideoPreferencesForCurrentUser();
         const savedFrameServeLocation = getUserScopedSetting('frame_serve_location', 'remote');
         frameServeLocation = savedFrameServeLocation === 'local' ? 'local' : 'remote';
         updateFrameServeLocationUI();
@@ -655,14 +712,24 @@ document.addEventListener('DOMContentLoaded', function () {
             refreshVisibleFrameSources();
             if (currentVideoModalData.videoName) {
                 prepareTrakeTimeline(currentVideoModalData.videoName, document.getElementById('videoPlayer').currentTime);
+                reloadVideoKeyframeWindow();
             }
             showToastNotification(`Frame source: ${frameServeLocation === 'remote' ? 'Remote serve' : 'Local serve'}.`);
         });
 
         videoServeLocationToggle.addEventListener('change', () => {
+            const player = document.getElementById('videoPlayer');
+            const shouldReloadOpenVideo = videoModal.style.display === 'flex' && currentVideoModalData.videoName;
+            const restoreTime = shouldReloadOpenVideo ? player.currentTime : 0;
+            const restoreAutoplay = shouldReloadOpenVideo ? !player.paused : true;
             videoServeLocation = videoServeLocationToggle.checked ? 'remote' : 'local';
             setUserScopedSetting('video_serve_location', videoServeLocation);
             updateVideoServeLocationUI();
+            if (shouldReloadOpenVideo) {
+                const videoName = currentVideoModalData.videoName;
+                document.getElementById('closeVideoModalBtn').click();
+                openVideoModal(videoName, restoreTime, { autoplay: restoreAutoplay });
+            }
             showToastNotification(`Video source: ${videoServeLocation === 'remote' ? 'Remote HLS' : 'Local MP4'}.`);
         });
 
@@ -726,6 +793,9 @@ document.addEventListener('DOMContentLoaded', function () {
             googleAiSummaryEnabled = googleAiSummaryToggle.checked;
             setUserScopedSetting('google_ai_summary_enabled', String(googleAiSummaryEnabled));
             updateGoogleAiSummaryUI();
+            if (googleAiSummaryEnabled && lastGoogleSearchQuery) {
+                startGoogleAiOverview(lastGoogleSearchQuery);
+            }
             refreshVisibleGoogleSearchResults();
         });
 
@@ -2612,15 +2682,10 @@ document.addEventListener('DOMContentLoaded', function () {
             <option value="embedding">Embedding</option>
         </select>
         </div>
-        <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 4px;">
-        <span class="ocr-mode-label">Top K:</span>
-        <select class="asr-topk-select" title="ASR Embedding Top K">
-            <option value="80">Low (80)</option>
-            <option value="110" selected>Medium (110)</option>
-            <option value="200">High (200)</option>
-            <option value="custom">Custom</option>
-        </select>
-        <input type="number" class="asr-topk-custom-input" min="1" max="5000" value="110" placeholder="Top K" style="display: none; width: 65px; padding: 2px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff;">
+        <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 6px;">
+        <span class="ocr-mode-label" style="white-space: nowrap;">Top K:</span>
+        <input type="range" class="asr-topk-slider" min="1" max="100" value="50" step="1" title="ASR Embedding Top K (1-100)" style="width: 85px; flex-shrink: 0; accent-color: #4CAF50; cursor: pointer; vertical-align: middle;">
+        <strong class="asr-topk-value" style="color: #4CAF50; font-weight: 600; min-width: 26px; display: inline-block; text-align: left;">50</strong>
         </div>
         </div>
         <div class="image-upload-area" style="display: none;">
@@ -2708,14 +2773,44 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             ocrModeSelect.addEventListener('change', function () {
                 localStorage.setItem('saved_ocr_mode', this.value);
+                if (textInput) textInput.focus();
+            });
+            ocrModeSelect.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (textInput) {
+                        textInput.focus();
+                        const searchQuery = textInput.value;
+                        if (searchQuery) performSearch(searchQuery, 'text', searchGroup);
+                    }
+                }
             });
         }
 
         // Restore & persist ASR mode selection across refreshes
         const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
         const asrTopKContainer = searchGroup.querySelector('.asr-topk-container');
-        const asrTopKSelect = searchGroup.querySelector('.asr-topk-select');
-        const asrTopKCustomInput = searchGroup.querySelector('.asr-topk-custom-input');
+        const asrTopKSlider = searchGroup.querySelector('.asr-topk-slider');
+        const asrTopKValue = searchGroup.querySelector('.asr-topk-value');
+
+        const DEFAULT_ASR_TOPK_PER_MODE = {
+            keyword: 50,
+            fuzzy: 50,
+            embedding: 110
+        };
+
+        const syncAsrTopKForCurrentMode = () => {
+            if (!asrTopKSlider) return;
+            const currentMode = asrModeSelect ? asrModeSelect.value : 'keyword';
+            const storageKey = `saved_asr_top_k_${currentMode}`;
+            const defaultVal = DEFAULT_ASR_TOPK_PER_MODE[currentMode] || 50;
+            const savedVal = localStorage.getItem(storageKey);
+            const valToUse = savedVal !== null ? savedVal : defaultVal;
+            asrTopKSlider.value = valToUse;
+            if (asrTopKValue) {
+                asrTopKValue.textContent = valToUse;
+            }
+        };
 
         if (asrModeSelect) {
             const savedAsrMode = localStorage.getItem('saved_asr_mode');
@@ -2724,7 +2819,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             const updateAsrTopKVisibility = () => {
                 if (asrTopKContainer) {
-                    asrTopKContainer.style.display = asrModeSelect.value === 'embedding' ? 'flex' : 'none';
+                    asrTopKContainer.style.display = 'flex';
                 }
             };
             updateAsrTopKVisibility();
@@ -2732,35 +2827,53 @@ document.addEventListener('DOMContentLoaded', function () {
             asrModeSelect.addEventListener('change', function () {
                 localStorage.setItem('saved_asr_mode', this.value);
                 updateAsrTopKVisibility();
-            });
-        }
-
-        if (asrTopKSelect) {
-            const savedAsrTopK = localStorage.getItem('saved_asr_top_k');
-            if (savedAsrTopK) {
-                asrTopKSelect.value = savedAsrTopK;
-            }
-            const savedAsrTopKCustom = localStorage.getItem('saved_asr_top_k_custom');
-            if (savedAsrTopKCustom && asrTopKCustomInput) {
-                asrTopKCustomInput.value = savedAsrTopKCustom;
-            }
-
-            const updateCustomInputVisibility = () => {
-                if (asrTopKCustomInput) {
-                    asrTopKCustomInput.style.display = asrTopKSelect.value === 'custom' ? 'inline-block' : 'none';
+                syncAsrTopKForCurrentMode();
+                if (textInput) {
+                    textInput.focus();
                 }
-            };
-            updateCustomInputVisibility();
+            });
 
-            asrTopKSelect.addEventListener('change', function () {
-                localStorage.setItem('saved_asr_top_k', this.value);
-                updateCustomInputVisibility();
+            asrModeSelect.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (textInput) {
+                        textInput.focus();
+                        const searchQuery = textInput.value;
+                        if (searchQuery) performSearch(searchQuery, 'text', searchGroup);
+                    }
+                }
             });
         }
 
-        if (asrTopKCustomInput) {
-            asrTopKCustomInput.addEventListener('change', function () {
-                localStorage.setItem('saved_asr_top_k_custom', this.value);
+        if (asrTopKSlider) {
+            syncAsrTopKForCurrentMode();
+
+            asrTopKSlider.addEventListener('input', function () {
+                const val = this.value;
+                if (asrTopKValue) {
+                    asrTopKValue.textContent = val;
+                }
+                const currentMode = asrModeSelect ? asrModeSelect.value : 'keyword';
+                localStorage.setItem(`saved_asr_top_k_${currentMode}`, val);
+            });
+
+            ['change', 'mouseup', 'touchend'].forEach(evtType => {
+                asrTopKSlider.addEventListener(evtType, function () {
+                    if (textInput) {
+                        textInput.focus();
+                    }
+                });
+            });
+
+            asrTopKSlider.addEventListener('keydown', function (e) {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    if (textInput) {
+                        textInput.focus();
+                        const searchQuery = textInput.value;
+                        if (searchQuery) performSearch(searchQuery, 'text', searchGroup);
+                    }
+                }
             });
         }
         textInput.addEventListener('keydown', function (e) {
@@ -3038,17 +3151,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
                     if (asrModeSelect) {
                         filterOptions.asr_mode = asrModeSelect.value;
-                        if (asrModeSelect.value === 'embedding') {
-                            const asrTopKSelect = searchGroup.querySelector('.asr-topk-select');
-                            const asrTopKCustomInput = searchGroup.querySelector('.asr-topk-custom-input');
-                            if (asrTopKSelect) {
-                                if (asrTopKSelect.value === 'custom' && asrTopKCustomInput) {
-                                    filterOptions.asr_top_k = parseInt(asrTopKCustomInput.value) || 110;
-                                } else {
-                                    filterOptions.asr_top_k = parseInt(asrTopKSelect.value) || 110;
-                                }
-                            }
-                        }
+                    }
+                    const asrTopKSlider = searchGroup.querySelector('.asr-topk-slider');
+                    if (asrTopKSlider) {
+                        filterOptions.asr_top_k = parseInt(asrTopKSlider.value) || 50;
                     } else {
                         const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
                         if (asrFuzzySwitch && asrFuzzySwitch.checked) {
@@ -3892,12 +3998,302 @@ document.addEventListener('DOMContentLoaded', function () {
         return getVideoPlaybackSource(videoName).url;
     }
 
-    function openVideoModal(videoName, timestamp) {
+    function getKeyframeWindowApiUrl(videoName, timestamp) {
+        const params = new URLSearchParams({
+            timestamp: String(Math.max(0, timestamp || 0)),
+            before: '25',
+            after: '25'
+        });
+        // Remote timeline requests use the compact API; local mode reads metadata.json directly.
+        return `${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/window/${encodeURIComponent(videoName)}?${params}`;
+    }
 
+    function findKeyframeAtTime(frames, timestamp) {
+        let low = 0;
+        let high = frames.length - 1;
+        let match = 0;
+        while (low <= high) {
+            const middle = Math.floor((low + high) / 2);
+            if (frames[middle].timestamp <= timestamp) {
+                match = middle;
+                low = middle + 1;
+            } else {
+                high = middle - 1;
+            }
+        }
+        return match;
+    }
+
+    function compactLegacyVideoMetadata(videoName, content, timestamp) {
+        const indexCacheKey = `${frameServeLocation}:${videoName}`;
+        let frames = legacyVideoKeyframeIndexCache.get(indexCacheKey);
+        if (!frames) {
+            const videoMetadata = content?.[videoName] || content || {};
+            frames = Object.entries(videoMetadata)
+                .filter(([, frame]) => frame && typeof frame === 'object' && frame.id !== undefined)
+                .map(([frameName, frame]) => ({
+                    frame_id_ori: Number(frame.id),
+                    timestamp: parseTimestamp(frame['time-stamp'] ?? frame.timestamp),
+                    filename: `${frameName}.webp`,
+                    fps: Number(frame.fps)
+                }))
+                .sort((a, b) => a.timestamp - b.timestamp || a.frame_id_ori - b.frame_id_ori);
+            legacyVideoKeyframeIndexCache.set(indexCacheKey, frames);
+        }
+        if (!frames.length) throw new Error(`No keyframes found for ${videoName}.`);
+        const centerIndex = findKeyframeAtTime(frames, timestamp);
+        const startIndex = Math.max(0, centerIndex - 25);
+        const endIndex = Math.min(frames.length, centerIndex + 26);
+        return {
+            video_name: videoName,
+            fps: frames.find(frame => Number.isFinite(frame.fps) && frame.fps > 0)?.fps || null,
+            center_index: centerIndex,
+            window_start_index: startIndex,
+            has_previous: startIndex > 0,
+            has_next: endIndex < frames.length,
+            frames: frames.slice(startIndex, endIndex).map(({ fps, ...frame }) => frame)
+        };
+    }
+
+    async function fetchVideoKeyframeWindow(videoName, timestamp, signal) {
+        const cacheTimestamp = Math.max(0, timestamp).toFixed(3);
+        const cacheKey = `${frameServeLocation}:${videoName}:${cacheTimestamp}`;
+        if (videoKeyframeWindowCache.has(cacheKey)) {
+            return videoKeyframeWindowCache.get(cacheKey);
+        }
+
+        const sourceKey = frameServeLocation;
+        let payload;
+        // Local frame serving already exposes metadata.json beside each video's frames.
+        // The compact API avoids downloading that full file only for remote serving.
+        if (frameServeLocation === 'remote' && !unavailableKeyframeWindowSources.has(sourceKey)) {
+            const response = await fetch(getKeyframeWindowApiUrl(videoName, timestamp), {
+                signal,
+                cache: 'force-cache'
+            });
+            if (response.ok) {
+                payload = await response.json();
+            } else if (response.status === 404) {
+                const errorPayload = await response.json().catch(() => ({}));
+                if (errorPayload.detail === 'Not Found') {
+                    unavailableKeyframeWindowSources.add(sourceKey);
+                }
+            } else {
+                throw new Error(`Keyframe window request failed: ${response.status}`);
+            }
+        }
+        if (!payload) {
+            const legacyCacheKey = `${frameServeLocation}:${videoName}`;
+            let videoMetadata = metadataCache.get(legacyCacheKey);
+            if (!videoMetadata) {
+                const legacyResponse = await fetch(getFrameMetadataUrl(videoName), {
+                    signal,
+                    cache: 'force-cache'
+                });
+                if (!legacyResponse.ok) throw new Error(`Keyframe metadata request failed: ${legacyResponse.status}`);
+                const content = await legacyResponse.json();
+                videoMetadata = content?.[videoName] || content;
+                metadataCache.set(legacyCacheKey, videoMetadata);
+            }
+            payload = compactLegacyVideoMetadata(videoName, videoMetadata, timestamp);
+        }
+        videoKeyframeWindowCache.set(cacheKey, payload);
+        return payload;
+    }
+
+    function formatVideoKeyframeTime(seconds) {
+        const safeSeconds = Math.max(0, Number(seconds) || 0);
+        const minutes = Math.floor(safeSeconds / 60);
+        const remainder = safeSeconds % 60;
+        return `${String(minutes).padStart(2, '0')}:${remainder.toFixed(1).padStart(4, '0')}`;
+    }
+
+    function loadVideoKeyframeImage(button) {
+        if (!button || button.dataset.loaded === 'true' || button.dataset.loading === 'true') return;
+        button.dataset.loading = 'true';
+        const image = document.createElement('img');
+        image.alt = button.dataset.label || 'Video keyframe';
+        image.decoding = 'async';
+        image.loading = 'lazy';
+        image.onload = () => {
+            if (!button.isConnected) return;
+            button.dataset.loaded = 'true';
+            button.dataset.loading = 'false';
+            button.querySelector('.video-keyframe-placeholder')?.remove();
+        };
+        image.onerror = () => {
+            button.dataset.loading = 'false';
+            button.classList.add('failed');
+            const placeholder = button.querySelector('.video-keyframe-placeholder');
+            if (placeholder) placeholder.textContent = 'Frame unavailable';
+            image.remove();
+        };
+        image.src = getFrameUrl(button.dataset.videoName, button.dataset.filename);
+        button.prepend(image);
+    }
+
+    function updateActiveVideoKeyframe(timestamp, focus = true) {
+        const state = videoWorkbenchState;
+        if (!state?.frames?.length) return;
+        const nextIndex = findKeyframeAtTime(state.frames, timestamp);
+        if (nextIndex === state.activeIndex) return;
+        state.slider.querySelector('.video-keyframe-item.active')?.classList.remove('active');
+        state.activeIndex = nextIndex;
+        const activeButton = state.slider.querySelector(`[data-keyframe-index="${nextIndex}"]`);
+        if (activeButton) {
+            activeButton.classList.add('active');
+            loadVideoKeyframeImage(activeButton);
+            if (focus) activeButton.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'center' });
+        }
+
+        if (!state.pendingWindow && state.frames.length > 1) {
+            const nearStart = nextIndex <= 4 && state.hasPrevious;
+            const nearEnd = nextIndex >= state.frames.length - 5 && state.hasNext;
+            if (nearStart || nearEnd) loadVideoKeyframeWindow(timestamp);
+        }
+    }
+
+    async function seekVideoToKeyframe(frame) {
+        const state = videoWorkbenchState;
+        if (!state || !frame) return;
+        const player = document.getElementById('videoPlayer');
+        const wasPlaying = !player.paused;
+        if (isTrakeMode && trakeController.ready) {
+            beginTrakeFrameSettle(frame.frame_id_ori, {
+                delay: 100,
+                maxAttempts: 2,
+                resumePlayback: wasPlaying
+            });
+        } else {
+            player.currentTime = Math.max(0, Math.min(player.duration || frame.timestamp, frame.timestamp));
+        }
+        updateActiveVideoKeyframe(frame.timestamp);
+    }
+
+    async function stepVideoKeyframe(direction) {
+        const state = videoWorkbenchState;
+        if (!state?.frames?.length) return;
+        let targetIndex = state.activeIndex + direction;
+        if (targetIndex < 0 && state.hasPrevious) {
+            await loadVideoKeyframeWindow(Math.max(0, state.frames[0].timestamp - 0.001));
+            return stepVideoKeyframe(direction);
+        }
+        if (targetIndex >= state.frames.length && state.hasNext) {
+            await loadVideoKeyframeWindow(state.frames[state.frames.length - 1].timestamp + 0.001);
+            return stepVideoKeyframe(direction);
+        }
+        targetIndex = Math.max(0, Math.min(state.frames.length - 1, targetIndex));
+        await seekVideoToKeyframe(state.frames[targetIndex]);
+    }
+
+    function renderVideoKeyframeWindow(payload) {
+        const state = videoWorkbenchState;
+        if (!state) return;
+        state.imageObserver?.disconnect();
+        state.frames = Array.isArray(payload.frames) ? payload.frames : [];
+        state.hasPrevious = Boolean(payload.has_previous);
+        state.hasNext = Boolean(payload.has_next);
+        state.activeIndex = -1;
+        state.slider.replaceChildren();
+
+        if (!state.frames.length) {
+            state.status.textContent = 'No keyframes available';
+            return;
+        }
+
+        const fragment = document.createDocumentFragment();
+        state.frames.forEach((frame, index) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'video-keyframe-item';
+            button.dataset.keyframeIndex = String(index);
+            button.dataset.videoName = state.videoName;
+            button.dataset.filename = frame.filename;
+            button.dataset.label = `${state.videoName} frame ${frame.frame_id_ori}`;
+            button.title = `${state.videoName} · frame ${frame.frame_id_ori} · ${formatVideoKeyframeTime(frame.timestamp)}`;
+            const placeholder = document.createElement('span');
+            placeholder.className = 'video-keyframe-placeholder';
+            placeholder.textContent = 'Loading frame...';
+            const time = document.createElement('span');
+            time.className = 'video-keyframe-time';
+            time.textContent = formatVideoKeyframeTime(frame.timestamp);
+            button.append(placeholder, time);
+            button.addEventListener('click', () => seekVideoToKeyframe(frame));
+            fragment.appendChild(button);
+        });
+        state.slider.appendChild(fragment);
+        state.imageObserver = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) loadVideoKeyframeImage(entry.target);
+            });
+        }, { root: state.slider, rootMargin: '0px 400px' });
+        state.slider.querySelectorAll('.video-keyframe-item').forEach(button => state.imageObserver.observe(button));
+        state.status.textContent = `${state.frames.length} nearby keyframes`;
+        updateActiveVideoKeyframe(document.getElementById('videoPlayer').currentTime);
+        const activeIndex = state.activeIndex;
+        for (let offset = -3; offset <= 3; offset++) {
+            loadVideoKeyframeImage(state.slider.querySelector(`[data-keyframe-index="${activeIndex + offset}"]`));
+        }
+    }
+
+    async function loadVideoKeyframeWindow(centerTime, options = {}) {
+        const state = videoWorkbenchState;
+        if (!state || state.pendingWindow) return;
+        const requestSessionId = state.sessionId;
+        const requestId = ++state.metadataRequestId;
+        state.pendingWindow = true;
+        state.status.textContent = 'Loading timeline...';
+        state.metadataController?.abort();
+        state.metadataController = new AbortController();
+        try {
+            const payload = await fetchVideoKeyframeWindow(
+                state.videoName,
+                Math.max(0, Number(centerTime) || 0),
+                state.metadataController.signal
+            );
+            if (videoWorkbenchState?.sessionId !== requestSessionId) return;
+            renderVideoKeyframeWindow(payload);
+        } catch (error) {
+            if (error.name === 'AbortError') return;
+            console.error('Unable to load video keyframes:', error);
+            if (videoWorkbenchState?.sessionId === requestSessionId) {
+                state.status.textContent = 'Keyframe timeline unavailable';
+                if (!options.keepExisting) state.slider.replaceChildren();
+            }
+        } finally {
+            if (videoWorkbenchState?.sessionId === requestSessionId && state.metadataRequestId === requestId) {
+                state.pendingWindow = false;
+            }
+        }
+    }
+
+    function reloadVideoKeyframeWindow() {
+        if (!videoWorkbenchState) return;
+        videoWorkbenchState.imageObserver?.disconnect();
+        videoWorkbenchState.slider.replaceChildren();
+        videoWorkbenchState.status.textContent = 'Loading timeline...';
+        videoWorkbenchState.pendingWindow = false;
+        loadVideoKeyframeWindow(document.getElementById('videoPlayer').currentTime);
+    }
+
+    function cleanupVideoWorkbenchState(sessionId) {
+        if (!videoWorkbenchState || videoWorkbenchState.sessionId !== sessionId) return;
+        videoWorkbenchState.metadataController?.abort();
+        videoWorkbenchState.imageObserver?.disconnect();
+        videoWorkbenchState = null;
+    }
+
+    function openVideoModal(videoName, timestamp, options = {}) {
+        if (!videoName || timestamp === null || timestamp === undefined || timestamp === '') {
+            showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
+            return;
+        }
         if (isTrakeMode) {
             toggleTrakeMode(false);
         }
         currentVideoModalData = { videoName, timestamp };
+        const targetTimeInSeconds = parseTimestamp(timestamp);
+        const sessionId = ++videoWorkbenchSessionId;
 
         const modal = document.getElementById('videoModal');
         const player = document.getElementById('videoPlayer');
@@ -3915,19 +4311,36 @@ document.addEventListener('DOMContentLoaded', function () {
         const muteBtn = document.getElementById('muteBtn');
         const volumeIcon = muteBtn.querySelector('i');
         const volumeSlider = document.getElementById('volumeSlider');
+        const volumeReadout = document.getElementById('videoVolumeReadout');
+        const rateContainer = document.getElementById('videoPlaybackRates');
+        const rateReadout = document.getElementById('videoPlaybackRateReadout');
+        const wheelSeekSelect = document.getElementById('videoWheelSeekSelect');
+        const keyframeSlider = document.getElementById('videoKeyframeSlider');
+        const keyframeStatus = document.getElementById('videoKeyframeStatus');
+        document.getElementById('videoWorkbenchTitle').textContent = videoName;
 
-        const SKIP_TIME = 1;
-        const FAST_FORWARD_RATE = 2.5;
+        videoWorkbenchState = {
+            sessionId,
+            videoName,
+            slider: keyframeSlider,
+            status: keyframeStatus,
+            frames: [],
+            activeIndex: -1,
+            hasPrevious: false,
+            hasNext: false,
+            pendingWindow: false,
+            metadataController: null,
+            metadataRequestId: 0,
+            imageObserver: null,
+            videoWheelTimer: null,
+            videoWheelDelta: 0,
+            keyframeWheelLocked: false
+        };
 
         let isSeeking = false;
         let rewindInterval = null;
 
-        if (!videoName || !timestamp) {
-            showToastNotification("Thiếu thông tin video hoặc timestamp.", "error");
-            return;
-        }
-
-        prepareTrakeTimeline(videoName, parseTimestamp(timestamp));
+        prepareTrakeTimeline(videoName, targetTimeInSeconds);
 
         console.log("time:", timestamp);
         const formatTime = (timeInSeconds) => {
@@ -3948,27 +4361,84 @@ document.addEventListener('DOMContentLoaded', function () {
                 seekSlider.value = player.currentTime;
                 currentTimeDisplay.textContent = formatTime(player.currentTime);
             }
+            if (!isTrakeMode || trakeController.settleStatus !== 'pending') {
+                updateActiveVideoKeyframe(player.currentTime);
+            }
         };
 
         const toggleMute = () => {
             player.muted = !player.muted;
+            videoPreferences.muted = player.muted;
+            setUserScopedSetting('video_muted', String(player.muted));
         };
 
         const updateVolumeUI = () => {
             if (player.muted || player.volume === 0) {
                 volumeIcon.className = 'fas fa-volume-xmark';
-                volumeSlider.value = 0;
             } else {
                 volumeIcon.className = 'fas fa-volume-up';
-                volumeSlider.value = player.volume;
             }
+            volumeSlider.value = String(player.volume);
+            volumeReadout.textContent = `${Math.round(player.volume * 100)}%`;
         };
 
         const handleVolumeChange = () => {
-            player.volume = volumeSlider.value;
+            player.volume = Number(volumeSlider.value);
             if (player.volume > 0) {
                 player.muted = false;
             }
+            videoPreferences.volume = player.volume;
+            videoPreferences.muted = player.muted;
+            setUserScopedSetting('video_volume', String(player.volume));
+            setUserScopedSetting('video_muted', String(player.muted));
+        };
+
+        const handleRateClick = event => {
+            const button = event.target.closest('[data-rate]');
+            if (!button) return;
+            const rate = Number(button.dataset.rate);
+            if (!VIDEO_PLAYBACK_RATES.includes(rate)) return;
+            videoPreferences.playbackRate = rate;
+            player.playbackRate = rate;
+            setUserScopedSetting('video_playback_rate', String(rate));
+            applyVideoPreferencesToOpenWorkbench();
+        };
+
+        const handleWheelSeekChange = () => {
+            const step = Number(wheelSeekSelect.value);
+            if (!VIDEO_WHEEL_STEPS.includes(step)) return;
+            videoPreferences.wheelSeekSeconds = step;
+            setUserScopedSetting('video_wheel_seek_seconds', String(step));
+            applyVideoPreferencesToOpenWorkbench();
+        };
+
+        const handleVideoWheel = event => {
+            if (isTrakeMode) return;
+            event.preventDefault();
+            const state = videoWorkbenchState;
+            if (!state || state.sessionId !== sessionId || !Number.isFinite(player.duration)) return;
+            state.videoWheelDelta += event.deltaY;
+            clearTimeout(state.videoWheelTimer);
+            state.videoWheelTimer = setTimeout(() => {
+                if (!videoWorkbenchState || videoWorkbenchState.sessionId !== sessionId) return;
+                const direction = state.videoWheelDelta > 0 ? 1 : -1;
+                state.videoWheelDelta = 0;
+                player.currentTime = Math.max(0, Math.min(
+                    player.duration,
+                    player.currentTime + direction * videoPreferences.wheelSeekSeconds
+                ));
+            }, 55);
+        };
+
+        const handleKeyframeWheel = event => {
+            event.preventDefault();
+            const state = videoWorkbenchState;
+            if (!state || state.sessionId !== sessionId || state.keyframeWheelLocked) return;
+            state.keyframeWheelLocked = true;
+            stepVideoKeyframe(event.deltaY > 0 || event.deltaX > 0 ? 1 : -1)
+                .finally(() => setTimeout(() => {
+                    if (videoWorkbenchState?.sessionId === sessionId) state.keyframeWheelLocked = false;
+                }, 70));
         };
 
         const handleSeekInput = () => {
@@ -3991,12 +4461,20 @@ document.addEventListener('DOMContentLoaded', function () {
                 seekSlider.max = player.duration;
                 durationDisplay.textContent = formatTime(player.duration);
             }
-            updateVolumeUI(); // Cập nhật UI âm thanh ban đầu
+            player.defaultPlaybackRate = videoPreferences.playbackRate;
+            player.playbackRate = videoPreferences.playbackRate;
+            updateVolumeUI();
         };
         // <<< KẾT THÚC THAY ĐỔI >>>
 
         const handleKeyDown = (e) => {
             if (getTopActiveModal()?.element !== modal) {
+                return;
+            }
+
+            if (e.code === 'Space' || e.key === ' ') {
+                e.preventDefault();
+                if (!e.repeat) togglePlayPause();
                 return;
             }
 
@@ -4028,21 +4506,16 @@ document.addEventListener('DOMContentLoaded', function () {
                     queueTrakeFrameStep(e.key === 'ArrowRight' ? frameStep : -frameStep);
                     return;
                 }
-                if (e.key === ' ') {
-                    e.preventDefault();
-                    togglePlayPause();
-                }
             } else {
 
                 if (e.key === 'Enter') { e.preventDefault(); captureFrameAndAddToQueue(); return; }
 
                 const activeElement = document.activeElement;
-                if (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA') return;
+                if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(activeElement.tagName)) return;
 
                 const key = e.key.toLowerCase();
 
                 switch (key) {
-                    case ' ': e.preventDefault(); togglePlayPause(); break;
                     case 'v':
                         e.preventDefault();
                         // Tạm dừng video để chụp frame
@@ -4077,9 +4550,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     case 'arrowright':
                         e.preventDefault();
                         if (e.shiftKey) { // Nếu giữ Shift
-                            player.playbackRate = 0.5; // Chuyển sang chế độ tua chậm
+                            player.playbackRate = 0.5;
                         } else if (e.repeat) { // Nếu không giữ Shift (logic tua nhanh cũ)
-                            player.playbackRate = FAST_FORWARD_RATE;
+                            player.playbackRate = 2;
                         }
                         break;
 
@@ -4100,13 +4573,13 @@ document.addEventListener('DOMContentLoaded', function () {
         const handleKeyUp = (e) => {
             if (isTrakeMode) return;
             if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
-                player.playbackRate = 1.0; // Luôn trả về tốc độ bình thường khi nhả phím
+                player.playbackRate = videoPreferences.playbackRate;
             }
             switch (e.key) {
                 case 'ArrowRight':
                     e.preventDefault();
                     if (!e.repeat && !e.shiftKey) {
-                        player.currentTime += SKIP_TIME;
+                        player.currentTime += videoPreferences.wheelSeekSeconds;
                     }
                     break;
 
@@ -4116,7 +4589,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         clearInterval(rewindInterval);
                         rewindInterval = null;
                     } else if (!e.shiftKey) { // Tua 1 đoạn ngắn khi nhấn-nhả (không giữ)
-                        player.currentTime -= SKIP_TIME;
+                        player.currentTime -= videoPreferences.wheelSeekSeconds;
                     }
                     break;
             }
@@ -4196,6 +4669,7 @@ document.addEventListener('DOMContentLoaded', function () {
             player.removeEventListener('play', updatePlayButton);
             player.removeEventListener('pause', updatePlayButton);
             player.removeEventListener('volumechange', updateVolumeUI);
+            player.removeEventListener('click', togglePlayPause);
             if (playerErrorHandler) {
                 player.removeEventListener('error', playerErrorHandler);
             }
@@ -4206,9 +4680,17 @@ document.addEventListener('DOMContentLoaded', function () {
             seekSlider.removeEventListener('mousedown', handleSeekMouseDown);
             seekSlider.removeEventListener('mouseup', handleSeekMouseUp);
             volumeSlider.removeEventListener('input', handleVolumeChange);
+            player.removeEventListener('wheel', handleVideoWheel);
+            keyframeSlider.removeEventListener('wheel', handleKeyframeWheel);
+            rateContainer.removeEventListener('click', handleRateClick);
+            wheelSeekSelect.removeEventListener('change', handleWheelSeekChange);
             document.removeEventListener('keydown', handleKeyDown);
             document.removeEventListener('keyup', handleKeyUp);
             if (rewindInterval) clearInterval(rewindInterval);
+            if (videoWorkbenchState?.sessionId === sessionId) {
+                clearTimeout(videoWorkbenchState.videoWheelTimer);
+            }
+            cleanupVideoWorkbenchState(sessionId);
 
             // Dọn dẹp player để sẵn sàng cho lần mở tiếp theo
             player.removeAttribute('src');
@@ -4225,10 +4707,11 @@ document.addEventListener('DOMContentLoaded', function () {
         player.addEventListener('play', updatePlayButton);
         player.addEventListener('pause', updatePlayButton);
         player.addEventListener('volumechange', updateVolumeUI);
+        player.addEventListener('click', togglePlayPause);
 
         playPauseBtn.onclick = togglePlayPause;
-        seekBackwardBtn.onclick = () => player.currentTime -= SKIP_TIME;
-        seekForwardBtn.onclick = () => player.currentTime += SKIP_TIME;
+        seekBackwardBtn.onclick = () => player.currentTime -= videoPreferences.wheelSeekSeconds;
+        seekForwardBtn.onclick = () => player.currentTime += videoPreferences.wheelSeekSeconds;
 
         seekSlider.addEventListener('input', handleSeekInput);
         seekSlider.addEventListener('mousedown', handleSeekMouseDown);
@@ -4236,19 +4719,36 @@ document.addEventListener('DOMContentLoaded', function () {
 
         muteBtn.onclick = toggleMute;
         volumeSlider.addEventListener('input', handleVolumeChange);
+        player.addEventListener('wheel', handleVideoWheel, { passive: false });
+        keyframeSlider.addEventListener('wheel', handleKeyframeWheel, { passive: false });
+        rateContainer.addEventListener('click', handleRateClick);
+        wheelSeekSelect.addEventListener('change', handleWheelSeekChange);
         const closeModal = closePreviewModal;
         modal.querySelector('.modal-overlay').onclick = closeModal;
         closeBtn.onclick = closeModal;
         document.addEventListener('keydown', handleKeyDown);
         document.addEventListener('keyup', handleKeyUp);
 
-        const targetTimeInSeconds = parseTimestamp(timestamp);
         const videoSource = getVideoPlaybackSource(videoName);
         const videoSrc = videoSource.url;
         const seekAndPlay = () => {
             player.currentTime = targetTimeInSeconds;
-            player.play().catch(e => console.error("Lỗi tự động phát video:", e));
+            if (options.autoplay === false) {
+                player.pause();
+                return;
+            }
+            player.play().catch(error => {
+                console.warn("Video autoplay requires user interaction:", error);
+                showToastNotification('Autoplay có âm thanh bị chặn. Nhấn Play để tiếp tục.', 'info', 3000);
+            });
         };
+
+        applyVideoPreferencesToOpenWorkbench();
+        keyframeSlider.replaceChildren();
+        keyframeStatus.textContent = 'Loading timeline...';
+        registerModalOpen(modal, closePreviewModal);
+        modal.style.display = 'flex';
+        loadVideoKeyframeWindow(targetTimeInSeconds);
 
         if (hlsPlayerInstance) {
             hlsPlayerInstance.destroy();
@@ -4256,10 +4756,19 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (videoSource.type === 'hls' && window.Hls && Hls.isSupported()) {
-            hlsPlayerInstance = new Hls({ enableWorker: true });
+            hlsPlayerInstance = new Hls({
+                enableWorker: true,
+                autoStartLoad: false,
+                capLevelToPlayerSize: true,
+                maxBufferLength: 20,
+                backBufferLength: 10
+            });
             hlsPlayerInstance.loadSource(videoSrc);
             hlsPlayerInstance.attachMedia(player);
-            hlsPlayerInstance.on(Hls.Events.MANIFEST_PARSED, seekAndPlay);
+            hlsPlayerInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+                hlsPlayerInstance.startLoad(targetTimeInSeconds);
+                seekAndPlay();
+            });
             hlsPlayerInstance.on(Hls.Events.ERROR, (event, data) => {
                 console.error("HLS playback error:", data);
                 if (data.fatal) {
@@ -4285,8 +4794,6 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         player.addEventListener('error', playerErrorHandler, { once: true });
 
-        registerModalOpen(modal, closePreviewModal);
-        modal.style.display = 'flex';
         // <<< KẾT THÚC THAY ĐỔI >>>
     }
     const frameSelectionManager = {
@@ -5230,6 +5737,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         currentUser = newUsername;
         localStorage.setItem('aic_lunch_username', newUsername);
+        loadVideoPreferencesForCurrentUser();
 
         if (ws) {
             try {
@@ -5301,6 +5809,98 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function getGoogleSearchCacheKey(query) {
         return `${query}|${GOOGLE_SEARCH_COUNTRY}|${GOOGLE_SEARCH_LANGUAGE}`;
+    }
+
+    async function fetchSearchApi(params) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), SEARCHAPI_TIMEOUT_MS);
+        const searchParams = new URLSearchParams({
+            ...params,
+            api_key: SEARCHAPI_API_KEY
+        });
+
+        try {
+            const response = await fetch(`${SEARCHAPI_BASE_URL}?${searchParams}`, {
+                method: 'GET',
+                credentials: 'omit',
+                cache: 'no-store',
+                signal: controller.signal
+            });
+            if (!response.ok) {
+                throw new Error(`SearchAPI request failed with status ${response.status}`);
+            }
+            return await response.json();
+        } finally {
+            clearTimeout(timeoutId);
+        }
+    }
+
+    function getUsableGoogleOverview(data) {
+        if (!data || typeof data !== 'object') return null;
+        const markdown = typeof data.markdown === 'string'
+            ? stripGoogleOverviewReferences(data.markdown)
+            : '';
+        if (!markdown) return null;
+        return {
+            markdown,
+            reference_links: Array.isArray(data.reference_links) ? data.reference_links : []
+        };
+    }
+
+    async function requestGoogleAiOverview(query) {
+        const searchData = await fetchSearchApi({
+            engine: 'google',
+            q: query,
+            gl: GOOGLE_SEARCH_COUNTRY,
+            hl: GOOGLE_SEARCH_LANGUAGE
+        });
+        const initialOverview = searchData?.ai_overview;
+        const inlineOverview = getUsableGoogleOverview(initialOverview);
+        if (inlineOverview) return inlineOverview;
+
+        const pageToken = typeof initialOverview?.page_token === 'string'
+            ? initialOverview.page_token.trim()
+            : '';
+        if (!pageToken) return null;
+
+        const overviewData = await fetchSearchApi({
+            engine: 'google_ai_overview',
+            page_token: pageToken
+        });
+        return getUsableGoogleOverview(overviewData?.ai_overview || overviewData);
+    }
+
+    function startGoogleAiOverview(query) {
+        if (!googleAiSummaryEnabled) return;
+
+        const cacheKey = getGoogleSearchCacheKey(query);
+        const cachedOverview = googleOverviewCache.get(cacheKey);
+        if (cachedOverview?.status === 'loading'
+            || cachedOverview?.status === 'ready'
+            || cachedOverview?.status === 'unavailable'
+            || googleOverviewInFlight.has(cacheKey)) {
+            return;
+        }
+
+        googleOverviewCache.set(cacheKey, { status: 'loading' });
+        const request = requestGoogleAiOverview(query)
+            .then(overview => {
+                googleOverviewCache.set(cacheKey, overview
+                    ? { status: 'ready', data: overview }
+                    : { status: 'unavailable' });
+            })
+            .catch(error => {
+                console.error('Google AI Overview request failed:', error);
+                googleOverviewCache.set(cacheKey, { status: 'error' });
+            })
+            .finally(() => {
+                googleOverviewInFlight.delete(cacheKey);
+                if (isGoogleSearchMode && lastGoogleSearchQuery === query) {
+                    refreshVisibleGoogleSearchResults();
+                }
+            });
+
+        googleOverviewInFlight.set(cacheKey, request);
     }
 
     function startGoogleImageSearch(query, apiKey) {
@@ -5468,6 +6068,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         lastGoogleSearchQuery = query;
+        const requestId = ++googleSearchRequestId;
+        startGoogleAiOverview(query);
         const cacheKey = getGoogleSearchCacheKey(query);
         const cachedResponse = googleSearchCache.get(cacheKey);
         if (cachedResponse) {
@@ -5484,7 +6086,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
-        const requestId = ++googleSearchRequestId;
         renderGoogleSearchLoading();
         startGoogleImageSearch(query, apiKey);
 
@@ -5597,9 +6198,7 @@ document.addEventListener('DOMContentLoaded', function () {
         return details;
     }
 
-    function renderGoogleAiSummary(query, data) {
-        if (!googleAiSummaryEnabled) return null;
-
+    function createGoogleAiSummaryContainer(provider) {
         const container = document.createElement('section');
         container.className = 'google-ai-summary';
         const header = document.createElement('div');
@@ -5607,9 +6206,139 @@ document.addEventListener('DOMContentLoaded', function () {
         const heading = document.createElement('h4');
         heading.textContent = 'AI Summary';
         const badge = document.createElement('span');
-        badge.textContent = 'Gemini';
+        badge.textContent = provider;
         header.append(heading, badge);
         container.appendChild(header);
+        return container;
+    }
+
+    function stripGoogleOverviewReferences(markdown) {
+        const lines = markdown.replace(/\r\n?/g, '\n').split('\n');
+        const referenceStart = lines.findIndex(line => /^\s*\[\[\d+\]\s*-/.test(line));
+        return lines.slice(0, referenceStart === -1 ? lines.length : referenceStart).join('\n').trim();
+    }
+
+    function getGoogleOverviewReferenceMap(referenceLinks) {
+        const references = new Map();
+        referenceLinks.forEach(reference => {
+            if (reference?.index === undefined || typeof reference?.link !== 'string') return;
+            references.set(String(reference.index), reference.link.trim());
+        });
+        return references;
+    }
+
+    function getSafeGoogleOverviewUrl(rawUrl) {
+        if (!rawUrl) return null;
+        if (!/^https?:\/\//i.test(rawUrl) && !rawUrl.startsWith('/')) return null;
+
+        try {
+            const url = new URL(rawUrl, SEARCHAPI_BASE_URL);
+            return url.protocol === 'http:' || url.protocol === 'https:' ? url.href : null;
+        } catch (error) {
+            return null;
+        }
+    }
+
+    function appendGoogleOverviewInlineContent(parent, text, referenceMap) {
+        const citationPattern = /\[(\d+)\]\(([^)]*)\)/g;
+        let cursor = 0;
+        let match;
+
+        while ((match = citationPattern.exec(text)) !== null) {
+            if (match.index > cursor) {
+                parent.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+            }
+
+            const citationText = `[${match[1]}]`;
+            const citationUrl = getSafeGoogleOverviewUrl(referenceMap.get(match[1]) || match[2].trim());
+            if (citationUrl) {
+                const link = document.createElement('a');
+                link.href = citationUrl;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.textContent = citationText;
+                parent.appendChild(link);
+            } else {
+                parent.appendChild(document.createTextNode(citationText));
+            }
+            cursor = citationPattern.lastIndex;
+        }
+
+        if (cursor < text.length) {
+            parent.appendChild(document.createTextNode(text.slice(cursor)));
+        }
+    }
+
+    function renderGoogleOverviewMarkdown(markdown, referenceLinks) {
+        const content = document.createElement('div');
+        content.className = 'google-ai-overview-content';
+        const referenceMap = getGoogleOverviewReferenceMap(referenceLinks);
+        const lines = stripGoogleOverviewReferences(markdown).split('\n');
+        let paragraphLines = [];
+        let activeList = null;
+
+        const flushParagraph = () => {
+            if (!paragraphLines.length) return;
+            const paragraph = document.createElement('p');
+            appendGoogleOverviewInlineContent(paragraph, paragraphLines.join(' '), referenceMap);
+            content.appendChild(paragraph);
+            paragraphLines = [];
+        };
+
+        lines.forEach(line => {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) {
+                flushParagraph();
+                activeList = null;
+                return;
+            }
+
+            const headingMatch = trimmedLine.match(/^(#{1,6})\s+(.+)$/);
+            if (headingMatch) {
+                flushParagraph();
+                activeList = null;
+                const headingLevel = Math.max(2, Math.min(6, headingMatch[1].length));
+                const heading = document.createElement(`h${headingLevel}`);
+                appendGoogleOverviewInlineContent(heading, headingMatch[2], referenceMap);
+                content.appendChild(heading);
+                return;
+            }
+
+            const unorderedItem = trimmedLine.match(/^[-*]\s+(.+)$/);
+            const orderedItem = trimmedLine.match(/^\d+\.\s+(.+)$/);
+            if (unorderedItem || orderedItem) {
+                flushParagraph();
+                const listTag = unorderedItem ? 'UL' : 'OL';
+                if (!activeList || activeList.tagName !== listTag) {
+                    activeList = document.createElement(listTag.toLowerCase());
+                    content.appendChild(activeList);
+                }
+                const item = document.createElement('li');
+                appendGoogleOverviewInlineContent(item, (unorderedItem || orderedItem)[1], referenceMap);
+                activeList.appendChild(item);
+                return;
+            }
+
+            activeList = null;
+            paragraphLines.push(trimmedLine);
+        });
+        flushParagraph();
+        return content;
+    }
+
+    function renderGoogleOverviewSummary(overview) {
+        const container = createGoogleAiSummaryContainer('Google AI Overview');
+        const markdown = stripGoogleOverviewReferences(overview.markdown);
+        if (!markdown) {
+            appendGoogleSearchText(container, 'Google AI Overview returned no usable content.', 'google-ai-summary-state');
+            return container;
+        }
+        container.appendChild(renderGoogleOverviewMarkdown(markdown, overview.reference_links || []));
+        return container;
+    }
+
+    function renderGeminiSummary(query, data) {
+        const container = createGoogleAiSummaryContainer('Gemini fallback');
 
         const cacheKey = getGoogleSearchCacheKey(query);
         const summaryState = googleSummaryCache.get(cacheKey);
@@ -5636,6 +6365,29 @@ document.addEventListener('DOMContentLoaded', function () {
 
         appendGoogleSearchText(container, 'Generating AI summary...', 'google-ai-summary-state');
         return container;
+    }
+
+    function renderGoogleAiSummary(query, data) {
+        if (!googleAiSummaryEnabled) return null;
+
+        const cacheKey = getGoogleSearchCacheKey(query);
+        let overviewState = googleOverviewCache.get(cacheKey);
+        if (!overviewState) {
+            startGoogleAiOverview(query);
+            overviewState = googleOverviewCache.get(cacheKey);
+        }
+
+        if (overviewState?.status === 'ready') {
+            return renderGoogleOverviewSummary(overviewState.data);
+        }
+
+        if (!overviewState || overviewState.status === 'loading') {
+            const container = createGoogleAiSummaryContainer('Google AI Overview');
+            appendGoogleSearchText(container, 'Loading Google AI Overview...', 'google-ai-summary-state');
+            return container;
+        }
+
+        return renderGeminiSummary(query, data);
     }
 
     function renderGoogleImageSearchResults(query) {
@@ -6882,9 +7634,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function prepareTrakeTimeline(videoName, initialTime = 0) {
+        cancelTrakeFrameSettle();
         trakeController.ready = false;
         trakeController.fps = null;
-        trakeController.seekGeneration++;
         trakeFpsStatus.classList.remove('error');
         trakeFpsStatus.textContent = 'Loading FPS...';
         updateTrakeFrameReadout();
@@ -6923,12 +7675,15 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             player.removeEventListener('wheel', handleVideoScrub);
             player.removeEventListener('timeupdate', handleTrakePlaybackProgress);
-            clearTimeout(trakeController.seekTimer);
+            cancelTrakeFrameSettle();
         }
     }
 
     function handleTrakePlaybackProgress(event) {
         if (!isTrakeMode || !trakeController.ready || event.currentTarget.paused) return;
+        if (trakeController.settleStatus === 'pending') {
+            cancelTrakeFrameSettle();
+        }
         const frameIndex = Math.max(0, Math.round(event.currentTarget.currentTime * trakeController.fps));
         trakeController.desiredFrameIndex = frameIndex;
         trakeController.renderedFrameIndex = frameIndex;
@@ -6952,76 +7707,129 @@ document.addEventListener('DOMContentLoaded', function () {
         const maxFrame = Number.isFinite(player.duration)
             ? Math.max(0, Math.floor(player.duration * trakeController.fps) - 1)
             : Number.MAX_SAFE_INTEGER;
-        trakeController.desiredFrameIndex = Math.max(0, Math.min(maxFrame, trakeController.desiredFrameIndex + delta));
-        updateTrakeFrameReadout();
-        clearTimeout(trakeController.seekTimer);
-        trakeController.seekTimer = setTimeout(flushTrakeSeek, 45);
+        const targetFrame = Math.max(0, Math.min(maxFrame, trakeController.desiredFrameIndex + delta));
+        beginTrakeFrameSettle(targetFrame, { delay: 45, maxAttempts: 2 });
     }
 
-    async function flushTrakeSeek() {
-        if (!trakeController.ready || trakeController.seekInFlight) return;
-        const player = document.getElementById('videoPlayer');
-        const targetFrame = trakeController.desiredFrameIndex;
-        const generation = ++trakeController.seekGeneration;
-        trakeController.seekInFlight = true;
+    function cancelTrakeFrameSettle() {
+        trakeController.seekGeneration++;
+        clearTimeout(trakeController.seekTimer);
+        trakeController.seekTimer = null;
+        trakeController.settleResolve?.(false);
+        trakeController.settleResolve = null;
+        trakeController.settlePromise = null;
+        trakeController.settleTargetFrame = null;
+        trakeController.settleStatus = 'idle';
+        trakeController.seekInFlight = false;
+    }
 
-        try {
-            const targetTime = targetFrame / trakeController.fps;
-            await new Promise(resolve => {
-                let settled = false;
-                const finish = () => {
-                    if (settled) return;
-                    settled = true;
-                    player.removeEventListener('seeked', finish);
-                    resolve();
-                };
-                player.addEventListener('seeked', finish, { once: true });
-                player.currentTime = Math.max(0, Math.min(player.duration || targetTime, targetTime));
-                setTimeout(finish, 2500);
-            });
-
-            if (generation !== trakeController.seekGeneration) return;
-            const mediaTime = await new Promise(resolve => {
-                if (typeof player.requestVideoFrameCallback === 'function') {
-                    const fallback = setTimeout(() => resolve(player.currentTime), 250);
-                    player.requestVideoFrameCallback((_, metadata) => {
-                        clearTimeout(fallback);
-                        resolve(metadata.mediaTime);
-                    });
-                } else {
-                    requestAnimationFrame(() => resolve(player.currentTime));
-                }
-            });
-            const renderedFrame = Math.max(0, Math.round(mediaTime * trakeController.fps));
-            trakeController.renderedFrameIndex = renderedFrame;
-            const mustReachExactTarget = trakeController.waiters.some(waiter => waiter.targetFrame === targetFrame);
-            if (trakeController.desiredFrameIndex === targetFrame && !mustReachExactTarget) {
-                trakeController.desiredFrameIndex = renderedFrame;
-                updateTrakeFrameReadout();
-            }
-        } finally {
-            trakeController.seekInFlight = false;
-            const pendingWaiters = [];
-            trakeController.waiters.splice(0).forEach(waiter => {
-                if (waiter.targetFrame === trakeController.renderedFrameIndex) {
-                    waiter.resolve(trakeController.renderedFrameIndex);
-                } else {
-                    pendingWaiters.push(waiter);
-                }
-            });
-            trakeController.waiters.push(...pendingWaiters);
-            if (trakeController.desiredFrameIndex !== trakeController.renderedFrameIndex) {
-                clearTimeout(trakeController.seekTimer);
-                trakeController.seekTimer = setTimeout(flushTrakeSeek, 0);
-            }
+    function waitForVideoSeek(player, targetTime) {
+        if (Math.abs(player.currentTime - targetTime) < 0.0005) {
+            return Promise.resolve();
         }
+        return new Promise(resolve => {
+            let settled = false;
+            const finish = () => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                player.removeEventListener('seeked', finish);
+                resolve();
+            };
+            const timeoutId = setTimeout(finish, 2500);
+            player.addEventListener('seeked', finish, { once: true });
+            player.currentTime = Math.max(0, Math.min(player.duration || targetTime, targetTime));
+        });
+    }
+
+    function getRenderedVideoTime(player) {
+        return new Promise(resolve => {
+            if (typeof player.requestVideoFrameCallback !== 'function') {
+                requestAnimationFrame(() => resolve(player.currentTime));
+                return;
+            }
+            let settled = false;
+            const finish = mediaTime => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timeoutId);
+                resolve(mediaTime);
+            };
+            const timeoutId = setTimeout(() => finish(player.currentTime), 250);
+            player.requestVideoFrameCallback((_, metadata) => finish(metadata.mediaTime));
+        });
+    }
+
+    async function seekTrakeFrameOnce(targetFrame, generation, correctionAttempt = 0) {
+        const player = document.getElementById('videoPlayer');
+        const correctionOffset = correctionAttempt > 0 ? 0.1 / trakeController.fps : 0;
+        const targetTime = targetFrame / trakeController.fps + correctionOffset;
+        await waitForVideoSeek(player, targetTime);
+        if (generation !== trakeController.seekGeneration) return null;
+        const mediaTime = await getRenderedVideoTime(player);
+        if (generation !== trakeController.seekGeneration) return null;
+        const renderedFrame = Math.max(0, Math.round(mediaTime * trakeController.fps));
+        trakeController.renderedFrameIndex = renderedFrame;
+        return renderedFrame;
+    }
+
+    function beginTrakeFrameSettle(targetFrame, {
+        delay = 45,
+        maxAttempts = 2,
+        resumePlayback = false
+    } = {}) {
+        if (!trakeController.ready) return Promise.resolve(false);
+        const player = document.getElementById('videoPlayer');
+        const maxFrame = Number.isFinite(player.duration)
+            ? Math.max(0, Math.floor(player.duration * trakeController.fps) - 1)
+            : Number.MAX_SAFE_INTEGER;
+        const normalizedTarget = Math.max(0, Math.min(maxFrame, targetFrame));
+        const generation = ++trakeController.seekGeneration;
+        clearTimeout(trakeController.seekTimer);
+        trakeController.settleResolve?.(false);
+        trakeController.desiredFrameIndex = normalizedTarget;
+        trakeController.settleTargetFrame = normalizedTarget;
+        trakeController.settleStatus = 'pending';
+        player.pause();
+        updateTrakeFrameReadout();
+
+        const settlePromise = new Promise(resolve => {
+            trakeController.settleResolve = resolve;
+            trakeController.seekTimer = setTimeout(async () => {
+                if (generation !== trakeController.seekGeneration) {
+                    resolve(false);
+                    return;
+                }
+                trakeController.seekInFlight = true;
+                let exact = false;
+                try {
+                    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+                        const renderedFrame = await seekTrakeFrameOnce(normalizedTarget, generation, attempt);
+                        if (renderedFrame === null) return;
+                        if (renderedFrame === normalizedTarget) {
+                            exact = true;
+                            break;
+                        }
+                    }
+                } finally {
+                    if (generation === trakeController.seekGeneration) {
+                        trakeController.seekInFlight = false;
+                        trakeController.settleStatus = exact ? 'exact' : 'failed';
+                        trakeController.settleResolve = null;
+                        updateTrakeFrameReadout();
+                        if (resumePlayback && exact) player.play().catch(() => {});
+                    }
+                    resolve(exact);
+                }
+            }, delay);
+        });
+        trakeController.settlePromise = settlePromise;
+        return settlePromise;
     }
 
     async function waitForRenderedTrakeFrame(targetFrame = trakeController.desiredFrameIndex) {
         if (!trakeController.ready) throw new Error('FPS metadata is not ready.');
         const player = document.getElementById('videoPlayer');
-        trakeController.desiredFrameIndex = Math.max(0, targetFrame);
-        updateTrakeFrameReadout();
         if (player.readyState < 2) {
             await new Promise(resolve => {
                 const finish = () => {
@@ -7032,37 +7840,23 @@ document.addEventListener('DOMContentLoaded', function () {
                 setTimeout(finish, 5000);
             });
         }
-        if (!trakeController.seekInFlight && trakeController.desiredFrameIndex === trakeController.renderedFrameIndex) {
-            if (typeof player.requestVideoFrameCallback === 'function') {
-                await new Promise(resolve => {
-                    const fallback = setTimeout(() => resolve(), 250);
-                    player.requestVideoFrameCallback((_, metadata) => {
-                        clearTimeout(fallback);
-                        trakeController.renderedFrameIndex = Math.max(0, Math.round(metadata.mediaTime * trakeController.fps));
-                        trakeController.desiredFrameIndex = trakeController.renderedFrameIndex;
-                        updateTrakeFrameReadout();
-                        resolve();
-                    });
-                });
-            }
-            return trakeController.renderedFrameIndex;
+        const normalizedTarget = Math.max(0, targetFrame);
+        if (
+            trakeController.settleTargetFrame === normalizedTarget
+            && trakeController.settleStatus === 'exact'
+            && trakeController.renderedFrameIndex === normalizedTarget
+        ) {
+            return normalizedTarget;
         }
-        const renderedFrame = await new Promise((resolve, reject) => {
-            const waiter = { targetFrame, resolve };
-            trakeController.waiters.push(waiter);
-            clearTimeout(trakeController.seekTimer);
-            trakeController.seekTimer = setTimeout(flushTrakeSeek, 0);
-            setTimeout(() => {
-                const waiterIndex = trakeController.waiters.indexOf(waiter);
-                if (waiterIndex === -1) return;
-                trakeController.waiters.splice(waiterIndex, 1);
-                trakeController.desiredFrameIndex = trakeController.renderedFrameIndex;
-                clearTimeout(trakeController.seekTimer);
-                updateTrakeFrameReadout();
-                reject(new Error(`Không thể render chính xác frame ${targetFrame}.`));
-            }, 6000);
-        });
-        return renderedFrame;
+        if (trakeController.settleTargetFrame === normalizedTarget && trakeController.settleStatus === 'pending') {
+            const exact = await trakeController.settlePromise;
+            if (exact && trakeController.renderedFrameIndex === normalizedTarget) return normalizedTarget;
+        }
+        const exact = await beginTrakeFrameSettle(normalizedTarget, { delay: 0, maxAttempts: 3 });
+        if (!exact || trakeController.renderedFrameIndex !== normalizedTarget) {
+            throw new Error(`Không thể render chính xác frame ${normalizedTarget}.`);
+        }
+        return normalizedTarget;
     }
 
     function captureTrakeThumbnail(player) {
