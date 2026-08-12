@@ -195,15 +195,10 @@
                                         <option value="embedding">Embedding</option>
                                     </select>
                                 </div>
-                                <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 4px;">
-                                    <span class="ocr-mode-label">Top K:</span>
-                                    <select class="asr-topk-select" title="ASR Embedding Top K">
-                                        <option value="80">Low (80)</option>
-                                        <option value="110" selected>Medium (110)</option>
-                                        <option value="200">High (200)</option>
-                                        <option value="custom">Custom</option>
-                                    </select>
-                                    <input type="number" class="asr-topk-custom-input" min="1" max="5000" value="110" placeholder="Top K" style="display: none; width: 65px; padding: 2px 6px; font-size: 12px; border-radius: 4px; border: 1px solid #444; background: #222; color: #fff;">
+                                <div class="asr-topk-container" style="display: none; margin-left: 6px; align-items: center; gap: 6px;">
+                                    <span class="ocr-mode-label" style="white-space: nowrap;">Top K:</span>
+                                    <input type="range" class="asr-topk-slider" min="1" max="100" value="50" step="1" title="ASR Embedding Top K (1-100)" style="width: 85px; flex-shrink: 0; accent-color: #4CAF50; cursor: pointer; vertical-align: middle;">
+                                    <strong class="asr-topk-value" style="color: #4CAF50; font-weight: 600; min-width: 26px; display: inline-block; text-align: left;">50</strong>
                                 </div>
                             </div>
                             <div class="image-upload-area" style="display: none;">
@@ -287,66 +282,104 @@
     </div>
     <div id="videoModal" class="video-modal" style="display: none;">
         <div class="modal-overlay"></div>
-        <div class="modal-content">
-            <button class="close-btn" id="closeVideoModalBtn">×</button>
-            <div class="video-container">
-                <!-- Xóa thuộc tính 'controls' -->
-                <video id="videoPlayer" class="video-player" autoplay muted>
-                    <source src="" type="video/mp4">
-                    Trình duyệt của bạn không hỗ trợ thẻ video.
-                </video>
-            </div>
-
-            <!-- === KHU VỰC ĐIỀU KHIỂN TÙY CHỈNH MỚI === -->
-            <div class="video-custom-controls">
-                <div class="controls-top-row">
-                    <input type="range" id="videoSeekSlider" class="video-seek-slider" value="0" step="0.1">
+        <div class="modal-content video-workbench">
+            <header class="video-workbench-header">
+                <div>
+                    <span class="video-workbench-kicker">Video workbench</span>
+                    <strong id="videoWorkbenchTitle">Video</strong>
                 </div>
-                <div class="controls-bottom-row">
-                    <div class="controls-left">
-                        <button id="playPauseBtn" class="control-btn" title="Play/Pause (Space)">
-                            <i class="fas fa-play"></i>
-                        </button>
-                        <button id="seekBackwardBtn" class="control-btn" title="Seek Backward (←)">
-                            <i class="fas fa-backward"></i>
-                        </button>
-                        <button id="seekForwardBtn" class="control-btn" title="Seek Forward (→)">
-                            <i class="fas fa-forward"></i>
-                        </button>
-                        <div class="time-display">
-                            <span id="currentTimeDisplay">00:00</span> / <span id="durationDisplay">00:00</span>
+                <button class="close-btn" id="closeVideoModalBtn" aria-label="Close video workbench">×</button>
+            </header>
+            <div class="video-workbench-body">
+                <main class="video-workbench-main">
+                    <div class="video-container">
+                        <video id="videoPlayer" class="video-player" autoplay muted playsinline preload="metadata">
+                            Trình duyệt của bạn không hỗ trợ thẻ video.
+                        </video>
+                        <div class="video-wheel-hint" id="videoWheelHint">Wheel ±1s</div>
+                        <div class="trake-mode-overlay">
+                            <div class="trake-status-bar" id="trakeStatusBar">
+                                <div class="status-dot empty" data-event="1">1</div>
+                                <div class="status-dot empty" data-event="2">2</div>
+                                <div class="status-dot empty" data-event="3">3</div>
+                                <div class="status-dot empty" data-event="4">4</div>
+                                <div class="status-dot empty" data-event="5">5</div>
+                            </div>
+                            <div class="trake-frame-readout" id="trakeFrameReadout">
+                                <strong id="trakeFrameIndex">Frame --</strong>
+                                <span id="trakeFrameTimestamp">--:--.---</span>
+                                <span id="trakeFpsStatus">Loading FPS...</span>
+                            </div>
+                            <div class="trake-seek-controls">
+                                <label for="trakeFrameStep">Frame step:</label>
+                                <input type="number" id="trakeFrameStep" value="1" step="1" min="1" max="100">
+                            </div>
                         </div>
                     </div>
-                    <div class="controls-right">
-                        <button id="muteBtn" class="control-btn" title="Mute/Unmute (M)">
-                            <i class="fas fa-volume-xmark"></i> <!-- Bắt đầu với icon tắt tiếng -->
-                        </button>
-                        <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05"
-                            value="1">
+                    <div class="video-custom-controls">
+                        <input type="range" id="videoSeekSlider" class="video-seek-slider" value="0" min="0" step="0.1" aria-label="Video timeline">
+                        <div class="controls-bottom-row">
+                            <div class="controls-left">
+                                <button id="playPauseBtn" class="control-btn" title="Play/Pause (Space)">
+                                    <i class="fas fa-play"></i>
+                                </button>
+                                <button id="seekBackwardBtn" class="control-btn" title="Seek backward">
+                                    <i class="fas fa-backward-step"></i>
+                                </button>
+                                <button id="seekForwardBtn" class="control-btn" title="Seek forward">
+                                    <i class="fas fa-forward-step"></i>
+                                </button>
+                                <div class="time-display">
+                                    <span id="currentTimeDisplay">00:00</span> / <span id="durationDisplay">00:00</span>
+                                </div>
+                            </div>
+                            <span id="videoPlaybackRateReadout" class="video-rate-readout">1×</span>
+                        </div>
                     </div>
-                </div>
+                </main>
+                <aside class="video-tool-rail" aria-label="Video controls">
+                    <section class="video-tool-section">
+                        <span class="video-tool-label">Playback speed</span>
+                        <div id="videoPlaybackRates" class="video-rate-grid">
+                            <button type="button" data-rate="0.25">0.25×</button>
+                            <button type="button" data-rate="0.5">0.5×</button>
+                            <button type="button" data-rate="1" class="active">1×</button>
+                            <button type="button" data-rate="1.25">1.25×</button>
+                            <button type="button" data-rate="1.5">1.5×</button>
+                            <button type="button" data-rate="1.75">1.75×</button>
+                            <button type="button" data-rate="2">2×</button>
+                        </div>
+                    </section>
+                    <section class="video-tool-section">
+                        <label class="video-tool-label" for="videoWheelSeekSelect">Wheel seek step</label>
+                        <select id="videoWheelSeekSelect" class="video-tool-select">
+                            <option value="0.25">0.25 seconds</option>
+                            <option value="0.5">0.5 seconds</option>
+                            <option value="1" selected>1 second</option>
+                            <option value="2">2 seconds</option>
+                            <option value="5">5 seconds</option>
+                            <option value="10">10 seconds</option>
+                        </select>
+                    </section>
+                    <section class="video-tool-section video-audio-controls">
+                        <span class="video-tool-label">Audio</span>
+                        <div class="video-volume-row">
+                            <button id="muteBtn" class="control-btn" title="Mute/Unmute (M)" aria-label="Mute or unmute">
+                                <i class="fas fa-volume-xmark"></i>
+                            </button>
+                            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+                            <span id="videoVolumeReadout">100%</span>
+                        </div>
+                    </section>
+                </aside>
             </div>
-            <!-- === KẾT THÚC KHU VỰC ĐIỀU KHIỂN === -->
-
-            <div class="trake-mode-overlay">
-                <div class="trake-status-bar" id="trakeStatusBar">
-                    <div class="status-dot empty" data-event="1">1</div>
-                    <div class="status-dot empty" data-event="2">2</div>
-                    <div class="status-dot empty" data-event="3">3</div>
-                    <div class="status-dot empty" data-event="4">4</div>
-                    <div class="status-dot empty" data-event="5">5</div>
+            <section class="video-keyframes" aria-label="Nearby video keyframes">
+                <div class="video-keyframes-header">
+                    <strong>Nearby keyframes</strong>
+                    <span id="videoKeyframeStatus">Loading timeline...</span>
                 </div>
-                <div class="trake-frame-readout" id="trakeFrameReadout">
-                    <strong id="trakeFrameIndex">Frame --</strong>
-                    <span id="trakeFrameTimestamp">--:--.---</span>
-                    <span id="trakeFpsStatus">Loading FPS...</span>
-                </div>
-                <div class="trake-seek-controls">
-                    <label for="trakeFrameStep">Frame step:</label>
-                    <input type="number" id="trakeFrameStep" value="1" step="1" min="1" max="100">
-                </div>
-            </div>
-
+                <div id="videoKeyframeSlider" class="video-keyframe-slider" tabindex="0"></div>
+            </section>
         </div>
     </div>
     <div id="selectionToolbar" class="selection-toolbar">
