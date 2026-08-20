@@ -2,7 +2,7 @@ from fastapi import FastAPI, UploadFile, File, Form, Request, Response, HTTPExce
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
 from typing import Dict, List, Optional
@@ -22,6 +22,7 @@ import json
 import hashlib
 import secrets
 import traceback
+import zipfile
 try:
     import redis.asyncio as aioredis
 except ImportError:
@@ -37,6 +38,73 @@ FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_
 PROJECT_DIR = Path(__file__).resolve().parent
 CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
 CLUSTER_DELETION_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
+ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/qwen3_asr_20s/transcripts_timestamped.json")
+
+
+class TranscriptStore:
+    def __init__(self, path: Path):
+        self.path = path
+        self.videos: Dict[str, dict] = {}
+        self.etag = None
+        self.error = None
+        self._load()
+
+    @staticmethod
+    def _timestamp_to_seconds(value: str) -> float:
+        parts = value.strip().split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid transcript timestamp: {value}")
+        return int(parts[0]) * 3600 + int(parts[1]) * 60 + float(parts[2])
+
+    def _load(self):
+        try:
+            with self.path.open("r", encoding="utf-8") as file:
+                raw_transcripts = json.load(file)
+
+            videos = {}
+            for source_name, raw_segments in raw_transcripts.items():
+                if not isinstance(raw_segments, dict):
+                    continue
+                video_name = re.sub(r"\.(?:wav|mp3|mp4)$", "", source_name, flags=re.IGNORECASE)
+                segments = []
+                for time_range, text in raw_segments.items():
+                    if not isinstance(time_range, str) or not isinstance(text, str):
+                        continue
+                    labels = [label.strip() for label in time_range.split("-->", 1)]
+                    if len(labels) != 2:
+                        continue
+                    try:
+                        start = self._timestamp_to_seconds(labels[0])
+                        end = self._timestamp_to_seconds(labels[1])
+                    except (TypeError, ValueError):
+                        continue
+                    segments.append({
+                        "start": start,
+                        "end": end,
+                        "start_label": labels[0],
+                        "end_label": labels[1],
+                        "text": text,
+                    })
+                segments.sort(key=lambda segment: (segment["start"], segment["end"]))
+                videos[video_name] = {
+                    "video_name": video_name,
+                    "segments": segments,
+                }
+
+            stat = self.path.stat()
+            self.videos = videos
+            self.etag = f'"{stat.st_mtime_ns:x}-{stat.st_size:x}"'
+            self.error = None
+            print(f"Loaded transcripts for {len(videos)} videos from {self.path}")
+        except Exception as error:
+            self.videos = {}
+            self.etag = None
+            self.error = str(error)
+            print(f"Transcript data unavailable at {self.path}: {error}")
+
+    def get(self, video_name: str) -> Optional[dict]:
+        normalized_name = re.sub(r"\.(?:wav|mp3|mp4)$", "", video_name, flags=re.IGNORECASE)
+        return self.videos.get(normalized_name)
 
 
 class ClusterCatalog:
@@ -207,6 +275,7 @@ class ClusterDeletionStore:
 
 cluster_catalog = ClusterCatalog(CLUSTER_CATALOG_FILE)
 cluster_deletion_store = ClusterDeletionStore(CLUSTER_DELETION_FILE)
+transcript_store = TranscriptStore(ASR_TRANSCRIPT_FILE)
 
 
 def get_search_cluster_filter(cluster_mode_enabled: bool) -> list[str]:
@@ -228,6 +297,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition"],
 )
 
 REDIS_URL = "redis://192.168.20.156:6060"
@@ -674,6 +744,11 @@ class FormSubmitRequest(BaseModel):
     answer: Optional[str] = None
     filename: str
 
+
+class FormSubmitFileUpdateRequest(BaseModel):
+    content: str
+    revision: str
+
 @app.get("/api/debug/redis-test")
 async def test_redis_connection():
     try:
@@ -1066,19 +1141,25 @@ async def fetch_asr_transcript(
     frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
     video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
     timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    frame_id: Optional[int] = Query(None, description="Frame ID integer e.g. 123"),
+    video_id: Optional[str] = Query(None, description="Video ID (alias for video_name)"),
+    time_stamp: Optional[float] = Query(None, description="Timestamp in seconds (alias for timestamp)"),
     model_name: Optional[str] = Query(None, description="Target Milvus model name"),
 ):
     """Fetches ASR transcript details for a frame or video timestamp."""
-    if not frame_specify and not (video_name and timestamp is not None):
+    target_vid = video_name or video_id
+    target_ts = timestamp if timestamp is not None else time_stamp
+    if not frame_specify and not (target_vid and (target_ts is not None or frame_id is not None)):
         raise HTTPException(
             status_code=400,
-            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+            detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
         result = milvus.get_asr_transcript_for_frame(
             frame_specify=frame_specify,
-            video_name=video_name,
-            timestamp=timestamp,
+            video_name=target_vid,
+            timestamp=target_ts,
+            frame_id=frame_id,
             model_name=model_name,
         )
         return result
@@ -1086,24 +1167,49 @@ async def fetch_asr_transcript(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/transcripts/{video_name}", tags=["Transcripts & Text"])
+async def fetch_video_transcript(video_name: str, request: Request, response: Response):
+    """Return the complete timestamped ASR transcript for one video."""
+    if transcript_store.error:
+        raise HTTPException(status_code=503, detail="Transcript data is unavailable")
+
+    transcript = transcript_store.get(video_name)
+    if transcript is None:
+        raise HTTPException(status_code=404, detail=f"Transcript for {video_name} not found")
+
+    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=86400"
+    if transcript_store.etag:
+        response.headers["ETag"] = transcript_store.etag
+        if request.headers.get("if-none-match") == transcript_store.etag:
+            response.status_code = 304
+            return None
+    return transcript
+
+
 @app.get("/api/ocr_text", tags=["Transcripts & Text"])
 async def fetch_ocr_text(
     frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
     video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
     timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    frame_id: Optional[int] = Query(None, description="Frame ID integer e.g. 123"),
+    video_id: Optional[str] = Query(None, description="Video ID (alias for video_name)"),
+    time_stamp: Optional[float] = Query(None, description="Timestamp in seconds (alias for timestamp)"),
     model_name: Optional[str] = Query(None, description="Target Milvus model name"),
 ):
     """Fetches OCR text recognized on a specific frame."""
-    if not frame_specify and not (video_name and timestamp is not None):
+    target_vid = video_name or video_id
+    target_ts = timestamp if timestamp is not None else time_stamp
+    if not frame_specify and not (target_vid and (target_ts is not None or frame_id is not None)):
         raise HTTPException(
             status_code=400,
-            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+            detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
         result = milvus.get_ocr_text_for_frame(
             frame_specify=frame_specify,
-            video_name=video_name,
-            timestamp=timestamp,
+            video_name=target_vid,
+            timestamp=target_ts,
+            frame_id=frame_id,
             model_name=model_name,
         )
         return result
@@ -1116,31 +1222,39 @@ async def fetch_frame_text(
     frame_specify: Optional[str] = Query(None, description="Frame identifier e.g. L21_V001/0123.jpg"),
     video_name: Optional[str] = Query(None, description="Video name e.g. L21_V001"),
     timestamp: Optional[float] = Query(None, description="Timestamp in seconds e.g. 12.5"),
+    frame_id: Optional[int] = Query(None, description="Frame ID integer e.g. 123"),
+    video_id: Optional[str] = Query(None, description="Video ID (alias for video_name)"),
+    time_stamp: Optional[float] = Query(None, description="Timestamp in seconds (alias for timestamp)"),
     model_name: Optional[str] = Query(None, description="Target Milvus model name"),
 ):
     """Fetches both ASR transcript and OCR text for a specific frame."""
-    if not frame_specify and not (video_name and timestamp is not None):
+    target_vid = video_name or video_id
+    target_ts = timestamp if timestamp is not None else time_stamp
+    if not frame_specify and not (target_vid and (target_ts is not None or frame_id is not None)):
         raise HTTPException(
             status_code=400,
-            detail="Must provide either 'frame_specify' or both 'video_name' and 'timestamp'",
+            detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
         asr_data = milvus.get_asr_transcript_for_frame(
             frame_specify=frame_specify,
-            video_name=video_name,
-            timestamp=timestamp,
+            video_name=target_vid,
+            timestamp=target_ts,
+            frame_id=frame_id,
             model_name=model_name,
         )
         ocr_data = milvus.get_ocr_text_for_frame(
             frame_specify=frame_specify,
-            video_name=video_name,
-            timestamp=timestamp,
+            video_name=target_vid,
+            timestamp=target_ts,
+            frame_id=frame_id,
             model_name=model_name,
         )
         return {
-            "frame_specify": frame_specify or ocr_data.get("frame_specify"),
-            "video_name": video_name or asr_data.get("video_name"),
-            "timestamp": timestamp if timestamp is not None else asr_data.get("timestamp"),
+            "frame_id": frame_id or asr_data.get("frame_id") or ocr_data.get("frame_id"),
+            "frame_specify": frame_specify or ocr_data.get("frame_specify") or asr_data.get("frame_specify"),
+            "video_name": target_vid or asr_data.get("video_name"),
+            "timestamp": target_ts if target_ts is not None else asr_data.get("timestamp"),
             "asr": asr_data,
             "ocr": ocr_data,
         }
@@ -2031,37 +2145,202 @@ async def handle_trake_submit(request: TrakeSubmitRequest):
 
     return {"status": "success", "message": f"Received {len(submitted_frames)} frames for TRAKE submission."}
 
+
+def _form_submit_directory() -> Path:
+    directory = Path(FORM_SUBMIT_SAVE_PATH)
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory.resolve()
+
+
+@contextmanager
+def _locked_form_submit_directory():
+    directory = _form_submit_directory()
+    lock_path = directory / ".csv-manager.lock"
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield directory
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _resolve_form_submit_csv(directory: Path, filename: str, must_exist: bool = True) -> Path:
+    if (
+        not filename
+        or filename != Path(filename).name
+        or "/" in filename
+        or "\\" in filename
+        or Path(filename).suffix.lower() != ".csv"
+    ):
+        raise HTTPException(status_code=400, detail="Invalid CSV filename")
+
+    path = directory / filename
+    if path.resolve(strict=False).parent != directory:
+        raise HTTPException(status_code=400, detail="Invalid CSV path")
+    if path.is_symlink():
+        raise HTTPException(status_code=400, detail="Symbolic links are not supported")
+    if must_exist and (not path.is_file() or path.suffix.lower() != ".csv"):
+        raise HTTPException(status_code=404, detail="CSV file not found")
+    return path
+
+
+def _list_form_submit_csv_paths(directory: Path) -> List[Path]:
+    return sorted(
+        (
+            path for path in directory.iterdir()
+            if path.is_file() and not path.is_symlink() and path.suffix.lower() == ".csv"
+        ),
+        key=lambda path: path.name.lower(),
+    )
+
+
+def _content_revision(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _write_bytes_atomically(path: Path, content: bytes):
+    temporary_path = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with temporary_path.open("wb") as file:
+            file.write(content)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary_path, path)
+    finally:
+        if temporary_path.exists():
+            temporary_path.unlink()
+
+
+@app.get("/api/form-submit/files")
+async def list_form_submit_files():
+    try:
+        with _locked_form_submit_directory() as directory:
+            files = []
+            for path in _list_form_submit_csv_paths(directory):
+                content_bytes = path.read_bytes()
+                try:
+                    content = content_bytes.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"CSV file is not valid UTF-8: {path.name}",
+                    ) from error
+                stat = path.stat()
+                files.append({
+                    "name": path.name,
+                    "content": content,
+                    "size": stat.st_size,
+                    "modified_at": stat.st_mtime,
+                    "revision": _content_revision(content_bytes),
+                })
+        return {"files": files, "count": len(files)}
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Unable to read CSV files: {error}") from error
+
+
+@app.put("/api/form-submit/files/{filename}")
+async def update_form_submit_file(filename: str, request: FormSubmitFileUpdateRequest):
+    if "\x00" in request.content:
+        raise HTTPException(status_code=400, detail="CSV content cannot contain null bytes")
+
+    try:
+        with _locked_form_submit_directory() as directory:
+            path = _resolve_form_submit_csv(directory, filename)
+            current_content = path.read_bytes()
+            if _content_revision(current_content) != request.revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="CSV file changed after it was loaded. Refresh before saving.",
+                )
+
+            updated_content = request.content.encode("utf-8")
+            _write_bytes_atomically(path, updated_content)
+            stat = path.stat()
+
+        return {
+            "success": True,
+            "file": {
+                "name": path.name,
+                "content": request.content,
+                "size": stat.st_size,
+                "modified_at": stat.st_mtime,
+                "revision": _content_revision(updated_content),
+            },
+        }
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Unable to update CSV file: {error}") from error
+
+
+@app.delete("/api/form-submit/files/{filename}")
+async def delete_form_submit_file(filename: str, revision: Optional[str] = Query(default=None)):
+    try:
+        with _locked_form_submit_directory() as directory:
+            path = _resolve_form_submit_csv(directory, filename)
+            if revision and _content_revision(path.read_bytes()) != revision:
+                raise HTTPException(
+                    status_code=409,
+                    detail="CSV file changed after it was loaded. Refresh before deleting.",
+                )
+            path.unlink()
+        return {"success": True, "filename": filename}
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Unable to delete CSV file: {error}") from error
+
+
+@app.get("/api/form-submit/download-all")
+async def download_all_form_submit_files():
+    try:
+        archive_buffer = io.BytesIO()
+        with _locked_form_submit_directory() as directory:
+            csv_paths = _list_form_submit_csv_paths(directory)
+            if not csv_paths:
+                raise HTTPException(status_code=404, detail="No CSV files are available to download")
+
+            with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for path in csv_paths:
+                    archive.writestr(path.name, path.read_bytes())
+
+        archive_buffer.seek(0)
+        archive_name = f"csv-submissions-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+        return StreamingResponse(
+            archive_buffer,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{archive_name}"'},
+        )
+    except HTTPException:
+        raise
+    except OSError as error:
+        raise HTTPException(status_code=500, detail=f"Unable to create CSV archive: {error}") from error
+
 @app.post("/api/form-submit")
 async def handle_form_submit(request: FormSubmitRequest):
     """
     Nhận dữ liệu từ Form Submit Queue và tạo file CSV trên server.
     """
     try:
-        # Đảm bảo thư mục lưu trữ tồn tại
-        os.makedirs(FORM_SUBMIT_SAVE_PATH, exist_ok=True)
-
         # Tạo một tên file
         safe_filename_base = re.sub(r'[\\/*?:"<>|]', "", request.filename)
         safe_filename = f"{safe_filename_base}.csv"
+        csv_buffer = io.StringIO(newline='')
+        writer = csv.writer(csv_buffer)
 
-        filepath = os.path.join(FORM_SUBMIT_SAVE_PATH, safe_filename)
+        # Trường hợp 1: User có nhập "answer"
+        if request.answer and request.answer.strip():
+            for frame_index in request.frame_indices:
+                writer.writerow([request.video_name, frame_index, request.answer])
+        # Trường hợp 2: User không nhập "answer"
+        else:
+            writer.writerow([request.video_name] + request.frame_indices)
 
-        with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
-            writer = csv.writer(csvfile)
-
-            # Trường hợp 1: User có nhập "answer"
-            if request.answer and request.answer.strip():
-                # Ghi header
-                # writer.writerow(["video_id", "frame_index", "answer"])
-                # Ghi mỗi frame trên một dòng
-                for frame_index in request.frame_indices:
-                    writer.writerow([request.video_name, frame_index, request.answer])
-
-            # Trường hợp 2: User không nhập "answer"
-            else:
-                # Ghi tất cả trên một dòng
-                row_data = [request.video_name] + request.frame_indices
-                writer.writerow(row_data)
+        with _locked_form_submit_directory() as directory:
+            filepath = _resolve_form_submit_csv(directory, safe_filename, must_exist=False)
+            _write_bytes_atomically(filepath, csv_buffer.getvalue().encode("utf-8"))
 
         print(f"Form Submit data saved successfully to: {filepath}")
         return {"success": True, "message": f"Data saved to {safe_filename}"}
