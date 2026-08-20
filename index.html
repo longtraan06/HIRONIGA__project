@@ -337,40 +337,72 @@
                         </div>
                     </div>
                 </main>
-                <aside class="video-tool-rail" aria-label="Video controls">
-                    <section class="video-tool-section">
-                        <span class="video-tool-label">Playback speed</span>
-                        <div id="videoPlaybackRates" class="video-rate-grid">
-                            <button type="button" data-rate="0.25">0.25×</button>
-                            <button type="button" data-rate="0.5">0.5×</button>
-                            <button type="button" data-rate="1" class="active">1×</button>
-                            <button type="button" data-rate="1.25">1.25×</button>
-                            <button type="button" data-rate="1.5">1.5×</button>
-                            <button type="button" data-rate="1.75">1.75×</button>
-                            <button type="button" data-rate="2">2×</button>
-                        </div>
-                    </section>
-                    <section class="video-tool-section">
-                        <label class="video-tool-label" for="videoWheelSeekSelect">Wheel seek step</label>
-                        <select id="videoWheelSeekSelect" class="video-tool-select">
-                            <option value="0.25">0.25 seconds</option>
-                            <option value="0.5">0.5 seconds</option>
-                            <option value="1" selected>1 second</option>
-                            <option value="2">2 seconds</option>
-                            <option value="5">5 seconds</option>
-                            <option value="10">10 seconds</option>
-                        </select>
-                    </section>
-                    <section class="video-tool-section video-audio-controls">
-                        <span class="video-tool-label">Audio</span>
-                        <div class="video-volume-row">
-                            <button id="muteBtn" class="control-btn" title="Mute/Unmute (M)" aria-label="Mute or unmute">
-                                <i class="fas fa-volume-xmark"></i>
+                <aside id="videoToolRail" class="video-tool-rail" aria-label="Video controls">
+                    <div id="videoControlsPanel" class="video-rail-panel">
+                        <section class="video-tool-section">
+                            <span class="video-tool-label">Playback speed</span>
+                            <div id="videoPlaybackRates" class="video-rate-grid">
+                                <button type="button" data-rate="0.25">0.25×</button>
+                                <button type="button" data-rate="0.5">0.5×</button>
+                                <button type="button" data-rate="1" class="active">1×</button>
+                                <button type="button" data-rate="1.25">1.25×</button>
+                                <button type="button" data-rate="1.5">1.5×</button>
+                                <button type="button" data-rate="1.75">1.75×</button>
+                                <button type="button" data-rate="2">2×</button>
+                            </div>
+                        </section>
+                        <section class="video-tool-section">
+                            <label class="video-tool-label" for="videoWheelSeekSelect">Wheel seek step</label>
+                            <select id="videoWheelSeekSelect" class="video-tool-select">
+                                <option value="0.25">0.25 seconds</option>
+                                <option value="0.5">0.5 seconds</option>
+                                <option value="1" selected>1 second</option>
+                                <option value="2">2 seconds</option>
+                                <option value="5">5 seconds</option>
+                                <option value="10">10 seconds</option>
+                            </select>
+                        </section>
+                        <section class="video-tool-section video-audio-controls">
+                            <span class="video-tool-label">Audio</span>
+                            <div class="video-volume-row">
+                                <button id="muteBtn" class="control-btn" title="Mute/Unmute (M)" aria-label="Mute or unmute">
+                                    <i class="fas fa-volume-xmark"></i>
+                                </button>
+                                <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume">
+                                <span id="videoVolumeReadout">100%</span>
+                            </div>
+                        </section>
+                        <button id="openTranscriptPanelBtn" class="video-transcript-open-btn" type="button">
+                            <i class="fas fa-align-left"></i>
+                            <span>Transcript</span>
+                        </button>
+                    </div>
+                    <div id="videoTranscriptPanel" class="video-rail-panel video-transcript-panel" hidden>
+                        <div class="video-transcript-header">
+                            <button id="closeTranscriptPanelBtn" class="video-transcript-back-btn" type="button" aria-label="Back to video controls" title="Back to controls">
+                                <i class="fas fa-arrow-left"></i>
                             </button>
-                            <input type="range" id="volumeSlider" class="volume-slider" min="0" max="1" step="0.05" value="1" aria-label="Volume">
-                            <span id="videoVolumeReadout">100%</span>
+                            <div>
+                                <span class="video-tool-label">Transcript</span>
+                                <strong id="videoTranscriptTitle">Video transcript</strong>
+                            </div>
                         </div>
-                    </section>
+                        <div class="video-transcript-search">
+                            <div class="video-transcript-search-input">
+                                <i class="fas fa-search" aria-hidden="true"></i>
+                                <input id="videoTranscriptSearchInput" type="search" autocomplete="off" placeholder="Find in transcript" aria-label="Find in transcript">
+                            </div>
+                            <span id="videoTranscriptSearchCount" class="video-transcript-search-count" aria-live="polite">0 / 0</span>
+                            <button id="videoTranscriptPreviousMatchBtn" type="button" aria-label="Previous transcript match" title="Previous match">
+                                <i class="fas fa-chevron-up"></i>
+                            </button>
+                            <button id="videoTranscriptNextMatchBtn" type="button" aria-label="Next transcript match" title="Next match">
+                                <i class="fas fa-chevron-down"></i>
+                            </button>
+                        </div>
+                        <div id="videoTranscriptStatus" class="video-transcript-status">Loading transcript...</div>
+                        <div id="videoTranscriptList" class="video-transcript-list" aria-live="polite"></div>
+                    </div>
                 </aside>
             </div>
             <section class="video-keyframes" aria-label="Nearby video keyframes">
@@ -491,10 +523,6 @@
             <h3>Form Submit</h3>
             <div class="shortcuts-list">
                 <div class="shortcut-item">
-                    <span class="shortcut-description">VQA Submit</span>
-                    <span class="shortcut-key">F10</span>
-                </div>
-                <div class="shortcut-item">
                     <span class="shortcut-description">Frame/MultiFrame Submit</span>
                     <span class="shortcut-key">Select + Enter</span>
                 </div>
@@ -541,6 +569,11 @@
             <input type="text" id="dresSessionIdInput" placeholder="Enter DRES Session ID...">
             <button id="applyDresSessionBtn" class="apply-btn">Apply</button>
         </div>
+
+        <h4 style="margin-top: 15px;">CSV Submissions</h4>
+        <button id="manageCsvSubmissionsBtn" class="apply-btn settings-wide-action" type="button">
+            <i class="fas fa-file-csv"></i> Manage CSV Files
+        </button>
 
         <h4 style="margin-top: 15px;">Serper API Key</h4>
         <div class="setting-input-group">
@@ -642,56 +675,30 @@
 
 
 
-    <div id="vqaModal" class="vqa-modal" style="display: none;">
-        <div class="modal-overlay"></div>
-        <div class="modal-content">
-            <button class="close-btn">×</button>
-            <h3>VQA Submission</h3>
-            <form id="vqaForm">
-                <div class="form-group">
-                    <label for="vqaIdInput">ID</label>
-                    <input type="text" id="vqaIdInput" name="id" placeholder="Enter the ID" required>
-                </div>
-                <div class="form-group">
-                    <label for="vqaAnswerInput">Answer</label>
-                    <textarea id="vqaAnswerInput" name="answer" placeholder="Enter the answer" rows="3"
-                        required></textarea>
-                </div>
-                <button type="submit" class="submit-form-btn">Submit</button>
-            </form>
-        </div>
-    </div>
-    <div id="frameVqaModal" class="vqa-modal" style="display: none;">
-        <div class="modal-overlay"></div>
-        <div class="modal-content">
-            <button class="close-btn">×</button>
-            <h3>Submit Frame Info with ID</h3>
-            <form id="frameVqaForm">
-                <div class="form-group">
-                    <label for="frameVqaIdInput">ID</label>
-                    <input type="text" id="frameVqaIdInput" name="id"
-                        placeholder="Enter the ID and press Enter to submit" required>
-                </div>
-                <div class="form-group">
-                    <label>Answer (Auto-generated from selected frames)</label>
-                    <pre id="frameVqaAnswerDisplay"></pre>
-                </div>
-            </form>
-        </div>
-    </div>
     <div id="qaInputModal" class="mini-modal" style="display: none;">
         <div class="modal-overlay"></div>
-        <div class="modal-content">
-            <button class="close-btn">×</button>
-            <h3>Enter QA Answer</h3>
-            <p>Your answer will be combined with the selected frame's info.</p>
+        <div class="modal-content qa-submit-modal-content">
+            <button class="close-btn" type="button" aria-label="Close QA submission">×</button>
+            <div class="qa-submit-header">
+                <div>
+                    <h3>QA Submission</h3>
+                    <p id="qaReferenceFrameInfo"></p>
+                </div>
+                <span id="qaFrameSourceBadge" class="qa-frame-source-badge"></span>
+            </div>
+            <div id="qaPreviewStage" class="qa-preview-stage" tabindex="0">
+                <img id="qaPreviewImage" src="" alt="Selected QA reference frame">
+                <div id="qaViewedFrameInfo" class="qa-viewed-frame-info"></div>
+            </div>
+            <div id="qaNeighborStatus" class="qa-neighbor-status"></div>
+            <div id="qaThumbnailStrip" class="thumbnail-strip qa-neighbor-strip" hidden></div>
             <form id="qaInputForm">
                 <div class="form-group">
                     <label for="qaAnswerTextInput">Answer Text</label>
                     <input type="text" id="qaAnswerTextInput" name="answerText"
-                        placeholder="Enter your text answer here" required>
+                        placeholder="Enter the QA answer" autocomplete="off" required>
                 </div>
-                <button type="button" class="submit-form-btn">Submit QA</button>
+                <button type="submit" class="submit-form-btn">Submit QA</button>
             </form>
         </div>
     </div>
@@ -747,6 +754,43 @@
                 </div>
             </div>
             <div id="deletedClustersContent" class="cluster-deletion-grid"></div>
+        </div>
+    </div>
+
+    <div id="csvManagerModal" class="image-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content csv-manager-modal-content">
+            <div class="modal-section-header csv-manager-header">
+                <div class="csv-manager-heading">
+                    <h3>CSV Submissions</h3>
+                    <span id="csvManagerCount" class="csv-manager-count">0 files</span>
+                </div>
+                <div class="modal-header-actions csv-manager-header-actions">
+                    <button id="csvManagerRefreshBtn" class="queue-action-btn" type="button">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                    <button id="csvManagerDownloadBtn" class="queue-action-btn" type="button" disabled>
+                        <i class="fas fa-file-archive"></i> Download all
+                    </button>
+                    <button id="csvManagerCloseBtn" class="queue-action-btn cancel-btn" type="button">
+                        <i class="fas fa-times"></i> Close
+                    </button>
+                </div>
+            </div>
+            <div id="csvManagerContent" class="csv-manager-content" aria-live="polite"></div>
+        </div>
+    </div>
+
+    <div id="csvDeleteConfirmModal" class="mini-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content csv-delete-confirm-content">
+            <button id="closeCsvDeleteConfirmBtn" class="close-btn" type="button">&times;</button>
+            <h3>Delete CSV File</h3>
+            <p id="csvDeleteConfirmText"></p>
+            <div class="confirmation-buttons">
+                <button id="cancelCsvDeleteBtn" class="confirmation-btn cancel" type="button">Cancel</button>
+                <button id="confirmCsvDeleteBtn" class="confirmation-btn confirm" type="button">Delete file</button>
+            </div>
         </div>
     </div>
 
