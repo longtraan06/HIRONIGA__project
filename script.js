@@ -1,8 +1,70 @@
 DRES_IP = 'http://192.168.28.151:5000/api';
+
 const APP_CONFIG = {
     REMOTE_BASE_URL: 'http://localhost:16010',
     WEBSOCKET_URL: 'ws://localhost:16010'
 };
+
+// const APP_CONFIG = {
+//     REMOTE_BASE_URL: '',
+//     WEBSOCKET_URL: ''
+// };
+
+function parseInlineSearchFilters(rawQuery) {
+    const query = String(rawQuery || '');
+    const ocrParts = [];
+    const asrParts = [];
+    let semanticQuery = '';
+
+    const isEscaped = (index) => {
+        let backslashCount = 0;
+        for (let i = index - 1; i >= 0 && query[i] === '\\'; i--) {
+            backslashCount++;
+        }
+        return backslashCount % 2 === 1;
+    };
+
+    const findClosingQuote = (start, quote) => {
+        for (let i = start + 1; i < query.length; i++) {
+            if (query[i] === quote && !isEscaped(i)) return i;
+        }
+        return -1;
+    };
+
+    for (let i = 0; i < query.length;) {
+        const char = query[i];
+        if (!isEscaped(i) && (char === ';' || char === "'" || char === '"')) {
+            const closingIndex = findClosingQuote(i, char);
+            if (closingIndex !== -1) {
+                const content = query.slice(i + 1, closingIndex).trim();
+                if (content) {
+                    if (char === ';') ocrParts.push(content);
+                    else asrParts.push(content);
+                    semanticQuery += ' ';
+                    i = closingIndex + 1;
+                    continue;
+                }
+            }
+        }
+
+        semanticQuery += char;
+        i++;
+    }
+
+    semanticQuery = semanticQuery
+        .replace(/\s+/g, ' ')
+        .replace(/\s+([,.!?])/g, '$1')
+        .trim();
+
+    return { query: semanticQuery, ocrParts, asrParts };
+}
+
+function mergeInlineFilterParts(inlineParts, explicitValue) {
+    const values = [...inlineParts];
+    const trimmedExplicitValue = String(explicitValue || '').trim();
+    if (trimmedExplicitValue) values.push(trimmedExplicitValue);
+    return values.join(', ');
+}
 
 // const APP_CONFIG = {
 //     REMOTE_BASE_URL: '',
@@ -148,8 +210,10 @@ document.addEventListener('DOMContentLoaded', function () {
     let pendingClusterDeletion = null;
     let activeDeletedClusterId = null;
     let csvSubmissionFiles = [];
+    let csvManagerSearchQuery = '';
     let activeCsvEditor = null;
     let pendingCsvDeletion = null;
+    let pendingFormSubmitConflict = null;
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
     let lastClickedFrameId = null;
@@ -191,6 +255,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let dresEvaluationId = null; // Biến để lưu evaluationId sau khi lấy được.
     let currentDresSessionId = null; // Biến để lưu session ID sẽ được sử dụng
     const DEFAULT_DRES_SESSION_ID = 'b-X-ZFRzfwNURvU_234NB6P2LvELU7LA';
+    const inlineDelimiterStates = new WeakMap();
 
     // let allImages = []; // Lưu trữ tất cả kết quả tìm kiếm
     let displayedImagesCount = 0; // Số lượng ảnh đã hiển thị
@@ -203,8 +268,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let metadataCache = new Map();
     const videoKeyframeWindowCache = new Map();
+    const remoteKeyframeWindowCache = new Map();
+    const remoteKeyframeWindowInFlight = new Map();
     const legacyVideoKeyframeIndexCache = new Map();
-    const unavailableKeyframeWindowSources = new Set();
     const videoTranscriptCache = new Map();
     const videoTranscriptInFlight = new Map();
     const VIDEO_PLAYBACK_RATES = [0.25, 0.5, 1, 1.25, 1.5, 1.75, 2];
@@ -355,6 +421,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const csvManagerModal = document.getElementById('csvManagerModal');
     const csvManagerContent = document.getElementById('csvManagerContent');
     const csvManagerCount = document.getElementById('csvManagerCount');
+    const csvManagerSearchInput = document.getElementById('csvManagerSearchInput');
     const csvManagerRefreshBtn = document.getElementById('csvManagerRefreshBtn');
     const csvManagerDownloadBtn = document.getElementById('csvManagerDownloadBtn');
     const csvManagerCloseBtn = document.getElementById('csvManagerCloseBtn');
@@ -363,6 +430,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const closeCsvDeleteConfirmBtn = document.getElementById('closeCsvDeleteConfirmBtn');
     const cancelCsvDeleteBtn = document.getElementById('cancelCsvDeleteBtn');
     const confirmCsvDeleteBtn = document.getElementById('confirmCsvDeleteBtn');
+    const formSubmitConflictModal = document.getElementById('formSubmitConflictModal');
+    const formSubmitConflictText = document.getElementById('formSubmitConflictText');
+    const closeFormSubmitConflictBtn = document.getElementById('closeFormSubmitConflictBtn');
+    const appendFormSubmitBtn = document.getElementById('appendFormSubmitBtn');
+    const overwriteFormSubmitBtn = document.getElementById('overwriteFormSubmitBtn');
     // ADD THESE TWO NEW FUNCTIONS INSIDE the DOMContentLoaded listener
 
     const applyDresSessionBtn = document.getElementById('applyDresSessionBtn');
@@ -711,6 +783,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return response;
     }
 
+    const csvFilenameCollator = new Intl.Collator(undefined, {
+        numeric: true,
+        sensitivity: 'base'
+    });
+
     function hasDirtyCsvEditor() {
         return Boolean(activeCsvEditor && activeCsvEditor.draft !== activeCsvEditor.originalContent);
     }
@@ -734,15 +811,30 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function renderCsvManagerFiles() {
         csvManagerContent.replaceChildren();
-        csvManagerCount.textContent = `${csvSubmissionFiles.length} file${csvSubmissionFiles.length === 1 ? '' : 's'}`;
+        const sortedFiles = [...csvSubmissionFiles].sort((left, right) =>
+            csvFilenameCollator.compare(left.name, right.name)
+        );
+        const normalizedQuery = csvManagerSearchQuery.trim().toLocaleLowerCase();
+        const visibleFiles = normalizedQuery
+            ? sortedFiles.filter(file => file.name.toLocaleLowerCase().includes(normalizedQuery))
+            : sortedFiles;
+        csvManagerCount.textContent = normalizedQuery
+            ? `${visibleFiles.length} / ${csvSubmissionFiles.length} files`
+            : `${csvSubmissionFiles.length} file${csvSubmissionFiles.length === 1 ? '' : 's'}`;
         csvManagerDownloadBtn.disabled = csvSubmissionFiles.length === 0;
+        csvManagerSearchInput.disabled = Boolean(activeCsvEditor);
 
         if (csvSubmissionFiles.length === 0) {
             renderCsvManagerState('No CSV submissions found.', 'empty');
             return;
         }
 
-        csvSubmissionFiles.forEach(file => {
+        if (visibleFiles.length === 0) {
+            renderCsvManagerState(`No CSV filename matches “${csvManagerSearchQuery.trim()}”.`, 'empty');
+            return;
+        }
+
+        visibleFiles.forEach(file => {
             const card = document.createElement('article');
             card.className = 'csv-file-card';
 
@@ -856,6 +948,8 @@ document.addEventListener('DOMContentLoaded', function () {
     async function openCsvManagerModal() {
         settingsMenu.classList.remove('visible');
         if (csvManagerModal.style.display !== 'flex') {
+            csvManagerSearchQuery = '';
+            csvManagerSearchInput.value = '';
             openClusterModal(csvManagerModal, closeCsvManagerModal);
         }
         await loadCsvManagerFiles();
@@ -867,6 +961,8 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
         activeCsvEditor = null;
+        csvManagerSearchQuery = '';
+        csvManagerSearchInput.value = '';
         csvManagerModal.classList.remove('visible');
         registerModalClose(csvManagerModal);
         setTimeout(() => (csvManagerModal.style.display = 'none'), 200);
@@ -1037,6 +1133,10 @@ document.addEventListener('DOMContentLoaded', function () {
         deletedClustersBackBtn.addEventListener('click', renderDeletedClusterList);
         undoDeletedClusterBtn.addEventListener('click', undoActiveDeletedCluster);
         manageCsvSubmissionsBtn.addEventListener('click', openCsvManagerModal);
+        csvManagerSearchInput.addEventListener('input', () => {
+            csvManagerSearchQuery = csvManagerSearchInput.value;
+            renderCsvManagerFiles();
+        });
         csvManagerRefreshBtn.addEventListener('click', loadCsvManagerFiles);
         csvManagerDownloadBtn.addEventListener('click', downloadAllCsvFiles);
         csvManagerCloseBtn.addEventListener('click', closeCsvManagerModal);
@@ -1045,6 +1145,10 @@ document.addEventListener('DOMContentLoaded', function () {
         cancelCsvDeleteBtn.addEventListener('click', closeCsvDeleteConfirmation);
         confirmCsvDeleteBtn.addEventListener('click', confirmCsvDeletion);
         csvDeleteConfirmModal.querySelector('.modal-overlay').addEventListener('click', closeCsvDeleteConfirmation);
+        closeFormSubmitConflictBtn.addEventListener('click', () => closeFormSubmitConflictModal());
+        formSubmitConflictModal.querySelector('.modal-overlay').addEventListener('click', () => closeFormSubmitConflictModal());
+        appendFormSubmitBtn.addEventListener('click', () => resolveFormSubmitConflict('append'));
+        overwriteFormSubmitBtn.addEventListener('click', () => resolveFormSubmitConflict('overwrite'));
 
         currentDresSessionId = getUserScopedSetting('dres_session_id', DEFAULT_DRES_SESSION_ID, 'dres_session_id');
         dresEvaluationId = getUserScopedSetting('dres_evaluation_id', null, 'dres_evaluation_id'); // Tải evaluationId đã chọn
@@ -1645,6 +1749,16 @@ document.addEventListener('DOMContentLoaded', function () {
             throw new Error('Frame data is incomplete.');
         }
 
+        if (frameServeLocation === 'remote') {
+            const payload = await fetchRemoteKeyframeWindow(frameData.videoName, {
+                frameId: frameData.frame_id_ori,
+                before: lookBehind,
+                after: lookAhead,
+                signal
+            });
+            return payload.frames;
+        }
+
         const response = await fetch(getFrameMetadataUrl(frameData.videoName), { signal });
         if (!response.ok) {
             throw new Error(`Unable to load frame metadata (${response.status}).`);
@@ -2115,10 +2229,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (framesToSubmit.length !== 1) {
                     throw new Error("QA submission only supports a single frame.");
                 }
+                const frame = framesToSubmit[0];
+                const fps = await getFpsForVideo(frame.videoName);
+                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
+                const videoId = frame.videoName;
+                const final_QA_answer = `QA-${qaText}-${videoId}-${timeMs}`;
+                console.log("Final QA answer:", final_QA_answer);
                 submissionBody = {
                     "answerSets": [{
                         "answers": [{
-                            "text": qaText
+                            "text": final_QA_answer
                         }]
                     }]
                 };
@@ -2130,6 +2250,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     .sort((a, b) => a - b);
                 const frameIdsString = frameIds.join(',');
                 const finalText = `TR-${videoId}-${frameIdsString}`;
+                console.log("Final TRAKE answer:", finalText);
                 submissionBody = {
                     answerSets: [{
                         answers: [{ text: finalText }]
@@ -2149,7 +2270,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 body: JSON.stringify(submissionBody)
             });
             const result = await response.json();
-
+            console.log(`DRES submission response for ${submissionType}:`, result);
             // Xử lý kết quả trả về (Phần này không thay đổi)
             if (response.ok && result.submission) {
                 if (result.submission === "WRONG") {
@@ -3111,6 +3232,225 @@ document.addEventListener('DOMContentLoaded', function () {
         return newInput;
     }
 
+    function renderInlineDelimiterGhosts(textInput) {
+        const state = inlineDelimiterStates.get(textInput);
+        if (!state) return;
+
+        state.pending = state.pending.filter(item => textInput.value[item.index] === item.char);
+        state.ghostLayer.innerHTML = '';
+        if (!state.pending.length || textInput.style.display === 'none') return;
+
+        const computedStyle = window.getComputedStyle(textInput);
+        const mirroredProperties = [
+            'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+            'fontFamily', 'fontSize', 'fontStyle', 'fontWeight', 'letterSpacing',
+            'lineHeight', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+            'textIndent', 'textTransform', 'wordSpacing'
+        ];
+        mirroredProperties.forEach(property => {
+            state.measure.style[property] = computedStyle[property];
+        });
+        state.measure.style.left = `${textInput.offsetLeft}px`;
+        state.measure.style.top = `${textInput.offsetTop}px`;
+        state.measure.style.width = `${textInput.offsetWidth}px`;
+
+        [...state.pending]
+            .sort((a, b) => a.index - b.index)
+            .forEach(item => {
+                state.measure.textContent = textInput.value.slice(0, item.index);
+                const marker = document.createElement('span');
+                marker.textContent = item.char;
+                state.measure.appendChild(marker);
+
+                const ghost = document.createElement('span');
+                ghost.className = 'inline-delimiter-ghost';
+                ghost.textContent = item.char;
+                ghost.style.left = `${textInput.offsetLeft + marker.offsetLeft - textInput.scrollLeft}px`;
+                ghost.style.top = `${textInput.offsetTop + marker.offsetTop - textInput.scrollTop}px`;
+                ghost.style.font = computedStyle.font;
+                ghost.style.letterSpacing = computedStyle.letterSpacing;
+                ghost.style.lineHeight = computedStyle.lineHeight;
+                state.ghostLayer.appendChild(ghost);
+            });
+    }
+
+    function clearPendingInlineDelimiters(textInput) {
+        const state = inlineDelimiterStates.get(textInput);
+        if (!state) return;
+        state.pending = [];
+        renderInlineDelimiterGhosts(textInput);
+    }
+
+    function prepareInlineQueryForSubmission(textInput, fallbackQuery) {
+        const state = inlineDelimiterStates.get(textInput);
+        if (!state || !state.pending.length) {
+            return textInput ? textInput.value : String(fallbackQuery || '');
+        }
+
+        const pendingIndexes = new Set(
+            state.pending
+                .filter(item => textInput.value[item.index] === item.char)
+                .map(item => item.index)
+        );
+        textInput.value = textInput.value.split('')
+            .filter((_, index) => !pendingIndexes.has(index))
+            .join('');
+        state.pending = [];
+        autoResizeTextarea(textInput);
+        renderInlineDelimiterGhosts(textInput);
+        return textInput.value;
+    }
+
+    function setupInlineDelimiterPairing(textInput, searchGroup) {
+        if (!textInput || inlineDelimiterStates.has(textInput)) return;
+
+        const searchBox = searchGroup.querySelector('.search-box');
+        const ghostLayer = document.createElement('div');
+        ghostLayer.className = 'inline-delimiter-ghost-layer';
+        const measure = document.createElement('div');
+        measure.className = 'inline-delimiter-measure';
+        searchBox.appendChild(ghostLayer);
+        searchBox.appendChild(measure);
+
+        const state = {
+            pending: [],
+            ghostLayer,
+            measure,
+            beforeInput: null,
+            navigationStart: null
+        };
+        inlineDelimiterStates.set(textInput, state);
+
+        const closingForOpening = { ';': ';', "'": "'", '"': '"' };
+        const openingForClosing = { ';': ';', "'": "'", '"': '"' };
+
+        const replaceRange = (start, end, replacement) => {
+            const delta = replacement.length - (end - start);
+            state.pending = state.pending
+                .filter(item => item.index < start || item.index >= end)
+                .map(item => item.index >= end ? { ...item, index: item.index + delta } : item);
+            textInput.value = textInput.value.slice(0, start) + replacement + textInput.value.slice(end);
+        };
+
+        const notifyInput = () => {
+            textInput.dispatchEvent(new Event('input', { bubbles: true }));
+        };
+
+        const commitCrossedDelimiters = (from, to) => {
+            if (from === null || to <= from) return;
+            state.pending = state.pending.filter(item => !(from <= item.index && to > item.index));
+        };
+
+        textInput.addEventListener('beforeinput', () => {
+            state.beforeInput = {
+                value: textInput.value,
+                start: textInput.selectionStart,
+                end: textInput.selectionEnd
+            };
+        });
+
+        textInput.addEventListener('input', () => {
+            if (state.beforeInput) {
+                const oldValue = state.beforeInput.value;
+                const newValue = textInput.value;
+                let prefixLength = 0;
+                while (
+                    prefixLength < oldValue.length &&
+                    prefixLength < newValue.length &&
+                    oldValue[prefixLength] === newValue[prefixLength]
+                ) {
+                    prefixLength++;
+                }
+
+                let suffixLength = 0;
+                while (
+                    suffixLength < oldValue.length - prefixLength &&
+                    suffixLength < newValue.length - prefixLength &&
+                    oldValue[oldValue.length - 1 - suffixLength] === newValue[newValue.length - 1 - suffixLength]
+                ) {
+                    suffixLength++;
+                }
+
+                const oldChangedEnd = oldValue.length - suffixLength;
+                const delta = newValue.length - oldValue.length;
+                state.pending = state.pending
+                    .filter(item => item.index < prefixLength || item.index >= oldChangedEnd)
+                    .map(item => item.index >= oldChangedEnd ? { ...item, index: item.index + delta } : item);
+            }
+            state.beforeInput = null;
+            renderInlineDelimiterGhosts(textInput);
+        });
+
+        textInput.addEventListener('keydown', (event) => {
+            const start = textInput.selectionStart;
+            const end = textInput.selectionEnd;
+            const pendingAtCaret = state.pending.find(item => item.index === start && item.char === event.key);
+
+            if (!event.ctrlKey && !event.metaKey && !event.altKey && pendingAtCaret && start === end) {
+                event.preventDefault();
+                state.pending = state.pending.filter(item => item !== pendingAtCaret);
+                textInput.setSelectionRange(start + 1, start + 1);
+                renderInlineDelimiterGhosts(textInput);
+                return;
+            }
+
+            if (!event.ctrlKey && !event.metaKey && !event.altKey && closingForOpening[event.key]) {
+                event.preventDefault();
+                const selectedText = textInput.value.slice(start, end);
+                const closingChar = closingForOpening[event.key];
+                replaceRange(start, end, `${event.key}${selectedText}${closingChar}`);
+                const closingIndex = start + event.key.length + selectedText.length;
+                state.pending.push({ index: closingIndex, char: closingChar });
+                textInput.setSelectionRange(closingIndex, closingIndex);
+                notifyInput();
+                return;
+            }
+
+            if (event.key === 'Backspace' && start === end) {
+                const pendingAtPosition = state.pending.find(item => item.index === start);
+                if (
+                    pendingAtPosition &&
+                    start > 0 &&
+                    textInput.value[start - 1] === openingForClosing[pendingAtPosition.char]
+                ) {
+                    event.preventDefault();
+                    state.pending = state.pending.filter(item => item !== pendingAtPosition);
+                    replaceRange(start - 1, start + 1, '');
+                    textInput.setSelectionRange(start - 1, start - 1);
+                    notifyInput();
+                    return;
+                }
+            }
+
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                state.navigationStart = start;
+            }
+        });
+
+        textInput.addEventListener('keyup', (event) => {
+            if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+                commitCrossedDelimiters(state.navigationStart, Math.max(textInput.selectionStart, textInput.selectionEnd));
+                state.navigationStart = null;
+                renderInlineDelimiterGhosts(textInput);
+            }
+        });
+
+        textInput.addEventListener('pointerdown', () => {
+            state.navigationStart = textInput.selectionStart;
+        });
+        textInput.addEventListener('click', () => {
+            commitCrossedDelimiters(state.navigationStart, Math.max(textInput.selectionStart, textInput.selectionEnd));
+            state.navigationStart = null;
+            renderInlineDelimiterGhosts(textInput);
+        });
+        textInput.addEventListener('scroll', () => renderInlineDelimiterGhosts(textInput));
+
+        if (window.ResizeObserver) {
+            state.resizeObserver = new ResizeObserver(() => renderInlineDelimiterGhosts(textInput));
+            state.resizeObserver.observe(textInput);
+        }
+    }
+
     function setupSearchInput(searchGroup) {
         const textInput = searchGroup.querySelector('.search-input');
         const ocrInput = searchGroup.querySelector('.ocr-input');
@@ -3120,6 +3460,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
+        textInput.title = 'Inline filters: ;OCR;, "ASR", or \'ASR\'';
 
         // Auto-resize textarea + ẩn dòng dịch khi người dùng gõ
         textInput.addEventListener('input', function () {
@@ -3129,6 +3470,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 translationDisplay.classList.remove('visible');
             }
         });
+        setupInlineDelimiterPairing(textInput, searchGroup);
 
         if (ocrInput) {
             ocrInput.addEventListener('keydown', function (e) {
@@ -3305,6 +3647,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     e.preventDefault();
                     const correctedText = suggestionDisplay.dataset.suggestion;
                     this.value = correctedText + ' ';
+                    clearPendingInlineDelimiters(this);
                     suggestionDisplay.classList.remove('visible');
                     suggestionDisplay.dataset.suggestion = '';
                     autoResizeTextarea(this);
@@ -3325,6 +3668,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (this.classList.contains('visible') && this.dataset.suggestion) {
                 const correctedText = this.dataset.suggestion;
                 textInput.value = correctedText + ' ';
+                clearPendingInlineDelimiters(textInput);
 
                 this.classList.remove('visible');
                 this.dataset.suggestion = '';
@@ -3485,45 +3829,38 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function performSearch(query, type, searchGroup) {
+        let inlineFilters = { query: String(query || ''), ocrParts: [], asrParts: [] };
         if (type === 'text') {
-            // Lấy giá trị từ các ô lọc đang hoạt động
-            saveQueryToHistory(query);
-            const ocrInput = searchGroup.querySelector('.ocr-input');
-            const tagInput = searchGroup.querySelector('.tag-input');
-            const asrInput = searchGroup.querySelector('.asr-input');
-            // Chỉ lấy giá trị nếu nút filter tương ứng đang active
-            const ocrValue = ocrFilterBtn.classList.contains('active') && ocrInput ? ocrInput.value.trim() : '';
-            const tagValue = tagFilterBtn.classList.contains('active') && tagInput ? tagInput.value.trim() : '';
-            const asrValue = asrFilterBtn.classList.contains('active') && asrInput ? asrInput.value.trim() : '';
-            // Chỉ dừng lại nếu TẤT CẢ các ô nhập liệu (cả search và filter) đều trống
-            if (!query.trim() && !ocrValue && !tagValue && !asrValue) {
-                showToastNotification("Please enter a search query or a filter value.", "error");
-                return; // Dừng hàm tại đây
-            }
+            const textInput = searchGroup?.querySelector('.search-input');
+            const originalQuery = prepareInlineQueryForSubmission(textInput, query);
+            saveQueryToHistory(originalQuery);
+            inlineFilters = parseInlineSearchFilters(originalQuery);
+            query = inlineFilters.query;
         } else if (type === 'image' && !query) {
             // Giữ nguyên logic cũ cho tìm kiếm bằng hình ảnh
             return;
         }
 
-        showLoadingIndicator();
         const filterOptions = {};
         if (isEventFilterEnabled) { // <<< THÊM DÒNG NÀY
             filterOptions.use_event_filter = true;
         }
 
         if (searchGroup) {
-            if (ocrFilterBtn.classList.contains('active')) {
-                const ocrInput = searchGroup.querySelector('.ocr-input');
-                if (ocrInput && ocrInput.value.trim() !== '') {
-                    filterOptions.ocr = ocrInput.value.trim();
-                    const ocrFuzzySwitch = searchGroup.querySelector('.ocr-filter-container input[type="checkbox"]');
-                    if (ocrFuzzySwitch && ocrFuzzySwitch.checked) {
-                        filterOptions.ocr_fuzzy = true;
-                    }
-                    const ocrModeSelect = searchGroup.querySelector('.ocr-filter-container .ocr-mode-select');
-                    if (ocrModeSelect) {
-                        filterOptions.ocr_mode = ocrModeSelect.value;
-                    }
+            const ocrInput = searchGroup.querySelector('.ocr-input');
+            const explicitOcr = ocrFilterBtn.classList.contains('active') && ocrInput
+                ? ocrInput.value.trim()
+                : '';
+            const mergedOcr = mergeInlineFilterParts(inlineFilters.ocrParts, explicitOcr);
+            if (mergedOcr) {
+                filterOptions.ocr = mergedOcr;
+                const ocrFuzzySwitch = searchGroup.querySelector('.ocr-filter-container input[type="checkbox"]');
+                if (ocrFilterBtn.classList.contains('active') && ocrFuzzySwitch?.checked) {
+                    filterOptions.ocr_fuzzy = true;
+                }
+                const ocrModeSelect = searchGroup.querySelector('.ocr-filter-container .ocr-mode-select');
+                if (ocrModeSelect) {
+                    filterOptions.ocr_mode = ocrModeSelect.value;
                 }
             }
 
@@ -3538,30 +3875,38 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
 
-            if (asrFilterBtn.classList.contains('active')) {
-                const asrInput = searchGroup.querySelector('.asr-input');
-                if (asrInput && asrInput.value.trim() !== '') {
-                    filterOptions.asr = asrInput.value.trim();
-                    const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
-                    if (asrModeSelect) {
-                        filterOptions.asr_mode = asrModeSelect.value;
-                    }
-                    const asrTopKSlider = searchGroup.querySelector('.asr-topk-slider');
-                    if (asrTopKSlider) {
-                        filterOptions.asr_top_k = parseInt(asrTopKSlider.value) || 50;
+            const asrInput = searchGroup.querySelector('.asr-input');
+            const explicitAsr = asrFilterBtn.classList.contains('active') && asrInput
+                ? asrInput.value.trim()
+                : '';
+            const mergedAsr = mergeInlineFilterParts(inlineFilters.asrParts, explicitAsr);
+            if (mergedAsr) {
+                filterOptions.asr = mergedAsr;
+                const asrModeSelect = searchGroup.querySelector('.asr-mode-select');
+                if (asrModeSelect) {
+                    filterOptions.asr_mode = asrModeSelect.value;
+                }
+                const asrTopKSlider = searchGroup.querySelector('.asr-topk-slider');
+                if (asrTopKSlider) {
+                    filterOptions.asr_top_k = parseInt(asrTopKSlider.value) || 50;
+                } else if (asrFilterBtn.classList.contains('active')) {
+                    const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
+                    if (asrFuzzySwitch?.checked) {
+                        filterOptions.asr_fuzzy = true;
+                        filterOptions.asr_mode = "fuzzy";
                     } else {
-                        const asrFuzzySwitch = searchGroup.querySelector('.asr-filter-container input[type="checkbox"]');
-                        if (asrFuzzySwitch && asrFuzzySwitch.checked) {
-                            filterOptions.asr_fuzzy = true;
-                            filterOptions.asr_mode = "fuzzy";
-                        } else {
-                            filterOptions.asr_mode = "keyword";
-                        }
+                        filterOptions.asr_mode = "keyword";
                     }
                 }
             }
         }
 
+        if (type === 'text' && !String(query || '').trim() && !filterOptions.ocr && !filterOptions.asr && !filterOptions.tags_filter) {
+            showToastNotification("Please enter a search query or a filter value.", "error");
+            return;
+        }
+
+        showLoadingIndicator();
         try {
             let finalQuery = query;
 
@@ -4103,8 +4448,6 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }, config.duration);
     }
-    // ====== BẮT ĐẦU PHIÊN BẢN MỚI CỦA HÀM OPENIMAGEMODAL ======
-
     async function openImageModal(clickedFrameData) {
         if (!clickedFrameData || !clickedFrameData.videoName || typeof clickedFrameData.frame_id_ori === 'undefined') {
             showToastNotification("Lỗi: Dữ liệu frame không đầy đủ để mở modal.", "error");
@@ -4117,31 +4460,99 @@ document.addEventListener('DOMContentLoaded', function () {
         const thumbnailStrip = document.getElementById('thumbnailStrip');
         const modalFrameInfo = document.getElementById('modalFrameInfo');
         const mainPreviewOverlay = document.getElementById('mainPreviewOverlay');
-
-        let currentModalFrameData = null;
-
         const videoId = clickedFrameData.videoName;
-        const targetFrameIdOri = clickedFrameData.frame_id_ori;
-
+        const targetFrameIdOri = Number(clickedFrameData.frame_id_ori);
+        const initialWindowSize = 20;
+        const pageSize = 40;
+        const prefetchThreshold = 8;
+        const maxFramesInDom = 200;
+        const requestController = new AbortController();
         let neighborFrames = [];
+        let currentModalFrameData = null;
+        let hasPrevious = false;
+        let hasNext = false;
+        let loadingPrevious = false;
+        let loadingNext = false;
+        let closed = false;
+        let imageObserver = null;
+        let localFramesPromise = null;
+
+        const loadLocalFrames = () => {
+            if (localFramesPromise) return localFramesPromise;
+
+            localFramesPromise = (async () => {
+                const cacheKey = `local:${videoId}`;
+                let videoMetadata = metadataCache.get(cacheKey);
+                if (!videoMetadata) {
+                    const response = await fetch(getFrameMetadataUrl(videoId), {
+                        signal: requestController.signal,
+                        cache: 'force-cache'
+                    });
+                    if (!response.ok) {
+                        throw new Error(`Keyframe metadata request failed: ${response.status}`);
+                    }
+                    const content = await response.json();
+                    videoMetadata = content?.[videoId] || content;
+                    metadataCache.set(cacheKey, videoMetadata);
+                }
+
+                return Object.entries(videoMetadata)
+                    .filter(([, frame]) => frame && typeof frame === 'object' && Number.isFinite(Number(frame.id)))
+                    .map(([frameName, frame]) => ({
+                        ...frame,
+                        frame_id_ori: Number(frame.id),
+                        timestamp: parseTimestamp(frame['time-stamp'] ?? frame.timestamp),
+                        filename: frameName.endsWith('.webp') ? frameName : `${frameName}.webp`
+                    }))
+                    .sort((a, b) => a.frame_id_ori - b.frame_id_ori);
+            })();
+            return localFramesPromise;
+        };
+
+        const fetchWindow = async (frameId, before, after) => {
+            if (frameServeLocation === 'remote') {
+                return fetchRemoteKeyframeWindow(videoId, {
+                    frameId,
+                    before,
+                    after,
+                    signal: requestController.signal
+                });
+            }
+
+            const frames = await loadLocalFrames();
+            const centerIndex = frames.findIndex(frame => frame.frame_id_ori === Number(frameId));
+            if (centerIndex === -1) {
+                throw new Error(`Frame ID ${frameId} not found in metadata for ${videoId}.`);
+            }
+            const startIndex = Math.max(0, centerIndex - before);
+            const endIndex = Math.min(frames.length, centerIndex + after + 1);
+            return {
+                video_name: videoId,
+                center_index: centerIndex,
+                window_start_index: startIndex,
+                window_end_index: endIndex,
+                total_frames: frames.length,
+                has_previous: startIndex > 0,
+                has_next: endIndex < frames.length,
+                frames: frames.slice(startIndex, endIndex)
+            };
+        };
 
         try {
-            neighborFrames = await loadNeighborFrameWindow(clickedFrameData);
+            const payload = await fetchWindow(targetFrameIdOri, initialWindowSize, initialWindowSize);
+            neighborFrames = Array.isArray(payload.frames) ? payload.frames : [];
+            hasPrevious = Boolean(payload.has_previous);
+            hasNext = Boolean(payload.has_next);
             if (neighborFrames.length === 0) {
                 showToastNotification("Không tìm thấy frame lân cận.", "info");
                 return;
             }
-
         } catch (error) {
-            console.error("Lỗi khi tải frame lân cận từ file tĩnh (trong openImageModal):", error);
+            if (error.name === 'AbortError') return;
+            console.error("Lỗi khi tải frame lân cận trong openImageModal:", error);
             showToastNotification("Lỗi: Không thể tải dữ liệu frame lân cận.", "error");
             return;
         }
-
-        // =========================================================================
-        // PHẦN CÒN LẠI CỦA HÀM KHÔNG CẦN THAY ĐỔI GÌ CẢ
-        // Nó sẽ tự động hoạt động với biến `neighborFrames` chúng ta vừa tạo ở trên
-        // =========================================================================
 
         function updateMainPreview(frameDataToDisplay) {
             if (!frameDataToDisplay || (currentModalFrameData && currentModalFrameData.frame_id_ori === frameDataToDisplay.frame_id_ori)) {
@@ -4189,19 +4600,148 @@ document.addEventListener('DOMContentLoaded', function () {
             };
         }
 
-        const wheelHandler = (e) => {
-            e.preventDefault();
-            if (!currentModalFrameData) return;
+        function loadThumbnail(thumbnail) {
+            if (!thumbnail || thumbnail.dataset.loaded === 'true') return;
+            thumbnail.dataset.loaded = 'true';
+            setFrameImageSource(thumbnail, thumbnail.dataset.pendingSource);
+            delete thumbnail.dataset.pendingSource;
+        }
 
-            const currentIndex = neighborFrames.findIndex(f => f.frame_id_ori === currentModalFrameData.frame_id_ori);
-            if (currentIndex === -1) return;
+        function createThumbnail(frameData) {
+            const thumbnail = document.createElement('img');
+            thumbnail.className = 'neighbor-frame-thumbnail';
+            thumbnail.loading = 'lazy';
+            thumbnail.decoding = 'async';
+            thumbnail.alt = `${videoId}_${frameData.frame_id_ori}`;
+            thumbnail.title = thumbnail.alt;
+            thumbnail.dataset.frameIdOri = frameData.frame_id_ori;
+            thumbnail.dataset.pendingSource = getFrameUrl(videoId, frameData.filename);
+            thumbnail.classList.toggle('active-frame', frameData.frame_id_ori === targetFrameIdOri);
+            thumbnail.addEventListener('click', () => {
+                updateMainPreview(frameData);
+                prefetchAroundCurrent();
+            });
+            imageObserver.observe(thumbnail);
+            return thumbnail;
+        }
 
-            let nextIndex = currentIndex + (e.deltaY > 0 ? 1 : -1);
-            nextIndex = Math.max(0, Math.min(neighborFrames.length - 1, nextIndex));
+        function removeThumbnail(thumbnail) {
+            if (!thumbnail) return;
+            imageObserver.unobserve(thumbnail);
+            thumbnail.remove();
+        }
 
-            if (nextIndex !== currentIndex) {
-                updateMainPreview(neighborFrames[nextIndex]);
+        function preserveScrollAnchor(mutate) {
+            const anchor = thumbnailStrip.querySelector('.current-frame')
+                || Array.from(thumbnailStrip.children).find(child => child.getBoundingClientRect().right >= thumbnailStrip.getBoundingClientRect().left)
+                || thumbnailStrip.firstElementChild;
+            const previousLeft = anchor?.getBoundingClientRect().left;
+            mutate();
+            if (anchor?.isConnected && Number.isFinite(previousLeft)) {
+                thumbnailStrip.scrollLeft += anchor.getBoundingClientRect().left - previousLeft;
             }
+        }
+
+        function trimFrames(direction) {
+            let overflow = neighborFrames.length - maxFramesInDom;
+            if (overflow <= 0) return;
+
+            const currentFrameId = currentModalFrameData?.frame_id_ori;
+            const currentIndex = neighborFrames.findIndex(frame => frame.frame_id_ori === currentFrameId);
+            if (direction === 'previous') {
+                const removableAfterCurrent = currentIndex >= 0 ? neighborFrames.length - currentIndex - 1 : overflow;
+                const removeFromEnd = Math.min(overflow, removableAfterCurrent);
+                for (let count = 0; count < removeFromEnd; count++) removeThumbnail(thumbnailStrip.lastElementChild);
+                neighborFrames.splice(neighborFrames.length - removeFromEnd, removeFromEnd);
+                overflow -= removeFromEnd;
+                if (removeFromEnd) hasNext = true;
+                if (overflow > 0) {
+                    for (let count = 0; count < overflow; count++) removeThumbnail(thumbnailStrip.firstElementChild);
+                    neighborFrames.splice(0, overflow);
+                    hasPrevious = true;
+                }
+            } else {
+                const removableBeforeCurrent = currentIndex >= 0 ? currentIndex : overflow;
+                const removeFromStart = Math.min(overflow, removableBeforeCurrent);
+                for (let count = 0; count < removeFromStart; count++) removeThumbnail(thumbnailStrip.firstElementChild);
+                neighborFrames.splice(0, removeFromStart);
+                overflow -= removeFromStart;
+                if (removeFromStart) hasPrevious = true;
+                if (overflow > 0) {
+                    for (let count = 0; count < overflow; count++) removeThumbnail(thumbnailStrip.lastElementChild);
+                    neighborFrames.splice(neighborFrames.length - overflow, overflow);
+                    hasNext = true;
+                }
+            }
+        }
+
+        async function loadMore(direction) {
+            const isPrevious = direction === 'previous';
+            if (closed || (isPrevious ? loadingPrevious || !hasPrevious : loadingNext || !hasNext)) return;
+            if (isPrevious) loadingPrevious = true;
+            else loadingNext = true;
+            thumbnailStrip.setAttribute('aria-busy', 'true');
+
+            try {
+                const anchor = isPrevious ? neighborFrames[0] : neighborFrames[neighborFrames.length - 1];
+                if (!anchor) return;
+                const payload = await fetchWindow(anchor.frame_id_ori, isPrevious ? pageSize : 0, isPrevious ? 0 : pageSize);
+                if (closed) return;
+                const existingIds = new Set(neighborFrames.map(frame => frame.frame_id_ori));
+                const newFrames = (Array.isArray(payload.frames) ? payload.frames : [])
+                    .filter(frame => !existingIds.has(frame.frame_id_ori));
+
+                preserveScrollAnchor(() => {
+                    const fragment = document.createDocumentFragment();
+                    newFrames.forEach(frame => fragment.appendChild(createThumbnail(frame)));
+                    if (isPrevious) {
+                        neighborFrames = [...newFrames, ...neighborFrames];
+                        thumbnailStrip.prepend(fragment);
+                        hasPrevious = Boolean(payload.has_previous);
+                    } else {
+                        neighborFrames.push(...newFrames);
+                        thumbnailStrip.appendChild(fragment);
+                        hasNext = Boolean(payload.has_next);
+                    }
+                    trimFrames(direction);
+                });
+            } catch (error) {
+                if (error.name !== 'AbortError') console.error(`Unable to load ${direction} keyframes:`, error);
+            } finally {
+                if (isPrevious) loadingPrevious = false;
+                else loadingNext = false;
+                if (!loadingPrevious && !loadingNext) thumbnailStrip.removeAttribute('aria-busy');
+            }
+        }
+
+        function prefetchAroundCurrent() {
+            if (!currentModalFrameData) return;
+            const currentIndex = neighborFrames.findIndex(frame => frame.frame_id_ori === currentModalFrameData.frame_id_ori);
+            if (currentIndex < prefetchThreshold) loadMore('previous');
+            if (currentIndex >= neighborFrames.length - prefetchThreshold) loadMore('next');
+        }
+
+        async function movePreview(direction) {
+            if (!currentModalFrameData) return;
+            let currentIndex = neighborFrames.findIndex(frame => frame.frame_id_ori === currentModalFrameData.frame_id_ori);
+            if (currentIndex === -1) return;
+            if (direction < 0 && currentIndex === 0 && hasPrevious) await loadMore('previous');
+            if (direction > 0 && currentIndex === neighborFrames.length - 1 && hasNext) await loadMore('next');
+            currentIndex = neighborFrames.findIndex(frame => frame.frame_id_ori === currentModalFrameData.frame_id_ori);
+            const nextIndex = Math.max(0, Math.min(neighborFrames.length - 1, currentIndex + direction));
+            if (nextIndex !== currentIndex) updateMainPreview(neighborFrames[nextIndex]);
+            prefetchAroundCurrent();
+        }
+
+        const wheelHandler = (event) => {
+            event.preventDefault();
+            movePreview(event.deltaY > 0 ? 1 : -1);
+        };
+
+        const thumbnailScrollHandler = () => {
+            const edgeThreshold = 800;
+            if (thumbnailStrip.scrollLeft <= edgeThreshold) loadMore('previous');
+            if (thumbnailStrip.scrollWidth - thumbnailStrip.clientWidth - thumbnailStrip.scrollLeft <= edgeThreshold) loadMore('next');
         };
 
         const keydownHandler = (e) => {
@@ -4213,7 +4753,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
             if (key === 'escape') { closeModal(); return; }
             if (key === 'arrowright' || key === 'arrowleft') {
-                wheelHandler({ preventDefault: () => { }, deltaY: key === 'arrowright' ? 1 : -1 });
+                e.preventDefault();
+                movePreview(key === 'arrowright' ? 1 : -1);
                 return;
             }
 
@@ -4240,12 +4781,20 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         function closeModal(onClosedCallback = null) {
+            if (closed) return;
+            closed = true;
+            requestController.abort();
+            imageObserver?.disconnect();
             modal.removeEventListener('wheel', wheelHandler);
+            thumbnailStrip.removeEventListener('scroll', thumbnailScrollHandler);
             document.removeEventListener('keydown', keydownHandler);
             mainPreviewOverlay.onclick = null;
+            mainPreviewOverlay.oncontextmenu = null;
+            modal.querySelector('.modal-overlay').onclick = null;
 
             modal.style.display = 'none';
             mainPreview.src = "";
+            thumbnailStrip.replaceChildren();
 
             registerModalClose(modal);
 
@@ -4255,28 +4804,21 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         thumbnailStrip.innerHTML = '';
-
-        neighborFrames.forEach(frameData => {
-            const thumb = document.createElement('img');
-            setFrameImageSource(thumb, getFrameUrl(videoId, frameData.filename));
-            thumb.title = `${videoId}_${frameData.frame_id_ori}`;
-            thumb.dataset.frameIdOri = frameData.frame_id_ori;
-
-            thumb.addEventListener('click', () => {
-                updateMainPreview(frameData);
+        imageObserver = new IntersectionObserver(entries => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) loadThumbnail(entry.target);
             });
-
-            if (frameData.frame_id_ori === parseInt(targetFrameIdOri, 10)) {
-                thumb.classList.add('active-frame');
-            }
-            thumbnailStrip.appendChild(thumb);
-        });
+        }, { root: thumbnailStrip, rootMargin: '0px 400px' });
+        const initialFragment = document.createDocumentFragment();
+        neighborFrames.forEach(frameData => initialFragment.appendChild(createThumbnail(frameData)));
+        thumbnailStrip.appendChild(initialFragment);
 
         modal.addEventListener('wheel', wheelHandler, { passive: false });
+        thumbnailStrip.addEventListener('scroll', thumbnailScrollHandler, { passive: true });
         document.addEventListener('keydown', keydownHandler);
         modal.querySelector('.modal-overlay').onclick = () => closeModal();
 
-        const initialFrame = neighborFrames.find(f => f.frame_id_ori === parseInt(targetFrameIdOri, 10));
+        const initialFrame = neighborFrames.find(frame => frame.frame_id_ori === targetFrameIdOri);
         if (initialFrame) {
             updateMainPreview(initialFrame);
         }
@@ -4286,7 +4828,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
         setTimeout(() => {
             const activeThumb = thumbnailStrip.querySelector('.active-frame');
-            if (activeThumb) activeThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+            if (activeThumb) {
+                loadThumbnail(activeThumb);
+                activeThumb.scrollIntoView({ behavior: 'auto', inline: 'center', block: 'nearest' });
+            }
+            prefetchAroundCurrent();
         }, 50);
     }
 
@@ -4339,14 +4885,63 @@ document.addEventListener('DOMContentLoaded', function () {
         return getVideoPlaybackSource(videoName).url;
     }
 
-    function getKeyframeWindowApiUrl(videoName, timestamp) {
+    function getKeyframeWindowApiUrl(videoName, timestamp, options = {}) {
         const params = new URLSearchParams({
             timestamp: String(Math.max(0, timestamp || 0)),
-            before: '25',
-            after: '25'
+            before: String(options.before ?? 25),
+            after: String(options.after ?? 25)
         });
-        // Remote timeline requests use the compact API; local mode reads metadata.json directly.
+        if (Number.isFinite(Number(options.frameId))) params.set('frame_id_ori', String(options.frameId));
+        // API calls stay on the configured backend even when frame images are served locally.
         return `${APP_CONFIG.REMOTE_BASE_URL}/api/keyframes/window/${encodeURIComponent(videoName)}?${params}`;
+    }
+
+    async function fetchRemoteKeyframeWindow(videoName, options = {}) {
+        const timestamp = Math.max(0, Number(options.timestamp) || 0);
+        const frameId = Number(options.frameId);
+        const before = Math.max(0, Number(options.before) || 0);
+        const after = Math.max(0, Number(options.after) || 0);
+        const cacheKey = [
+            videoName,
+            timestamp.toFixed(3),
+            Number.isFinite(frameId) ? frameId : '',
+            before,
+            after
+        ].join(':');
+        if (remoteKeyframeWindowCache.has(cacheKey)) {
+            return remoteKeyframeWindowCache.get(cacheKey);
+        }
+        if (remoteKeyframeWindowInFlight.has(cacheKey)) {
+            return remoteKeyframeWindowInFlight.get(cacheKey);
+        }
+
+        const request = (async () => {
+            const response = await fetch(getKeyframeWindowApiUrl(videoName, timestamp, {
+                frameId,
+                before,
+                after
+            }), {
+                signal: options.signal,
+                cache: 'force-cache'
+            });
+            if (!response.ok) {
+                throw new Error(`Keyframe window request failed: ${response.status}`);
+            }
+
+            const payload = await response.json();
+            if (!payload || !Array.isArray(payload.frames)) {
+                throw new Error('Keyframe window response is invalid.');
+            }
+
+            const fps = Number(payload.fps);
+            if (Number.isFinite(fps) && fps > 0) {
+                trakeFpsCache.set(`remote:${videoName}`, fps);
+            }
+            remoteKeyframeWindowCache.set(cacheKey, payload);
+            return payload;
+        })().finally(() => remoteKeyframeWindowInFlight.delete(cacheKey));
+        remoteKeyframeWindowInFlight.set(cacheKey, request);
+        return request;
     }
 
     function findKeyframeAtTime(frames, timestamp) {
@@ -4638,26 +5233,18 @@ document.addEventListener('DOMContentLoaded', function () {
             return videoKeyframeWindowCache.get(cacheKey);
         }
 
-        const sourceKey = frameServeLocation;
         let payload;
-        // Local frame serving already exposes metadata.json beside each video's frames.
-        // The compact API avoids downloading that full file only for remote serving.
-        if (frameServeLocation === 'remote' && !unavailableKeyframeWindowSources.has(sourceKey)) {
-            const response = await fetch(getKeyframeWindowApiUrl(videoName, timestamp), {
-                signal,
-                cache: 'force-cache'
+        if (frameServeLocation === 'remote') {
+            payload = await fetchRemoteKeyframeWindow(videoName, {
+                timestamp,
+                before: 25,
+                after: 25,
+                signal
             });
-            if (response.ok) {
-                payload = await response.json();
-            } else if (response.status === 404) {
-                const errorPayload = await response.json().catch(() => ({}));
-                if (errorPayload.detail === 'Not Found') {
-                    unavailableKeyframeWindowSources.add(sourceKey);
-                }
-            } else {
-                throw new Error(`Keyframe window request failed: ${response.status}`);
-            }
+            videoKeyframeWindowCache.set(cacheKey, payload);
+            return payload;
         }
+
         if (!payload) {
             const legacyCacheKey = `${frameServeLocation}:${videoName}`;
             let videoMetadata = metadataCache.get(legacyCacheKey);
@@ -4989,6 +5576,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         let isSeeking = false;
         let rewindInterval = null;
+        let formCaptureInFlight = false;
 
         prepareTrakeTimeline(videoName, targetTimeInSeconds);
 
@@ -5166,6 +5754,56 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         // <<< KẾT THÚC THAY ĐỔI >>>
 
+        const captureCurrentVideoFrameForForm = async () => {
+            if (formCaptureInFlight) return;
+            formCaptureInFlight = true;
+            player.pause();
+
+            try {
+                const fps = isTrakeMode ? trakeController.fps : await getFpsForVideo(videoName);
+                if (!fps || !player.videoWidth || !player.videoHeight) {
+                    throw new Error('Video hoặc FPS chưa sẵn sàng.');
+                }
+
+                let frameNumber;
+                if (isTrakeMode) {
+                    frameNumber = await waitForRenderedTrakeFrame(trakeController.desiredFrameIndex);
+                } else {
+                    const renderedTime = await getRenderedVideoTime(player);
+                    frameNumber = Math.max(0, Math.round(renderedTime * fps));
+                }
+
+                const thumbnailWidth = 320;
+                const thumbnailHeight = Math.max(1, Math.round(thumbnailWidth * player.videoHeight / player.videoWidth));
+                captureCanvas.width = thumbnailWidth;
+                captureCanvas.height = thumbnailHeight;
+                const context = captureCanvas.getContext('2d');
+                if (!context) throw new Error('Không thể khởi tạo canvas để chụp frame.');
+                context.drawImage(player, 0, 0, thumbnailWidth, thumbnailHeight);
+
+                const frameData = {
+                    videoName,
+                    path: captureCanvas.toDataURL('image/jpeg', 0.8),
+                    frame_id_ori: frameNumber,
+                    id: frameNumber,
+                    timestamp: formatTrakeTimestamp(frameNumber, fps),
+                    frameIdentifier: `${videoName}_${frameNumber}`,
+                    score: 0,
+                    temporal_score: 0,
+                    videoPath: getHlsPlaylistUrl(videoName),
+                    fps,
+                    isFromVideo: true
+                };
+
+                addToFormSubmitQueue(frameData);
+            } catch (error) {
+                console.error('Không thể thêm frame video vào Form Submit:', error);
+                showToastNotification(error.message || 'Không thể chụp frame video.', 'error');
+            } finally {
+                formCaptureInFlight = false;
+            }
+        };
+
         const handleKeyDown = (e) => {
             if (getTopActiveModal()?.element !== modal) {
                 return;
@@ -5199,6 +5837,20 @@ document.addEventListener('DOMContentLoaded', function () {
             if (e.code === 'Space' || e.key === ' ') {
                 e.preventDefault();
                 if (!e.repeat) togglePlayPause();
+                return;
+            }
+
+            if (e.key.toLowerCase() === 'v') {
+                const activeElement = document.activeElement;
+                const isTextEntry = activeElement !== trakeFrameStepInput && (
+                    activeElement?.isContentEditable
+                    || activeElement?.tagName === 'TEXTAREA'
+                    || (activeElement?.tagName === 'INPUT'
+                        && !['button', 'checkbox', 'radio', 'range', 'reset', 'submit'].includes(activeElement.type))
+                );
+                if (isTextEntry) return;
+                e.preventDefault();
+                if (!e.repeat) void captureCurrentVideoFrameForForm();
                 return;
             }
 
@@ -5240,36 +5892,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const key = e.key.toLowerCase();
 
                 switch (key) {
-                    case 'v':
-                        e.preventDefault();
-                        // Tạm dừng video để chụp frame
-                        player.pause();
-                        // Tạo một hàm async nhỏ để xử lý vì captureFrame cần là async
-                        (async () => {
-                            const currentTime = player.currentTime;
-                            const fps = await getFpsForVideo(videoName);
-                            const frameNumber = Math.round(currentTime * fps);
-
-                            captureCanvas.width = player.videoWidth;
-                            captureCanvas.height = player.videoHeight;
-                            // ... (phần code vẽ canvas giống hệt trong captureFrameAndAddToQueue)
-                            const context = captureCanvas.getContext('2d');
-                            context.drawImage(player, 0, 0, captureCanvas.width, captureCanvas.height);
-                            const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.9);
-
-                            const minutes = Math.floor(currentTime / 60);
-                            const seconds = (currentTime % 60).toFixed(3);
-                            const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
-
-                            const newFrameData = {
-                                videoName, path: imagePathDataUrl, frame_id_ori: frameNumber, id: frameNumber,
-                                timestamp: newTimestamp, frameIdentifier: `${videoName}_${frameNumber}`,
-                                score: 0, temporal_score: 0, videoPath: getHlsPlaylistUrl(videoName), fps, isFromVideo: true
-                            };
-
-                            addToFormSubmitQueue(newFrameData);
-                        })();
-                        break;
                     case 'm': e.preventDefault(); toggleMute(); break;
                     case 'arrowright':
                         e.preventDefault();
@@ -7675,13 +8297,29 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    async function getFpsForVideo(videoName) {
-        let videoMetadata;
+    async function getFpsForVideo(videoName, options = {}) {
         const cacheKey = `${frameServeLocation}:${videoName}`;
 
         if (trakeFpsCache.has(cacheKey)) {
             return trakeFpsCache.get(cacheKey);
         }
+
+        if (frameServeLocation === 'remote') {
+            const preloadWindow = options && typeof options === 'object' && options.preloadWindow === true;
+            const payload = await fetchRemoteKeyframeWindow(videoName, {
+                timestamp: preloadWindow ? options.timestamp : 0,
+                before: preloadWindow ? 25 : 0,
+                after: preloadWindow ? 25 : 0
+            });
+            const fps = Number(payload.fps);
+            if (!Number.isFinite(fps) || fps <= 0) {
+                throw new Error(`Metadata của ${videoName} không có FPS hợp lệ.`);
+            }
+            trakeFpsCache.set(cacheKey, fps);
+            return fps;
+        }
+
+        let videoMetadata;
 
         if (metadataCache.has(cacheKey)) {
             videoMetadata = metadataCache.get(cacheKey);
@@ -7732,56 +8370,50 @@ document.addEventListener('DOMContentLoaded', function () {
         previewPlaceholder.style.display = 'block';
 
         try {
-            // === BẮT ĐẦU PHẦN SỬA LỖI ===
-
-            const metadataUrl = getFrameMetadataUrl(frameData.videoName);
-            const response = await fetch(metadataUrl);
-
-            if (!response.ok) {
-                throw new Error(`Không tìm thấy tệp ${metadataUrl}. Status: ${response.statusText}`);
-            }
-            const metadataFileContent = await response.json();
-            const videoMetadataObject = metadataFileContent[frameData.videoName];
-
-            if (!videoMetadataObject) {
-                throw new Error(`Không tìm thấy key '${frameData.videoName}' trong tệp metadata.json.`);
-            }
-
-            // 3. Chuyển đổi và "CHUẨN HÓA" đối tượng metadata thành một MẢNG
-            const allKeyframes = Object.entries(videoMetadataObject).map(([frameKey, frameInfo]) => ({
-                // Ánh xạ (map) các thuộc tính từ file JSON sang tên mà code đang dùng
-                frame_id_ori: frameInfo.id,         // <-- SỬA Ở ĐÂY: Lấy giá trị từ 'id'
-                timestamp: frameInfo["time-stamp"], // <-- SỬA Ở ĐÂY: Lấy giá trị từ 'time-stamp'
-
-                // Thêm filename và giữ lại các thuộc tính gốc
-                filename: `${frameKey}.webp`,
-                ...frameInfo // Giữ lại các thuộc tính khác như tags, ocr, fps...
-            }));
-
-            // 4. Sắp xếp mảng theo frame_id_ori (đã được ánh xạ đúng)
-            allKeyframes.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
-
-            // 5. Tìm vị trí (index) của frame được click
             const targetFrameId = parseInt(frameData.frame_id_ori, 10);
-            const targetIndex = allKeyframes.findIndex(kf => kf.frame_id_ori === targetFrameId);
-
-            if (targetIndex === -1) {
-                // Lỗi vẫn có thể xảy ra ở đây nếu có sự không nhất quán dữ liệu,
-                // nhưng nguyên nhân gốc đã được sửa.
-                throw new Error(`Frame ID ${targetFrameId} không tìm thấy trong metadata của video ${frameData.videoName}.`);
-            }
-
-            // 6. Cắt ra các frame lân cận
             const lookBehind = 20;
             const lookAhead = 20;
-            const startIndex = Math.max(0, targetIndex - lookBehind);
-            const endIndex = Math.min(allKeyframes.length, targetIndex + lookAhead + 1);
+            let neighbors;
 
-            const neighbors = allKeyframes.slice(startIndex, endIndex);
+            if (frameServeLocation === 'remote') {
+                const payload = await fetchRemoteKeyframeWindow(frameData.videoName, {
+                    frameId: targetFrameId,
+                    before: lookBehind,
+                    after: lookAhead
+                });
+                neighbors = payload.frames;
+            } else {
+                const metadataUrl = getFrameMetadataUrl(frameData.videoName);
+                const response = await fetch(metadataUrl);
 
-            // === KẾT THÚC PHẦN SỬA LỖI ===
+                if (!response.ok) {
+                    throw new Error(`Không tìm thấy tệp ${metadataUrl}. Status: ${response.statusText}`);
+                }
+                const metadataFileContent = await response.json();
+                const videoMetadataObject = metadataFileContent[frameData.videoName];
 
-            // Phần còn lại của hàm không cần thay đổi
+                if (!videoMetadataObject) {
+                    throw new Error(`Không tìm thấy key '${frameData.videoName}' trong tệp metadata.json.`);
+                }
+
+                const allKeyframes = Object.entries(videoMetadataObject).map(([frameKey, frameInfo]) => ({
+                    frame_id_ori: frameInfo.id,
+                    timestamp: frameInfo["time-stamp"],
+                    filename: `${frameKey}.webp`,
+                    ...frameInfo
+                }));
+                allKeyframes.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
+
+                const targetIndex = allKeyframes.findIndex(kf => kf.frame_id_ori === targetFrameId);
+                if (targetIndex === -1) {
+                    throw new Error(`Frame ID ${targetFrameId} không tìm thấy trong metadata của video ${frameData.videoName}.`);
+                }
+
+                const startIndex = Math.max(0, targetIndex - lookBehind);
+                const endIndex = Math.min(allKeyframes.length, targetIndex + lookAhead + 1);
+                neighbors = allKeyframes.slice(startIndex, endIndex);
+            }
+
             if (neighbors.length === 0) {
                 previewPlaceholder.textContent = 'Không tìm thấy frame lân cận.';
                 return;
@@ -7844,7 +8476,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }, 50);
 
         } catch (error) {
-            console.error('Lỗi khi tải keyframe lân cận từ file metadata.json:', error);
+            console.error('Lỗi khi tải keyframe lân cận:', error);
             previewPlaceholder.textContent = 'Lỗi khi tải dữ liệu.';
         }
     }
@@ -8132,7 +8764,7 @@ document.addEventListener('DOMContentLoaded', function () {
             toggleQueueModeBtn.classList.add('active');
             toggleQueueModeBtn.title = "Chuyển sang Submit Queue cộng tác";
             toggleQueueModeBtn.innerHTML = '<i class="fas fa-users"></i>';
-            showToastNotification("Đã chuyển sang chế độ Form Submit cá nhân", "success");
+            // showToastNotification("Đã chuyển sang chế độ Form Submit cá nhân", "success");
         } else {
             // Quay lại chế độ Submit Queue cộng tác
             formSubmitQueueContainer.style.display = 'none';
@@ -8140,7 +8772,7 @@ document.addEventListener('DOMContentLoaded', function () {
             toggleQueueModeBtn.classList.remove('active');
             toggleQueueModeBtn.title = "Chuyển sang Form Submit cá nhân";
             toggleQueueModeBtn.innerHTML = '<i class="fas fa-user"></i>';
-            showToastNotification("Đã quay lại chế độ Submit Queue cộng tác", "success");
+            // showToastNotification("Đã quay lại chế độ Submit Queue cộng tác", "success");
         }
     }
 
@@ -8303,6 +8935,76 @@ document.addEventListener('DOMContentLoaded', function () {
         }, { offset: Number.NEGATIVE_INFINITY }).element;
     }
 
+    async function submitFormPayload(payload, conflictAction) {
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/form-submit`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, conflict_action: conflictAction })
+        });
+        const result = await response.json().catch(() => ({}));
+
+        if (response.status === 409 && result.detail?.code === 'csv_exists') {
+            return {
+                conflict: true,
+                filename: result.detail.filename || payload.filename
+            };
+        }
+        if (!response.ok) {
+            const detail = typeof result.detail === 'string'
+                ? result.detail
+                : result.detail?.message;
+            throw new Error(detail || `Server returned ${response.status}`);
+        }
+        return { conflict: false, result };
+    }
+
+    function openFormSubmitConflictModal(payload, filename) {
+        pendingFormSubmitConflict = { payload, filename };
+        formSubmitConflictText.textContent = `${filename} already exists. Replace its content or append the new CSV rows?`;
+        appendFormSubmitBtn.disabled = false;
+        overwriteFormSubmitBtn.disabled = false;
+        closeFormSubmitConflictBtn.disabled = false;
+        openClusterModal(formSubmitConflictModal, closeFormSubmitConflictModal);
+    }
+
+    function closeFormSubmitConflictModal(force = false) {
+        if (!force && (appendFormSubmitBtn.disabled || overwriteFormSubmitBtn.disabled)) return;
+        pendingFormSubmitConflict = null;
+        formSubmitConflictModal.classList.remove('visible');
+        registerModalClose(formSubmitConflictModal);
+        setTimeout(() => (formSubmitConflictModal.style.display = 'none'), 200);
+    }
+
+    function completeFormSubmit(result) {
+        showToastNotification(`Thành công: ${result.message}`, 'success');
+        clearFormSubmitQueue();
+    }
+
+    async function resolveFormSubmitConflict(conflictAction) {
+        if (!pendingFormSubmitConflict) return;
+        const pending = pendingFormSubmitConflict;
+        const selectedButton = conflictAction === 'append' ? appendFormSubmitBtn : overwriteFormSubmitBtn;
+        const originalText = selectedButton.textContent;
+        appendFormSubmitBtn.disabled = true;
+        overwriteFormSubmitBtn.disabled = true;
+        closeFormSubmitConflictBtn.disabled = true;
+        selectedButton.textContent = conflictAction === 'append' ? 'Appending...' : 'Overwriting...';
+
+        try {
+            const outcome = await submitFormPayload(pending.payload, conflictAction);
+            if (outcome.conflict) throw new Error('CSV conflict could not be resolved.');
+            closeFormSubmitConflictModal(true);
+            completeFormSubmit(outcome.result);
+        } catch (error) {
+            showToastNotification(`Submit thất bại: ${error.message}`, 'error');
+        } finally {
+            selectedButton.textContent = originalText;
+            appendFormSubmitBtn.disabled = false;
+            overwriteFormSubmitBtn.disabled = false;
+            closeFormSubmitConflictBtn.disabled = false;
+        }
+    }
+
     async function handleFormSubmit() {
         if (formSubmitQueue.length === 0) return;
 
@@ -8316,26 +9018,16 @@ document.addEventListener('DOMContentLoaded', function () {
         try {
             formSubmitBtn.disabled = true;
             formSubmitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Submitting...';
-
-            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/form-submit`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-
-            if (response.ok) {
-                const result = await response.json();
-                showToastNotification(`Thành công: ${result.message}`, "success");
-                clearFormSubmitQueue(); // Tự động xóa sau khi submit thành công
+            const outcome = await submitFormPayload(payload, 'error');
+            if (outcome.conflict) {
+                openFormSubmitConflictModal(payload, outcome.filename);
             } else {
-                const error = await response.json();
-                throw new Error(error.detail || 'Lỗi không xác định từ server');
+                completeFormSubmit(outcome.result);
             }
-
         } catch (error) {
-            showToastNotification(`Submit thất bại: ${error.message}`, "error");
+            showToastNotification(`Submit thất bại: ${error.message}`, 'error');
         } finally {
-            formSubmitBtn.disabled = false;
+            formSubmitBtn.disabled = formSubmitQueue.length === 0 || formSubmitFilename.value.trim() === '';
             formSubmitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Submit';
         }
     }
@@ -8378,7 +9070,10 @@ document.addEventListener('DOMContentLoaded', function () {
         trakeFpsStatus.textContent = 'Loading FPS...';
         updateTrakeFrameReadout();
         try {
-            const fps = await getFpsForVideo(videoName);
+            const fps = await getFpsForVideo(videoName, {
+                timestamp: initialTime,
+                preloadWindow: true
+            });
             if (currentVideoModalData.videoName !== videoName) return;
             const initialFrame = Math.max(0, Math.round(initialTime * fps));
             trakeController.fps = fps;
