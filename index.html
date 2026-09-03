@@ -765,6 +765,11 @@
                     <h3>CSV Submissions</h3>
                     <span id="csvManagerCount" class="csv-manager-count">0 files</span>
                 </div>
+                <label class="csv-manager-search" for="csvManagerSearchInput">
+                    <i class="fas fa-search"></i>
+                    <input id="csvManagerSearchInput" type="search" placeholder="Search CSV filename..."
+                        autocomplete="off">
+                </label>
                 <div class="modal-header-actions csv-manager-header-actions">
                     <button id="csvManagerRefreshBtn" class="queue-action-btn" type="button">
                         <i class="fas fa-sync-alt"></i> Refresh
@@ -790,6 +795,23 @@
             <div class="confirmation-buttons">
                 <button id="cancelCsvDeleteBtn" class="confirmation-btn cancel" type="button">Cancel</button>
                 <button id="confirmCsvDeleteBtn" class="confirmation-btn confirm" type="button">Delete file</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="formSubmitConflictModal" class="mini-modal" style="display: none;">
+        <div class="modal-overlay"></div>
+        <div class="modal-content form-submit-conflict-content">
+            <button id="closeFormSubmitConflictBtn" class="close-btn" type="button">&times;</button>
+            <h3>CSV file already exists</h3>
+            <p id="formSubmitConflictText"></p>
+            <div class="confirmation-buttons form-submit-conflict-actions">
+                <button id="appendFormSubmitBtn" class="confirmation-btn append" type="button">
+                    Append rows
+                </button>
+                <button id="overwriteFormSubmitBtn" class="confirmation-btn confirm" type="button">
+                    Overwrite file
+                </button>
             </div>
         </div>
     </div>
