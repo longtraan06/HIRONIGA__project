@@ -313,6 +313,37 @@ color: var(--matcha-cream);
     box-shadow: 0 0 0 4px rgba(138, 184, 110, 0.2);
 }
 
+.inline-delimiter-ghost-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.inline-delimiter-measure {
+    position: absolute;
+    z-index: -1;
+    box-sizing: border-box;
+    visibility: hidden;
+    overflow: hidden;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    word-break: break-word;
+    pointer-events: none;
+}
+
+.inline-delimiter-ghost {
+    position: absolute;
+    display: inline-block;
+    margin: 0;
+    padding: 0;
+    color: rgba(61, 90, 68, 0.34);
+    background: white;
+    white-space: pre;
+    pointer-events: none;
+}
+
 /* Image Upload Area */
 .image-upload-area {
     width: 100%;
@@ -1309,6 +1340,12 @@ color: var(--matcha-cream);
     border: 2px solid #00d0ff;
     box-shadow: 0 0 12px rgba(0, 162, 171, 0.4);
     transform: translateY(-3px);
+}
+.thumbnail-strip img.neighbor-frame-thumbnail {
+    flex: 0 0 160px;
+    width: 160px;
+    object-fit: cover;
+    background: var(--matcha-pale);
 }
 
 /* Video Player Modal */
@@ -3366,6 +3403,38 @@ height: auto;
     gap: 12px;
 }
 
+.csv-manager-search {
+    min-width: min(320px, 100%);
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 11px;
+    border: 1px solid var(--matcha-light);
+    border-radius: 10px;
+    background: #fff;
+    color: var(--text-muted);
+}
+
+.csv-manager-search:focus-within {
+    border-color: var(--matcha-primary);
+    box-shadow: 0 0 0 2px rgba(138, 184, 110, 0.2);
+}
+
+.csv-manager-search input {
+    min-width: 0;
+    flex: 1;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: var(--text-dark);
+    font: inherit;
+}
+
+.csv-manager-search:has(input:disabled) {
+    opacity: 0.55;
+}
+
 .csv-manager-count {
     padding: 3px 9px;
     border-radius: 999px;
@@ -3536,6 +3605,29 @@ height: auto;
     width: min(430px, 92vw);
 }
 
+.form-submit-conflict-content {
+    width: min(460px, 92vw);
+}
+
+.form-submit-conflict-actions {
+    margin-top: 18px;
+}
+
+.confirmation-btn.append {
+    border: 1px solid var(--matcha-primary);
+    background: #fff;
+    color: var(--matcha-dark);
+}
+
+.confirmation-btn.append:hover:not(:disabled) {
+    background: var(--matcha-pale);
+}
+
+.confirmation-btn:disabled {
+    cursor: wait;
+    opacity: 0.6;
+}
+
 .csv-delete-confirm-content p {
     margin-top: 12px;
     color: var(--text-muted);
@@ -3571,6 +3663,11 @@ height: auto;
     .csv-file-card-header {
         align-items: stretch;
         flex-direction: column;
+    }
+
+    .csv-manager-search {
+        width: 100%;
+        min-width: 0;
     }
 
     .csv-manager-heading {
