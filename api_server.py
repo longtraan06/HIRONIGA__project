@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -33,7 +33,7 @@ import io
 from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
-FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
+FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/csv_submit"
 
 PROJECT_DIR = Path(__file__).resolve().parent
 CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
@@ -743,6 +743,7 @@ class FormSubmitRequest(BaseModel):
     frame_indices: List[int]
     answer: Optional[str] = None
     filename: str
+    conflict_action: Literal["error", "overwrite", "append"] = "error"
 
 
 class FormSubmitFileUpdateRequest(BaseModel):
@@ -1381,6 +1382,7 @@ def _load_keyframe_index(video_id: str):
         'fps': fps,
         'frames': compact_frames,
         'timestamps': [frame['timestamp'] for frame in compact_frames],
+        'frame_indices': {frame['frame_id_ori']: index for index, frame in enumerate(compact_frames)},
     }
 
 @app.get("/api/keyframes/neighbors/{video_id}/{frame_id_ori}")
@@ -1423,10 +1425,11 @@ async def get_keyframe_window(
     video_id: str,
     response: Response,
     timestamp: float = Query(0.0, ge=0.0),
+    frame_id_ori: Optional[int] = Query(None, ge=0),
     before: int = Query(25, ge=0, le=100),
     after: int = Query(25, ge=0, le=100),
 ):
-    """Return only the keyframe fields needed by the video workbench."""
+    """Return a compact keyframe window anchored by timestamp or exact frame ID."""
     keyframe_index = _load_keyframe_index(video_id)
     if keyframe_index is None:
         raise HTTPException(status_code=404, detail=f"Metadata for video {video_id} not found.")
@@ -1437,12 +1440,20 @@ async def get_keyframe_window(
             'video_name': video_id,
             'fps': keyframe_index['fps'],
             'center_index': -1,
+            'window_start_index': 0,
+            'window_end_index': 0,
+            'total_frames': 0,
             'has_previous': False,
             'has_next': False,
             'frames': [],
         }
 
-    center_index = max(0, bisect_right(keyframe_index['timestamps'], timestamp) - 1)
+    if frame_id_ori is not None:
+        center_index = keyframe_index['frame_indices'].get(frame_id_ori)
+        if center_index is None:
+            raise HTTPException(status_code=404, detail=f"Frame ID {frame_id_ori} not found in video {video_id}.")
+    else:
+        center_index = max(0, bisect_right(keyframe_index['timestamps'], timestamp) - 1)
     start_index = max(0, center_index - before)
     end_index = min(len(frames), center_index + after + 1)
     response.headers['Cache-Control'] = 'public, max-age=3600, stale-while-revalidate=86400'
@@ -1451,6 +1462,8 @@ async def get_keyframe_window(
         'fps': keyframe_index['fps'],
         'center_index': center_index,
         'window_start_index': start_index,
+        'window_end_index': end_index,
+        'total_frames': len(frames),
         'has_previous': start_index > 0,
         'has_next': end_index < len(frames),
         'frames': frames[start_index:end_index],
@@ -2184,13 +2197,30 @@ def _resolve_form_submit_csv(directory: Path, filename: str, must_exist: bool = 
     return path
 
 
+def _normalize_form_submit_filename(filename: str) -> str:
+    filename_base = re.sub(r'[\\/*?:"<>|]', "", filename.strip())
+    if filename_base.lower().endswith(".csv"):
+        filename_base = filename_base[:-4]
+    filename_base = filename_base.strip()
+    if not filename_base:
+        raise HTTPException(status_code=400, detail="CSV filename cannot be empty")
+    return f"{filename_base}.csv"
+
+
+def _natural_filename_key(path: Path):
+    return tuple(
+        (1, int(part)) if part.isdigit() else (0, part.casefold())
+        for part in re.split(r"(\d+)", path.name)
+    )
+
+
 def _list_form_submit_csv_paths(directory: Path) -> List[Path]:
     return sorted(
         (
             path for path in directory.iterdir()
             if path.is_file() and not path.is_symlink() and path.suffix.lower() == ".csv"
         ),
-        key=lambda path: path.name.lower(),
+        key=_natural_filename_key,
     )
 
 
@@ -2209,6 +2239,13 @@ def _write_bytes_atomically(path: Path, content: bytes):
     finally:
         if temporary_path.exists():
             temporary_path.unlink()
+
+
+def _append_csv_bytes(existing_content: bytes, new_content: bytes) -> bytes:
+    if not existing_content:
+        return new_content
+    separator = b"" if existing_content.endswith((b"\n", b"\r")) else b"\n"
+    return existing_content + separator + new_content
 
 
 @app.get("/api/form-submit/files")
@@ -2303,8 +2340,9 @@ async def download_all_form_submit_files():
                 raise HTTPException(status_code=404, detail="No CSV files are available to download")
 
             with zipfile.ZipFile(archive_buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("submission/", b"")
                 for path in csv_paths:
-                    archive.writestr(path.name, path.read_bytes())
+                    archive.writestr(f"submission/{path.name}", path.read_bytes())
 
         archive_buffer.seek(0)
         archive_name = f"csv-submissions-{time.strftime('%Y%m%d-%H%M%S')}.zip"
@@ -2324,9 +2362,7 @@ async def handle_form_submit(request: FormSubmitRequest):
     Nhận dữ liệu từ Form Submit Queue và tạo file CSV trên server.
     """
     try:
-        # Tạo một tên file
-        safe_filename_base = re.sub(r'[\\/*?:"<>|]', "", request.filename)
-        safe_filename = f"{safe_filename_base}.csv"
+        safe_filename = _normalize_form_submit_filename(request.filename)
         csv_buffer = io.StringIO(newline='')
         writer = csv.writer(csv_buffer)
 
@@ -2338,13 +2374,48 @@ async def handle_form_submit(request: FormSubmitRequest):
         else:
             writer.writerow([request.video_name] + request.frame_indices)
 
+        new_content = csv_buffer.getvalue().encode("utf-8")
+
         with _locked_form_submit_directory() as directory:
             filepath = _resolve_form_submit_csv(directory, safe_filename, must_exist=False)
-            _write_bytes_atomically(filepath, csv_buffer.getvalue().encode("utf-8"))
+            file_exists = filepath.exists()
+            if file_exists and request.conflict_action == "error":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "csv_exists",
+                        "filename": safe_filename,
+                        "message": "CSV file already exists",
+                    },
+                )
+
+            if file_exists and request.conflict_action == "append":
+                existing_content = filepath.read_bytes()
+                try:
+                    existing_content.decode("utf-8")
+                except UnicodeDecodeError as error:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"CSV file is not valid UTF-8: {safe_filename}",
+                    ) from error
+                content_to_write = _append_csv_bytes(existing_content, new_content)
+                operation = "appended to"
+            else:
+                content_to_write = new_content
+                operation = "overwritten" if file_exists else "created"
+
+            _write_bytes_atomically(filepath, content_to_write)
 
         print(f"Form Submit data saved successfully to: {filepath}")
-        return {"success": True, "message": f"Data saved to {safe_filename}"}
+        return {
+            "success": True,
+            "filename": safe_filename,
+            "operation": operation,
+            "message": f"{safe_filename} {operation} successfully",
+        }
 
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"ERROR saving form submit data: {e}")
 
