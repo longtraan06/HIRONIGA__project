@@ -5,11 +5,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 import sys
 import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-from src.core.database.milvus import MilvusManager
 from functools import lru_cache, wraps
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from PIL import Image
@@ -30,15 +29,265 @@ except ImportError:
 import asyncio
 import fcntl
 import io
+import urllib.parse
+import httpx
 from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
-FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/csv_submit"
+FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
 
 PROJECT_DIR = Path(__file__).resolve().parent
 CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
 CLUSTER_DELETION_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
 ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/qwen3_asr_20s/transcripts_timestamped.json")
+
+
+DEFAULT_DATABASE_MODEL = "google/siglip2-large-patch16-512"
+
+
+class DatabaseServiceError(RuntimeError):
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class DatabaseServiceClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=5.0),
+            limits=httpx.Limits(
+                max_keepalive_connections=16,
+                max_connections=32,
+                keepalive_expiry=30.0,
+            ),
+            headers={"Accept-Encoding": "identity"},
+        )
+
+    async def _request_json(self, method: str, path: str, **kwargs) -> dict:
+        try:
+            response = await self._client.request(method, path, **kwargs)
+        except httpx.TimeoutException as error:
+            raise DatabaseServiceError(f"Database service timed out: {error}", 504) from error
+        except httpx.RequestError as error:
+            raise DatabaseServiceError(f"Database service is unavailable: {error}", 502) from error
+
+        if response.is_error:
+            if response.status_code in {503, 504}:
+                gateway_status = response.status_code
+            elif response.status_code < 500:
+                gateway_status = response.status_code
+            else:
+                gateway_status = 502
+            raise DatabaseServiceError(
+                f"Database service returned {response.status_code}: {response.text[:500]}",
+                gateway_status,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise DatabaseServiceError("Database service returned invalid JSON.", 502) from error
+        if not isinstance(payload, dict):
+            raise DatabaseServiceError("Database service returned an invalid response shape.", 502)
+        return payload
+
+    async def health_check(self) -> dict:
+        return await self._request_json("GET", "/health")
+
+    async def get_model_names(self) -> list:
+        payload = await self._request_json("GET", "/v1/models")
+        models = payload.get("models")
+        return models if isinstance(models, list) and models else [DEFAULT_DATABASE_MODEL]
+
+    @staticmethod
+    def _image_bytes(query: Any) -> bytes:
+        if isinstance(query, bytes):
+            return query
+        if hasattr(query, "save"):
+            buffer = io.BytesIO()
+            query.save(buffer, format="PNG")
+            return buffer.getvalue()
+        return bytes(query)
+
+    @staticmethod
+    def _format_hits(raw_hits: list) -> list:
+        formatted = []
+        for raw_hit in raw_hits:
+            hit = dict(raw_hit)
+            metadata = dict(hit.get("metadata") or {})
+            frame_specify = hit.get("frame_specify") or metadata.get("frame_specify", "")
+            video_name = hit.get("video_name") or metadata.get("video_name", "")
+            if not video_name and "/" in frame_specify:
+                video_name = frame_specify.split("/", 1)[0]
+            frame_name = hit.get("frame_name") or metadata.get("frame_name")
+            if not frame_name and "/" in frame_specify:
+                frame_name = frame_specify.rsplit("/", 1)[1]
+
+            metadata.update({
+                "video_name": video_name,
+                "frame_specify": frame_specify,
+                "frame_name": frame_name or "",
+                "frame_id": hit.get("frame_id") if hit.get("frame_id") is not None else metadata.get("frame_id", 0),
+                "timestamp": hit.get("timestamp") if hit.get("timestamp") is not None else metadata.get("timestamp", 0.0),
+                "ocr": hit.get("ocr") or metadata.get("ocr", ""),
+                "asr": hit.get("asr") or metadata.get("asr", ""),
+                "cluster_id": hit.get("cluster_id") or metadata.get("cluster_id", ""),
+                "tags": hit.get("tags") or metadata.get("tags", []),
+            })
+            hit["metadata"] = metadata
+            formatted.append(hit)
+        return formatted
+
+    async def search(
+        self,
+        query: Any,
+        mode: str = "text",
+        search_in: str = "image",
+        top_k: int = 650,
+        model_name: Optional[str] = None,
+        use_tag: bool = False,
+        top_k_tags: int = 5,
+        tags_filter: Optional[List[str]] = None,
+        ocr: Optional[str] = None,
+        ocr_mode: str = "cascading",
+        asr: Optional[str] = None,
+        asr_mode: str = "keyword",
+        asr_top_k: Optional[int] = None,
+        use_event_filter: bool = False,
+        ocr_fuzzy: bool = False,
+        asr_fuzzy: bool = False,
+        user_filter: Optional[List[str]] = None,
+        start_temporal_chain: bool = False,
+        user_id: Optional[str] = None,
+        query_id: Optional[str] = None,
+        cluster_mode_enabled: bool = True,
+        **kwargs,
+    ) -> list:
+        if mode == "image":
+            data = {
+                "top_k": str(top_k),
+                "use_event_filter": str(use_event_filter).lower(),
+                "user_filter": user_filter or [],
+                "cluster_mode_enabled": str(cluster_mode_enabled).lower(),
+            }
+            if model_name is not None:
+                data["model_name"] = model_name
+            if start_temporal_chain:
+                data.update({"user_id": user_id or "", "query_id": query_id or ""})
+                endpoint = "/v1/search/temporal/start_with_image"
+            else:
+                data.update({
+                    "use_tag": str(use_tag).lower(),
+                    "top_k_tags": str(top_k_tags),
+                })
+                endpoint = "/v1/search/image"
+            payload = await self._request_json(
+                "POST",
+                endpoint,
+                data=data,
+                files={"file": ("query_image.png", self._image_bytes(query), "image/png")},
+            )
+            return self._format_hits(payload.get("results", []))
+
+        payload_request = {
+            "query": str(query),
+            "search_in": search_in,
+            "top_k": top_k,
+            "model_name": model_name,
+            "use_tag": use_tag,
+            "top_k_tags": top_k_tags,
+            "tags_filter": tags_filter,
+            "ocr": ocr,
+            "ocr_mode": ocr_mode,
+            "asr": asr,
+            "asr_mode": asr_mode,
+            "asr_top_k": asr_top_k,
+            "use_event_filter": use_event_filter,
+            "ocr_fuzzy": ocr_fuzzy,
+            "asr_fuzzy": asr_fuzzy,
+            "user_filter": user_filter or [],
+            "cluster_mode_enabled": cluster_mode_enabled,
+            "user_id": user_id,
+            "query_id": query_id,
+        }
+        endpoint = "/v1/search/temporal/start" if start_temporal_chain else "/v1/search/text"
+        payload = await self._request_json("POST", endpoint, json=payload_request)
+        return self._format_hits(payload.get("results", []))
+
+    async def temporal_search_sequence(
+        self,
+        query: str,
+        user_id: str,
+        query_id: str,
+        mode: str = "text",
+        top_k: int = 500,
+        model_name: Optional[str] = None,
+        use_tag: bool = False,
+        top_k_tags: int = 5,
+        tags_filter: Optional[List[str]] = None,
+        ocr: Optional[str] = None,
+        ocr_mode: str = "cascading",
+        asr: Optional[str] = None,
+        asr_mode: str = "keyword",
+        asr_top_k: Optional[int] = None,
+        use_event_filter: bool = False,
+        ocr_fuzzy: bool = False,
+        asr_fuzzy: bool = False,
+        user_filter: Optional[List[str]] = None,
+        cluster_mode_enabled: bool = True,
+        **kwargs,
+    ) -> dict:
+        payload_request = {
+            "query": query,
+            "chain_id": user_id,
+            "user_id": user_id,
+            "query_id": query_id,
+            "search_in": "image",
+            "top_k": top_k,
+            "model_name": model_name,
+            "use_tag": use_tag,
+            "top_k_tags": top_k_tags,
+            "tags_filter": tags_filter,
+            "ocr": ocr,
+            "ocr_mode": ocr_mode,
+            "asr": asr,
+            "asr_mode": asr_mode,
+            "asr_top_k": asr_top_k,
+            "use_event_filter": use_event_filter,
+            "ocr_fuzzy": ocr_fuzzy,
+            "asr_fuzzy": asr_fuzzy,
+            "user_filter": user_filter or [],
+            "cluster_mode_enabled": cluster_mode_enabled,
+        }
+        payload = await self._request_json("POST", "/v1/search/temporal/continue", json=payload_request)
+        data = payload.get("data", {})
+        if not isinstance(data, dict):
+            raise DatabaseServiceError("Database service returned invalid temporal data.", 502)
+        if isinstance(data.get("query_A_reranked"), list):
+            data["query_A_reranked"] = self._format_hits(data["query_A_reranked"])
+        return data
+
+    async def get_asr_transcript_for_frame(self, **params) -> dict:
+        clean_params = {key: value for key, value in params.items() if value is not None}
+        return await self._request_json("GET", "/v1/asr_transcript", params=clean_params)
+
+    async def get_ocr_text_for_frame(self, **params) -> dict:
+        clean_params = {key: value for key, value in params.items() if value is not None}
+        return await self._request_json("GET", "/v1/ocr_text", params=clean_params)
+
+    async def get_temporal_chain_for_frame(self, user_id: str, frame_identifier: str) -> dict:
+        encoded_frame = urllib.parse.quote(frame_identifier, safe="")
+        payload = await self._request_json("GET", f"/v1/temporal-chain/{user_id}/{encoded_frame}")
+        return payload.get("chain", {})
+
+    async def clear_temporal_chain(self, user_id: str) -> bool:
+        await self._request_json("DELETE", f"/v1/temporal-chain/{user_id}")
+        return True
+
+    async def aclose(self):
+        await self._client.aclose()
 
 
 class TranscriptStore:
@@ -315,19 +564,18 @@ Available models:
 "google/siglip2-giant-opt-patch16-384"
 """
 
-def resolve_config_path() -> str:
+def resolve_database_service_url() -> str:
     for i, arg in enumerate(sys.argv):
-        if arg in ("--config", "--config-path", "--database-config") and i + 1 < len(sys.argv):
+        if arg in ("--database-url", "--db-url") and i + 1 < len(sys.argv):
             return sys.argv[i + 1]
-        elif arg.startswith("--config="):
+        elif arg.startswith("--database-url="):
             return arg.split("=", 1)[1]
-        elif arg.startswith("--config-path="):
+        elif arg.startswith("--db-url="):
             return arg.split("=", 1)[1]
-    return os.getenv("DATABASE_CONFIG_PATH", "configs/database.yaml")
+    return os.getenv("DATABASE_SERVICE_URL", "http://127.0.0.1:6090")
 
-config_path = resolve_config_path()
-print(f"[API_SERVER] Initializing database using config '{config_path}'...")
-milvus = MilvusManager.from_config(config_path=config_path)
+database_service_url = resolve_database_service_url()
+milvus: Optional[DatabaseServiceClient] = None
 
 
 # clear cache method
@@ -339,9 +587,35 @@ security = HTTPBasic()
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
+@app.on_event("startup")
+async def startup_event():
+    global milvus
+    milvus = DatabaseServiceClient(database_service_url)
+    try:
+        health = await milvus.health_check()
+    except Exception:
+        await milvus.aclose()
+        milvus = None
+        raise
+    print(
+        f"[API_SERVER_SERVICE] Connected to database service at '{database_service_url}' "
+        f"with models: {health.get('models', [])}"
+    )
+
+
 @app.on_event("shutdown")
 async def shutdown_event():
-    milvus.close()
+    if milvus is not None:
+        await milvus.aclose()
+
+
+@app.exception_handler(DatabaseServiceError)
+async def database_service_error_handler(request: Request, error: DatabaseServiceError):
+    return Response(
+        content=json.dumps({"detail": str(error)}),
+        status_code=error.status_code,
+        media_type="application/json",
+    )
 
 def verify_admin(credentials: HTTPBasicCredentials = Depends(security)):
     """Hàm xác thực admin qua Basic Auth"""
@@ -774,7 +1048,7 @@ async def get_available_models():
     """
     Trả về danh sách các model có sẵn để tìm kiếm.
     """
-    models = getattr(milvus, "model_names", ["google/siglip2-large-patch16-512"])
+    models = await milvus.get_model_names()
     return {"models": models}
 
 
@@ -949,7 +1223,7 @@ async def search_text_to_image(req: TextToImageRequest):
         cluster_filter_count=len(cluster_filter),
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
-    results = milvus.search(
+    results = await milvus.search(
         query=req.query,
         mode="text",
         search_in="image",
@@ -965,7 +1239,8 @@ async def search_text_to_image(req: TextToImageRequest):
         asr_mode=getattr(req, "asr_mode", "keyword"),
         asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
-        user_filter=cluster_filter
+        user_filter=cluster_filter,
+        cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
 
@@ -989,7 +1264,7 @@ async def search_text_to_text(req: TextToTextRequest):
         cluster_filter_count=len(cluster_filter),
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
-    results = milvus.search(
+    results = await milvus.search(
         query=req.query,
         mode="text",
         search_in="text",
@@ -1005,7 +1280,8 @@ async def search_text_to_text(req: TextToTextRequest):
         asr_mode=getattr(req, "asr_mode", "keyword"),
         asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
-        user_filter=cluster_filter
+        user_filter=cluster_filter,
+        cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
 
@@ -1044,7 +1320,7 @@ async def search_image(
     )
 
     # Gọi hàm search của Milvus với mode="image"
-    results = milvus.search(
+    results = await milvus.search(
         query=image_bytes,
         mode="image",
         search_in="image",
@@ -1053,7 +1329,8 @@ async def search_image(
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
-        user_filter=cluster_filter
+        user_filter=cluster_filter,
+        cluster_mode_enabled=cluster_mode_enabled,
     )
 
     return process_milvus_results_for_frontend(results)
@@ -1068,7 +1345,7 @@ async def cleanup_session(user_id: str = Form(...)):
     try:
         if user_id:
             print(f"Cleaning up temporal session for user: {user_id}")
-            milvus.clear_temporal_chain(user_id=user_id)
+            await milvus.clear_temporal_chain(user_id=user_id)
         return {"success": True, "message": f"Session for {user_id} cleared."}
     except Exception as e:
         # Even if it fails, return success to not block the browser unloading.
@@ -1114,7 +1391,7 @@ async def temporal_search_start_with_image(
             cluster_mode_enabled=cluster_mode_enabled,
         )
 
-        initial_results = milvus.search(
+        initial_results = await milvus.search(
             query=image_bytes,
             mode="image",
             search_in="image",
@@ -1124,7 +1401,8 @@ async def temporal_search_start_with_image(
             user_id=user_id,      # <<< THÊM VÀO
             query_id=query_id,
             use_event_filter=use_event_filter,
-            user_filter=cluster_filter
+            user_filter=cluster_filter,
+            cluster_mode_enabled=cluster_mode_enabled,
         )
 
         return {
@@ -1132,6 +1410,8 @@ async def temporal_search_start_with_image(
             "initial_results": process_milvus_results_for_frontend(initial_results)
         }
 
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1156,7 +1436,7 @@ async def fetch_asr_transcript(
             detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
-        result = milvus.get_asr_transcript_for_frame(
+        result = await milvus.get_asr_transcript_for_frame(
             frame_specify=frame_specify,
             video_name=target_vid,
             timestamp=target_ts,
@@ -1164,6 +1444,8 @@ async def fetch_asr_transcript(
             model_name=model_name,
         )
         return result
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1206,7 +1488,7 @@ async def fetch_ocr_text(
             detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
-        result = milvus.get_ocr_text_for_frame(
+        result = await milvus.get_ocr_text_for_frame(
             frame_specify=frame_specify,
             video_name=target_vid,
             timestamp=target_ts,
@@ -1214,6 +1496,8 @@ async def fetch_ocr_text(
             model_name=model_name,
         )
         return result
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1237,19 +1521,21 @@ async def fetch_frame_text(
             detail="Must provide either 'frame_specify', ('video_name' and 'frame_id'), or ('video_name' and 'timestamp')",
         )
     try:
-        asr_data = milvus.get_asr_transcript_for_frame(
-            frame_specify=frame_specify,
-            video_name=target_vid,
-            timestamp=target_ts,
-            frame_id=frame_id,
-            model_name=model_name,
-        )
-        ocr_data = milvus.get_ocr_text_for_frame(
-            frame_specify=frame_specify,
-            video_name=target_vid,
-            timestamp=target_ts,
-            frame_id=frame_id,
-            model_name=model_name,
+        asr_data, ocr_data = await asyncio.gather(
+            milvus.get_asr_transcript_for_frame(
+                frame_specify=frame_specify,
+                video_name=target_vid,
+                timestamp=target_ts,
+                frame_id=frame_id,
+                model_name=model_name,
+            ),
+            milvus.get_ocr_text_for_frame(
+                frame_specify=frame_specify,
+                video_name=target_vid,
+                timestamp=target_ts,
+                frame_id=frame_id,
+                model_name=model_name,
+            ),
         )
         return {
             "frame_id": frame_id or asr_data.get("frame_id") or ocr_data.get("frame_id"),
@@ -1259,6 +1545,8 @@ async def fetch_frame_text(
             "asr": asr_data,
             "ocr": ocr_data,
         }
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1508,7 +1796,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
         # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
-        initial_results = milvus.search(
+        initial_results = await milvus.search(
             query=req.query,
             mode="text",
             search_in="image",
@@ -1528,13 +1816,16 @@ async def temporal_search_start(req: TemporalStartRequest):
             use_event_filter=req.use_event_filter,
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
-            user_filter=cluster_filter
+            user_filter=cluster_filter,
+            cluster_mode_enabled=req.cluster_mode_enabled,
         )
         return {
             "chain_id": chain_id,
             "initial_results": process_milvus_results_for_frontend(initial_results)
         }
 
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         print(f"ERROR in temporal_search_start: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1568,7 +1859,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         )
 
         # 4. Thực hiện temporal search sequence
-        temporal_answer = milvus.temporal_search_sequence(
+        temporal_answer = await milvus.temporal_search_sequence(
             query=req.query,
             mode="text",
             top_k=min(req.top_k, 1000),
@@ -1585,7 +1876,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             use_event_filter=req.use_event_filter,
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
-            user_filter=cluster_filter
+            user_filter=cluster_filter,
+            cluster_mode_enabled=req.cluster_mode_enabled,
         )
 
         reranked_list = temporal_answer.get("query_A_reranked", [])
@@ -1600,6 +1892,8 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             "query_A_reranked": processed_reranked_list
         }
 
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         print(f"ERROR in temporal_search_continue: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1662,10 +1956,12 @@ async def get_single_frame_temporal_chain(user_id: str, frame_identifier: str):
     # This logic is conceptual. You need to implement how to retrieve
     # the specific chain data from your MilvusManager/Redis state.
     try:
-        chain_data = milvus.get_temporal_chain_for_frame(user_id, frame_identifier)
+        chain_data = await milvus.get_temporal_chain_for_frame(user_id, frame_identifier)
         if not chain_data:
              raise HTTPException(status_code=404, detail="Temporal chain not found for this frame.")
         return chain_data
+    except DatabaseServiceError:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2428,18 +2724,26 @@ if os.path.isdir(static_dir):
 else:
     print("Static frontend directory not found; serving API endpoints only.")
 
-# usage: python -m src.backend.api_server --config configs/database.yaml --port 8000
+# usage: python -m src.backend.api_server_service --database-url http://127.0.0.1:6090 --port 6080
 if __name__ == "__main__":
     import argparse
     import uvicorn
 
-    parser = argparse.ArgumentParser(description="AIC2026 Backend API Server")
-    parser.add_argument("--config", "--config-path", default="configs/database.yaml", help="Path to database YAML config file")
+    parser = argparse.ArgumentParser(description="AIC2026 Backend API Server using Database Service")
+    parser.add_argument(
+        "--database-url",
+        "--db-url",
+        default=os.getenv("DATABASE_SERVICE_URL", "http://127.0.0.1:6090"),
+        help="URL of the Database Microservice",
+    )
     parser.add_argument("--host", default="0.0.0.0", help="Host address to bind to (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8000, help="Port to listen on (default: 8000)")
+    parser.add_argument("--port", type=int, default=6080, help="Port to listen on (default: 6080)")
     parser.add_argument("--workers", type=int, default=1, help="Worker count (default: 1)")
     args, unknown = parser.parse_known_args()
 
-    os.environ["DATABASE_CONFIG_PATH"] = args.config
-    print(f"Starting API Server on {args.host}:{args.port} using config '{args.config}'...")
-    uvicorn.run("src.backend.api_server:app", host=args.host, port=args.port, workers=args.workers, reload=False)
+    os.environ["DATABASE_SERVICE_URL"] = args.database_url
+    print(
+        f"Starting API Server Service on {args.host}:{args.port} "
+        f"using database service '{args.database_url}'..."
+    )
+    uvicorn.run("src.backend.api_server_service:app", host=args.host, port=args.port, workers=args.workers, reload=False)
