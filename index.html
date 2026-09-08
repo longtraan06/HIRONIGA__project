@@ -36,13 +36,6 @@
                         <circle cx="11" cy="11" r="8" />
                     </svg>
                 </button>
-                <button id="imageToImageBtn" class="header-btn" title="Search Image" data-mode="image-to-image">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                        <circle cx="8.5" cy="8.5" r="1.5" />
-                        <polyline points="21,15 16,10 5,21" />
-                    </svg>
-                </button>
                 <button id="ocrFilterBtn" class="header-btn" title="Enable/Disable OCR Filter (F1)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -151,9 +144,6 @@
                 <div class="search-mode-buttons" id="searchModeButtons" style="display: none;">
                     <button class="mode-btn active" data-mode="text-to-image">
                         <i class="fas fa-font"></i>
-                    </button>
-                    <button class="mode-btn" data-mode="image-to-image">
-                        <i class="fas fa-image"></i>
                     </button>
                 </div>
                 <div class="search-inputs-container" id="searchInputsContainer">
@@ -720,6 +710,22 @@
             <div id="semanticSearchResultsContainer">
                 <!-- Kết quả sẽ được render vào đây -->
             </div>
+        </div>
+    </div>
+
+    <div id="temporalImageActionModal" class="mini-modal temporal-image-action-modal" style="display: none;"
+        role="dialog" aria-modal="true" aria-labelledby="temporalImageActionTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <h3 id="temporalImageActionTitle">Use frame in temporal search</h3>
+            <p id="temporalImageActionDescription">Choose how to use the selected frame.</p>
+            <div class="temporal-image-action-options" role="radiogroup">
+                <button id="temporalContinueImageBtn" class="temporal-image-action-option" type="button" role="radio"
+                    aria-checked="true">Continue chain</button>
+                <button id="temporalStartImageBtn" class="temporal-image-action-option" type="button" role="radio"
+                    aria-checked="false">Start new chain</button>
+            </div>
+            <p class="temporal-image-action-hint">Enter to confirm. Arrow keys to change. Esc to cancel.</p>
         </div>
     </div>
 
