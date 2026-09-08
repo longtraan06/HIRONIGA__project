@@ -422,6 +422,60 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         raise HTTPException(status_code=500, detail=f"Temporal continue error: {str(e)}")
 
 
+@app.post("/v1/search/temporal/continue_with_image")
+async def temporal_search_continue_with_image(
+    file: UploadFile = File(...),
+    user_id: str = Form(...),
+    query_id: str = Form(...),
+    top_k: int = Form(500),
+    model_name: Optional[str] = Form(None),
+    use_event_filter: bool = Form(False),
+    user_filter: Optional[List[str]] = Form(None),
+    cluster_mode_enabled: bool = Form(True),
+):
+    """Append an image query to an existing temporal chain."""
+    from PIL import Image
+
+    t0 = time.time()
+    mgr = get_milvus()
+    try:
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Image file is empty.")
+
+        async with temporal_lock(user_id):
+            def execute_temporal_image_search():
+                with Image.open(io.BytesIO(contents)) as image:
+                    return mgr.temporal_search_sequence(
+                        query=image.convert("RGB"),
+                        query_description=f"image:{file.filename or 'uploaded-image'}",
+                        user_id=user_id,
+                        query_id=query_id,
+                        mode="image",
+                        search_in="image",
+                        top_k=top_k,
+                        model_name=model_name,
+                        use_event_filter=use_event_filter,
+                        user_filter=user_filter,
+                        cluster_mode_enabled=cluster_mode_enabled,
+                    )
+
+            res = await run_blocking_search(execute_temporal_image_search)
+
+        latency = round((time.time() - t0) * 1000, 2)
+        return {
+            "status": "success",
+            "user_id": user_id,
+            "query_id": query_id,
+            "data": res,
+            "latency_ms": latency,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Temporal image continue error: {str(e)}")
+
+
 @app.post("/v1/filter/text", response_model=TextFilterResponse)
 def text_filter_expression(req: TextFilterRequest):
     """
@@ -697,6 +751,18 @@ async def search_asr(req: ASRSearchRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"ASR search error: {str(e)}")
 
+
+
+# --- CIR endpoints (src/apps/cir_endpoints.py) ---
+# Kept in their own module so CIR stays separate from this service's code.
+# Guarded: if CIR cannot be imported, this service still starts without it.
+try:
+    from src.apps.cir_endpoints import router as cir_router
+
+    app.include_router(cir_router)
+    print("[DB_SERVICE] CIR endpoints mounted.")
+except Exception as _cir_import_error:  # pragma: no cover
+    print(f"[DB_SERVICE] CIR endpoints unavailable: {_cir_import_error}")
 
 
 # --- CLI Entry Point ---
