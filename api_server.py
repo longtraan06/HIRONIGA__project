@@ -34,7 +34,7 @@ import httpx
 from bisect import bisect_right
 from contextlib import contextmanager
 from pathlib import Path
-FORM_SUBMIT_SAVE_PATH = "/mlcv2/WorkingSpace/Personal/chinhnm/LunchBox/Submited_results"
+FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/csv_submit"
 
 PROJECT_DIR = Path(__file__).resolve().parent
 CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
@@ -268,6 +268,42 @@ class DatabaseServiceClient:
         if isinstance(data.get("query_A_reranked"), list):
             data["query_A_reranked"] = self._format_hits(data["query_A_reranked"])
         return data
+
+    async def temporal_search_sequence_with_image(
+        self,
+        query: Any,
+        user_id: str,
+        query_id: str,
+        top_k: int = 500,
+        model_name: Optional[str] = None,
+        use_event_filter: bool = False,
+        user_filter: Optional[List[str]] = None,
+        cluster_mode_enabled: bool = True,
+    ) -> dict:
+        data = {
+            "user_id": user_id,
+            "query_id": query_id,
+            "top_k": str(top_k),
+            "use_event_filter": str(use_event_filter).lower(),
+            "cluster_mode_enabled": str(cluster_mode_enabled).lower(),
+        }
+        if model_name is not None:
+            data["model_name"] = model_name
+        if user_filter:
+            data["user_filter"] = user_filter
+
+        payload = await self._request_json(
+            "POST",
+            "/v1/search/temporal/continue_with_image",
+            data=data,
+            files={"file": ("temporal-query-image.png", self._image_bytes(query), "image/png")},
+        )
+        temporal_data = payload.get("data", {})
+        if not isinstance(temporal_data, dict):
+            raise DatabaseServiceError("Database service returned invalid temporal image data.", 502)
+        if isinstance(temporal_data.get("query_A_reranked"), list):
+            temporal_data["query_A_reranked"] = self._format_hits(temporal_data["query_A_reranked"])
+        return temporal_data
 
     async def get_asr_transcript_for_frame(self, **params) -> dict:
         clean_params = {key: value for key, value in params.items() if value is not None}
@@ -1897,6 +1933,62 @@ async def temporal_search_continue(req: TemporalContinueRequest):
     except Exception as e:
         print(f"ERROR in temporal_search_continue: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/search/temporal/continue_with_image")
+async def temporal_search_continue_with_image(
+    file: UploadFile = File(..., description="Image used as the next temporal query"),
+    chain_id: str = Form(..., description="Active temporal chain ID"),
+    query_id: str = Form(..., description="Query ID for this image step"),
+    top_k: int = Form(500, description="Number of image candidates to retrieve"),
+    model_name: Optional[str] = Form(None),
+    use_event_filter: bool = Form(False),
+    cluster_mode_enabled: bool = Form(True),
+):
+    """Append a selected frame as an image query to the active temporal chain."""
+    try:
+        image_bytes = await file.read()
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="Image file is empty.")
+
+        cluster_filter = get_search_cluster_filter(cluster_mode_enabled)
+        log_search_debug(
+            "temporal-continue-with-image",
+            query=f"uploaded_file:{file.filename}",
+            mode="image",
+            search_in="image",
+            top_k=min(top_k, 1000),
+            requested_top_k=top_k,
+            model_name=model_name,
+            chain_id=chain_id,
+            query_id=query_id,
+            use_event_filter=use_event_filter,
+            cluster_filter_count=len(cluster_filter),
+            uploaded_bytes=len(image_bytes),
+            cluster_mode_enabled=cluster_mode_enabled,
+        )
+        temporal_answer = await milvus.temporal_search_sequence_with_image(
+            query=image_bytes,
+            user_id=chain_id,
+            query_id=query_id,
+            top_k=min(top_k, 1000),
+            model_name=model_name,
+            use_event_filter=use_event_filter,
+            user_filter=cluster_filter,
+            cluster_mode_enabled=cluster_mode_enabled,
+        )
+        reranked_list = temporal_answer.get("query_A_reranked", [])
+        return {
+            "query_A_reranked": process_milvus_results_for_frontend(reranked_list),
+        }
+    except DatabaseServiceError:
+        raise
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"ERROR in temporal_search_continue_with_image: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def process_milvus_results_for_frontend(results: list) -> list:
     processed_list = []
