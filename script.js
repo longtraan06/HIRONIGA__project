@@ -263,6 +263,9 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentUser = null;
     let ws = null;
     let currentResultsAreReranked = false;
+    let temporalChainActive = false;
+    let pendingTemporalImageFrame = null;
+    let temporalImageActionIndex = 0;
     let wsRetryDelayMs = 3000;
     let userColors = {}; // Lưu màu của tất cả user
 
@@ -334,7 +337,6 @@ document.addEventListener('DOMContentLoaded', function () {
     let modalQueryFrame = null;
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
-    const imageToImageBtn = document.getElementById('imageToImageBtn');
     const translateBtn = document.getElementById('translateBtn');
     const searchInputsContainer = document.getElementById('searchInputsContainer');
     const contentArea = document.getElementById('contentArea');
@@ -380,6 +382,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const previewPlaceholder = document.getElementById('previewPlaceholder');
     const closePreviewBarBtn = document.getElementById('closePreviewBarBtn');
     const header = document.querySelector('.header');
+    const temporalImageActionModal = document.getElementById('temporalImageActionModal');
+    const temporalImageActionDescription = document.getElementById('temporalImageActionDescription');
+    const temporalContinueImageBtn = document.getElementById('temporalContinueImageBtn');
+    const temporalStartImageBtn = document.getElementById('temporalStartImageBtn');
 
     const formSubmitQueueContainer = document.getElementById('formSubmitQueue');
     const formSubmitQueueFramesContainer = document.getElementById('formSubmitQueueFrames');
@@ -1249,10 +1255,6 @@ document.addEventListener('DOMContentLoaded', function () {
             toggleLayoutBtn.addEventListener('click', toggleLayout);
         }
 
-        imageToImageBtn.addEventListener('click', function () {
-            switchSearchMode('image-to-image');
-        });
-
         window.addEventListener('popstate', (event) => {
             // Chỉ xử lý nếu có state hợp lệ do chúng ta tạo ra
             if (event.state && event.state.description === 'AIC_LUNCH_SEARCH') {
@@ -1590,7 +1592,11 @@ document.addEventListener('DOMContentLoaded', function () {
                         } else {
                             const imagePath = frameData.path;
                             clearQueueSelection(); // Bỏ chọn trước khi bắt đầu
-                            initiateImageTemporalSearch(imagePath); // Gọi hàm điều phối mới
+                            if (e.shiftKey) {
+                                openTemporalImageActionDialog({ ...frameData, path: imagePath });
+                            } else {
+                                initiateImageTemporalSearch(imagePath);
+                            }
                         }
                     } else {
                         showToastNotification("Please select only one frame for this action.", "error");
@@ -2772,7 +2778,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const frameDataToSend = { ...currentModalFrameData, isSpecial: isSpecial };
                 addFramesToQueue([frameDataToSend]);
             } else if (key === 's') {
-                closeModal(() => initiateImageTemporalSearch(currentModalFrameData.path));
+                if (e.shiftKey) {
+                    closeModal(() => openTemporalImageActionDialog(currentModalFrameData));
+                } else {
+                    closeModal(() => initiateImageTemporalSearch(currentModalFrameData.path));
+                }
             }
         };
 
@@ -2837,7 +2847,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const headerButtons = [
             document.getElementById('textToImageBtn'),
             document.getElementById('textToTextBtn'),
-            document.getElementById('imageToImageBtn'),
             document.getElementById('translateBtn')
         ];
 
@@ -3017,9 +3026,9 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
     function switchSearchMode(mode) {
+        if (mode === 'image-to-image') mode = 'text-to-image';
         // Cập nhật UI của các nút
         textToImageBtn.classList.toggle('active', mode === 'text-to-image');
-        imageToImageBtn.classList.toggle('active', mode === 'image-to-image');
 
         // Cập nhật mode hiện tại
         currentSearchMode = mode;
@@ -3098,32 +3107,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateSearchMode() {
         const searchInputGroups = document.querySelectorAll('.search-input-group');
         searchInputGroups.forEach(group => {
-            const textInput = group.querySelector('.search-input');
-            const imageUploadArea = group.querySelector('.image-upload-area');
-
-            if (currentSearchMode === 'text-to-image' || currentSearchMode === 'text-to-text') {
-                // Hiện thanh tìm kiếm văn bản, ẩn khung tải ảnh
-                textInput.style.display = 'block';
-                imageUploadArea.style.display = 'none';
-                textInput.setAttribute('data-mode', currentSearchMode);
-
-                // Cập nhật placeholder tùy theo mode
-                if (currentSearchMode === 'text-to-image') {
-                    textInput.placeholder = "In Image";
-                } else {
-                    textInput.placeholder = "In Text";
-                }
-
-                // THÊM VÀO: Tự động focus vào ô tìm kiếm đầu tiên nếu có
-                if (group === searchInputGroups[0]) {
-                    setTimeout(() => textInput.focus(), 0);
-                }
-            } else if (currentSearchMode === 'image-to-image') {
-                // Ẩn thanh tìm kiếm văn bản, hiện khung tải ảnh
-                textInput.style.display = 'none';
-                imageUploadArea.style.display = 'block';
-                textInput.setAttribute('data-mode', 'image-to-image');
-            }
+            setSearchGroupQueryKind(group, group.dataset.queryKind || 'text', false);
         });
     }
 
@@ -3146,6 +3130,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const newSearchGroup = document.createElement('div');
         newSearchGroup.className = 'search-input-group';
         newSearchGroup.setAttribute('data-search-id', searchIdCounter);
+        newSearchGroup.dataset.queryKind = 'text';
 
         // Cập nhật placeholder tùy theo mode hiện tại
         let placeholder = "Search";
@@ -3451,7 +3436,45 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function ensureQueryKindSwitch(searchGroup) {
+        const searchBox = searchGroup.querySelector('.search-box');
+        if (!searchBox || searchBox.querySelector('.query-kind-switch')) return;
+        searchBox.insertAdjacentHTML('afterbegin', `
+            <div class="query-kind-switch" role="group" aria-label="Query type">
+                <button class="query-kind-btn query-kind-text active" type="button" title="Search with text" aria-label="Search with text">
+                    <strong>T</strong>
+                </button>
+                <button class="query-kind-btn query-kind-image" type="button" title="Search with image" aria-label="Search with image">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <polyline points="21,15 16,10 5,21" />
+                    </svg>
+                </button>
+            </div>
+        `);
+    }
+
+    function setSearchGroupQueryKind(searchGroup, kind, focus = true) {
+        if (!searchGroup) return;
+        const normalizedKind = kind === 'image' ? 'image' : 'text';
+        const textInput = searchGroup.querySelector('.search-input');
+        const imageUploadArea = searchGroup.querySelector('.image-upload-area');
+        const uploadZone = searchGroup.querySelector('.upload-zone');
+        searchGroup.dataset.queryKind = normalizedKind;
+        textInput.style.display = normalizedKind === 'text' ? 'block' : 'none';
+        imageUploadArea.style.display = normalizedKind === 'image' ? 'block' : 'none';
+        textInput.setAttribute('data-mode', normalizedKind);
+        searchGroup.querySelector('.query-kind-text')?.classList.toggle('active', normalizedKind === 'text');
+        searchGroup.querySelector('.query-kind-image')?.classList.toggle('active', normalizedKind === 'image');
+        if (focus) {
+            setTimeout(() => (normalizedKind === 'image' ? uploadZone : textInput)?.focus(), 0);
+        }
+    }
+
     function setupSearchInput(searchGroup) {
+        ensureQueryKindSwitch(searchGroup);
+        searchGroup.dataset.queryKind ||= 'text';
         const textInput = searchGroup.querySelector('.search-input');
         const ocrInput = searchGroup.querySelector('.ocr-input');
         const imageInput = searchGroup.querySelector('.image-input');
@@ -3461,6 +3484,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
         textInput.title = 'Inline filters: ;OCR;, "ASR", or \'ASR\'';
+
+        searchGroup.querySelector('.query-kind-text').addEventListener('click', () => {
+            setSearchGroupQueryKind(searchGroup, 'text');
+        });
+        searchGroup.querySelector('.query-kind-image').addEventListener('click', () => {
+            setSearchGroupQueryKind(searchGroup, 'image');
+        });
+        setSearchGroupQueryKind(searchGroup, searchGroup.dataset.queryKind, false);
 
         // Auto-resize textarea + ẩn dòng dịch khi người dùng gõ
         textInput.addEventListener('input', function () {
@@ -3761,6 +3792,31 @@ document.addEventListener('DOMContentLoaded', function () {
             const file = e.dataTransfer.files[0];
             if (file && file.type.startsWith('image/')) {
                 handleImageUpload(file, searchGroup);
+                return;
+            }
+
+            const serializedFrame = e.dataTransfer.getData('application/x-aic-frame');
+            if (serializedFrame) {
+                try {
+                    const frameData = JSON.parse(serializedFrame);
+                    framePathToImageFile(frameData).then(imageFile => {
+                        handleImageUpload(imageFile, searchGroup, resolveFrameUrl(frameData.path), frameData);
+                    }).catch(error => handleSearchError(error));
+                } catch (error) {
+                    console.error('Invalid dragged frame data:', error);
+                }
+                return;
+            }
+
+            const droppedUrl = (e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain'))
+                .split('\n')
+                .map(value => value.trim())
+                .find(value => value && !value.startsWith('#'));
+            if (droppedUrl && /^(https?:|data:|blob:)/.test(droppedUrl)) {
+                const frameData = { path: droppedUrl };
+                framePathToImageFile(frameData).then(imageFile => {
+                    handleImageUpload(imageFile, searchGroup, droppedUrl);
+                }).catch(error => handleSearchError(error));
             }
         });
 
@@ -3772,6 +3828,8 @@ document.addEventListener('DOMContentLoaded', function () {
             e.stopPropagation();
             uploadedImageDiv.style.display = 'none';
             imageInput.value = '';
+            searchGroup._temporalImageFile = null;
+            searchGroup._temporalFrameData = null;
         });
 
         // 1. Làm cho vùng upload có thể nhận focus
@@ -3781,7 +3839,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // 2. Gắn listener sự kiện 'paste' trực tiếp vào vùng upload
         uploadZone.addEventListener('paste', function (e) {
-            if (currentSearchMode !== 'image-to-image') return;
+            if (searchGroup.dataset.queryKind !== 'image') return;
 
             const clipboardItems = e.clipboardData.items;
             if (!clipboardItems) return;
@@ -3813,19 +3871,31 @@ document.addEventListener('DOMContentLoaded', function () {
 
     }
 
-    function handleImageUpload(file, searchGroup) {
+    async function handleImageUpload(file, searchGroup, previewSource = null, frameData = null) {
+        if (!file?.type?.startsWith('image/')) {
+            showToastNotification('Please provide a valid image file.', 'error');
+            return;
+        }
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
         const img = uploadedImageDiv.querySelector('img');
+        searchGroup._temporalImageFile = file;
+        searchGroup._temporalFrameData = frameData;
+        setSearchGroupQueryKind(searchGroup, 'image', false);
 
-        const reader = new FileReader();
-        reader.onload = function (e) {
-            img.src = e.target.result;
+        if (previewSource) {
+            img.src = previewSource;
             uploadedImageDiv.style.display = 'block';
+            return performSearch(file, 'image', searchGroup);
+        }
 
-            // Automatically perform search when image is uploaded
-            performSearch(file, 'image', searchGroup);
-        };
-        reader.readAsDataURL(file);
+        img.src = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = event => resolve(event.target.result);
+            reader.onerror = () => reject(reader.error || new Error('Unable to preview image.'));
+            reader.readAsDataURL(file);
+        });
+        uploadedImageDiv.style.display = 'block';
+        return performSearch(file, 'image', searchGroup);
     }
 
     async function performSearch(query, type, searchGroup) {
@@ -3915,15 +3985,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (currentSearchMode === 'text-to-image') {
                     // Tách riêng logic temporal search
                     const isFirstSearch = !searchGroup.previousElementSibling;
-                    if (isFirstSearch) {
-                        searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions, searchGroup)
+                        if (isFirstSearch) {
+                            searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions, searchGroup)
                             .then(response => {
+                                temporalChainActive = true;
+                                searchGroup.dataset.submitted = 'true';
                                 handleSearchResults(response.initial_results, false);
                                 manageNextSearchInput();
                             });
                     } else {
                         searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, filterOptions, searchGroup)
                             .then(response => {
+                                searchGroup.dataset.submitted = 'true';
                                 handleSearchResults(response.query_A_reranked, true);
                                 manageNextSearchInput();
                             });
@@ -3935,27 +4008,24 @@ document.addEventListener('DOMContentLoaded', function () {
                             manageNextSearchInput();
                         });
                 }
-            } else if (type === 'image' && currentSearchMode === 'image-to-image') {
-                // *** BẮT ĐẦU THAY ĐỔI ***
-                let imageFilePromise;
-
-                if (typeof query === 'string') {
-                    // TRƯỜNG HỢP 1: Semantic search (query là một đường dẫn URL)
-                    // Chúng ta cần chuyển URL thành một đối tượng File
-                    imageFilePromise = fetch(query)
-                        .then(response => response.blob())
-                        .then(blob => new File([blob], "semantic_search_image.jpg", { type: blob.type }));
+            } else if (type === 'image' && currentSearchMode === 'text-to-image') {
+                const isFirstSearch = !searchGroup.previousElementSibling;
+                if (isFirstSearch) {
+                    searchPromise = callTemporalSearchStartWithImage(query, currentSelectedModel, searchGroup)
+                        .then(response => {
+                            temporalChainActive = true;
+                            searchGroup.dataset.submitted = 'true';
+                            handleSearchResults(response.initial_results, false);
+                            manageNextSearchInput();
+                        });
                 } else {
-                    // TRƯỜNG HỢP 2: Tải ảnh lên (query đã là một đối tượng File)
-                    imageFilePromise = Promise.resolve(query);
+                    searchPromise = callTemporalSearchContinueWithImage(query, currentSelectedModel, searchGroup)
+                        .then(response => {
+                            searchGroup.dataset.submitted = 'true';
+                            handleSearchResults(response.query_A_reranked, true);
+                            manageNextSearchInput();
+                        });
                 }
-
-                // `searchPromise` sẽ đợi cho đến khi có File object
-                searchPromise = imageFilePromise.then(imageFile => {
-                    return callImageToImageAPI(imageFile, currentSelectedModel)
-                        .then(results => handleSearchResults(results, false));
-                });
-                // *** KẾT THÚC THAY ĐỔI ***
             }
 
             await searchPromise;
@@ -3983,6 +4053,9 @@ document.addEventListener('DOMContentLoaded', function () {
         for (const input of allInputs) {
             // Một ô được coi là "trống" nếu nó không có text VÀ không có filter nào đang áp dụng cho nó
             const searchGroup = input.closest('.search-input-group');
+            if (searchGroup.dataset.queryKind === 'image' || searchGroup.dataset.submitted === 'true') {
+                continue;
+            }
             const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
             const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
             const asrValue = searchGroup.querySelector('.asr-input')?.value.trim();
@@ -4108,6 +4181,34 @@ document.addEventListener('DOMContentLoaded', function () {
             body: JSON.stringify(body)
         })
             .then(res => res.ok ? res.json() : Promise.reject(res));
+    }
+
+    function buildTemporalImageFormData(imageFile, modelName, searchGroup) {
+        const formData = new FormData();
+        formData.append('file', imageFile);
+        formData.append('query_id', searchGroup.dataset.searchId);
+        formData.append('cluster_mode_enabled', String(clusterModeEnabled));
+        if (modelName && modelName !== 'all') formData.append('model_name', modelName);
+        if (isEventFilterEnabled) formData.append('use_event_filter', 'true');
+        return formData;
+    }
+
+    function callTemporalSearchStartWithImage(imageFile, modelName, searchGroup) {
+        const formData = buildTemporalImageFormData(imageFile, modelName, searchGroup);
+        formData.append('user_id', currentUserId);
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start_with_image`, {
+            method: 'POST',
+            body: formData,
+        }).then(response => response.ok ? response.json() : Promise.reject(response));
+    }
+
+    function callTemporalSearchContinueWithImage(imageFile, modelName, searchGroup) {
+        const formData = buildTemporalImageFormData(imageFile, modelName, searchGroup);
+        formData.append('chain_id', currentUserId);
+        return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/continue_with_image`, {
+            method: 'POST',
+            body: formData,
+        }).then(response => response.ok ? response.json() : Promise.reject(response));
     }
 
     // Hàm này được gọi khi tìm kiếm query B, C...
@@ -4775,7 +4876,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 const frameDataForSearch = currentModalFrameData;
                 closeModal();
                 setTimeout(() => {
-                    openSemanticSearchModal(frameDataForSearch);
+                    if (e.shiftKey) {
+                        openTemporalImageActionDialog(frameDataForSearch);
+                    } else {
+                        openSemanticSearchModal(frameDataForSearch);
+                    }
                 }, 100);
             }
         };
@@ -6394,6 +6499,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Thiết lập phím tắt
         document.addEventListener('keydown', function (e) {
+            if (temporalImageActionModal?.style.display === 'flex') {
+                return;
+            }
             if (isModalKeyboardActive()) {
                 return;
             }
@@ -6510,8 +6618,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
                 if (frameToSearch) {
-                    // Gọi hàm quản lý modal mới của chúng ta!
-                    openSemanticSearchModal(frameToSearch);
+                    if (e.shiftKey) {
+                        openTemporalImageActionDialog(frameToSearch);
+                    } else {
+                        openSemanticSearchModal(frameToSearch);
+                    }
 
                     // Nếu đang mở thanh preview, hãy đóng nó đi cho gọn
                     if (keyframePreviewBar.classList.contains('visible')) {
@@ -7018,17 +7129,172 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    function createImageTemporalSearchBlock(imagePath) {
+    function createImageTemporalSearchBlock(imagePath, queryId = '', frameIdentifier = '') {
         const imageSearchBlock = document.createElement('div');
-        imageSearchBlock.className = 'image-temporal-search-block'; // Dùng class riêng để style
+        imageSearchBlock.className = 'image-temporal-search-block';
+        imageSearchBlock.dataset.searchId = queryId;
+        imageSearchBlock.dataset.frameIdentifier = frameIdentifier;
         imageSearchBlock.innerHTML = `
-        <p class="search-block-label">Searching from image:</p>
+        <p class="search-block-label">Image query:</p>
         <img src="${imagePath}" alt="Temporal Search Start Image">
         `;
         return imageSearchBlock;
     }
 
-    async function initiateImageTemporalSearch(imagePath) {
+    function nextTemporalImageQueryId() {
+        return `image-${Date.now()}-${++searchIdCounter}`;
+    }
+
+    function appendTemporalImageStep(frameData, queryId) {
+        const imageBlock = createImageTemporalSearchBlock(
+            frameData.path,
+            queryId,
+            frameData.frameIdentifier || ''
+        );
+        const groups = [...searchInputsContainer.querySelectorAll('.search-input-group')];
+        const trailingEmptyGroup = groups[groups.length - 1];
+        const trailingInput = trailingEmptyGroup?.querySelector('.search-input');
+
+        if (trailingInput && !trailingInput.value.trim()) {
+            searchInputsContainer.insertBefore(imageBlock, trailingEmptyGroup);
+        } else {
+            searchInputsContainer.appendChild(imageBlock);
+            createNewSearchInput();
+        }
+    }
+
+    async function framePathToImageFile(frameData) {
+        if (!frameData?.path) throw new Error('Selected frame has no image path.');
+        const response = await fetch(frameData.path, {
+            mode: 'cors',
+            credentials: 'omit',
+            cache: 'force-cache'
+        });
+        if (!response.ok) throw new Error(`Frame image request failed: ${response.status}`);
+        const blob = await response.blob();
+        return new File([blob], 'temporal-query-image.jpg', { type: blob.type || 'image/jpeg' });
+    }
+
+    function getAvailableTemporalSearchGroup() {
+        const groups = [...searchInputsContainer.querySelectorAll('.search-input-group')];
+        const trailingGroup = groups[groups.length - 1];
+        if (trailingGroup && trailingGroup.dataset.submitted !== 'true') return trailingGroup;
+        const input = createNewSearchInput();
+        return input.closest('.search-input-group');
+    }
+
+    async function continueTemporalChainWithImage(frameData) {
+        if (!temporalChainActive) throw new Error('No active temporal chain.');
+        const searchGroup = getAvailableTemporalSearchGroup();
+        searchGroup.dataset.searchId = nextTemporalImageQueryId();
+        await handleImageUpload(
+            await framePathToImageFile(frameData),
+            searchGroup,
+            resolveFrameUrl(frameData.path),
+            frameData
+        );
+    }
+
+    async function startTemporalChainWithImage(frameData) {
+        searchInputsContainer.replaceChildren();
+        temporalChainActive = false;
+        const searchInput = createNewSearchInput();
+        const searchGroup = searchInput.closest('.search-input-group');
+        searchGroup.dataset.searchId = nextTemporalImageQueryId();
+        await handleImageUpload(
+            await framePathToImageFile(frameData),
+            searchGroup,
+            resolveFrameUrl(frameData.path),
+            frameData
+        );
+    }
+
+    function updateTemporalImageActionDialog() {
+        const buttons = [temporalContinueImageBtn, temporalStartImageBtn];
+        buttons.forEach((button, index) => {
+            const selected = index === temporalImageActionIndex;
+            button.classList.toggle('is-selected', selected);
+            button.setAttribute('aria-checked', String(selected));
+        });
+    }
+
+    function closeTemporalImageActionDialog() {
+        temporalImageActionModal.classList.remove('visible');
+        temporalImageActionModal.style.display = 'none';
+        registerModalClose(temporalImageActionModal);
+        pendingTemporalImageFrame = null;
+        document.removeEventListener('keydown', handleTemporalImageActionKeydown, true);
+    }
+
+    async function confirmTemporalImageAction() {
+        const frameData = pendingTemporalImageFrame;
+        if (!frameData) return;
+        closeTemporalImageActionDialog();
+        showLoadingIndicator();
+        try {
+            if (temporalImageActionIndex === 0) {
+                await continueTemporalChainWithImage(frameData);
+            } else {
+                await startTemporalChainWithImage(frameData);
+            }
+        } catch (error) {
+            console.error('Temporal image action failed:', error);
+            handleSearchError(error);
+        }
+    }
+
+    function handleTemporalImageActionKeydown(event) {
+        event.stopPropagation();
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            closeTemporalImageActionDialog();
+            return;
+        }
+        if (event.key === 'ArrowUp' || event.key === 'ArrowLeft' || event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+            event.preventDefault();
+            temporalImageActionIndex = temporalImageActionIndex === 0 ? 1 : 0;
+            updateTemporalImageActionDialog();
+            return;
+        }
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            confirmTemporalImageAction();
+        }
+    }
+
+    function openTemporalImageActionDialog(frameData) {
+        if (!frameData?.path) {
+            showToastNotification('Selected frame has no image available for temporal search.', 'error');
+            return;
+        }
+        pendingTemporalImageFrame = frameData;
+        const canContinue = temporalChainActive && Boolean(currentUserId);
+        temporalContinueImageBtn.disabled = !canContinue;
+        temporalImageActionIndex = canContinue ? 0 : 1;
+        temporalImageActionDescription.textContent = canContinue
+            ? 'Continue the active chain, or start a new chain from this frame.'
+            : 'No active temporal chain. Start a new chain from this frame.';
+        updateTemporalImageActionDialog();
+        temporalImageActionModal.style.display = 'flex';
+        registerModalOpen(temporalImageActionModal, closeTemporalImageActionDialog);
+        requestAnimationFrame(() => temporalImageActionModal.classList.add('visible'));
+        document.addEventListener('keydown', handleTemporalImageActionKeydown, true);
+        [temporalContinueImageBtn, temporalStartImageBtn][temporalImageActionIndex].focus();
+    }
+
+    temporalContinueImageBtn.addEventListener('click', () => {
+        if (!temporalContinueImageBtn.disabled) {
+            temporalImageActionIndex = 0;
+            confirmTemporalImageAction();
+        }
+    });
+    temporalStartImageBtn.addEventListener('click', () => {
+        temporalImageActionIndex = 1;
+        confirmTemporalImageAction();
+    });
+    temporalImageActionModal.querySelector('.modal-overlay').addEventListener('click', closeTemporalImageActionDialog);
+
+    async function initiateImageTemporalSearch(imagePath, queryId = `img-start-${Date.now()}`) {
         // BỎ ĐI: searchInputsContainer.innerHTML = '';
         // BỎ ĐI: showLoadingIndicator();
 
@@ -7050,7 +7316,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             // --- LOGIC GỌI API VẪN GIỮ NGUYÊN ---
-            const queryId = 'img-start-' + Date.now();
             const formData = new FormData();
             formData.append("file", imageFile);
             formData.append("user_id", currentUserId);
@@ -7988,9 +8253,14 @@ document.addEventListener('DOMContentLoaded', function () {
             if (selectedCount === 1) {
                 e.preventDefault();
                 const newQueryFrame = selectedFramesData[0];
-                // Đóng modal cũ và mở một modal mới với frame vừa chọn
-                closeSemanticSearchModal();
-                setTimeout(() => openSemanticSearchModal(newQueryFrame), 100);
+                if (e.shiftKey) {
+                    closeSemanticSearchModal();
+                    setTimeout(() => openTemporalImageActionDialog(newQueryFrame), 100);
+                } else {
+                    // Đóng modal cũ và mở một modal mới với frame vừa chọn
+                    closeSemanticSearchModal();
+                    setTimeout(() => openSemanticSearchModal(newQueryFrame), 100);
+                }
             }
         }
         // Phím Escape: Bỏ chọn hoặc đóng modal
@@ -8540,6 +8810,19 @@ document.addEventListener('DOMContentLoaded', function () {
         const uniqueFrameId = image.frameIdentifier;
         imageItem.setAttribute('data-frame-id', uniqueFrameId);
         imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
+        imageItem.draggable = true;
+        imageItem.addEventListener('dragstart', event => {
+            const transferableFrame = {
+                path: image.path,
+                frameIdentifier: image.frameIdentifier,
+                videoName: image.videoName,
+                timestamp: image.timestamp,
+                frame_id_ori: image.frame_id_ori,
+            };
+            event.dataTransfer.effectAllowed = 'copy';
+            event.dataTransfer.setData('application/x-aic-frame', JSON.stringify(transferableFrame));
+            event.dataTransfer.setData('text/uri-list', resolveFrameUrl(image.path));
+        });
         applyFrameStatusClasses(imageItem, image.frameIdentifier);
 
 
@@ -8562,7 +8845,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 event.preventDefault();
                 openVideoModal(image.videoName, image.timestamp);
             } else if (event.button === 0) {
-                event.preventDefault();
                 const isModalItem = selectionManager === modalFrameSelectionManager;
                 if (!isModalItem) {
                     showKeyframePreview(image);
