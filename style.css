@@ -72,6 +72,45 @@ button:focus, input:focus, textarea:focus {
     box-shadow: 0 0 0 3px rgba(138, 184, 110, 0.4);
 }
 
+.temporal-image-action-modal .modal-content {
+    width: min(390px, calc(100vw - 32px));
+}
+
+.temporal-image-action-options {
+    display: grid;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.temporal-image-action-option {
+    border: 1px solid var(--border-light);
+    border-radius: 8px;
+    background: var(--matcha-pale);
+    color: var(--text-dark);
+    cursor: pointer;
+    font-weight: 600;
+    padding: 11px 14px;
+    text-align: left;
+}
+
+.temporal-image-action-option.is-selected,
+.temporal-image-action-option:focus-visible {
+    background: var(--matcha-primary);
+    border-color: var(--matcha-dark);
+    color: var(--text-light);
+}
+
+.temporal-image-action-option:disabled {
+    cursor: not-allowed;
+    opacity: 0.5;
+}
+
+.temporal-image-action-hint {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-top: 14px;
+}
+
 .pulse {
     animation: pulse 2s infinite;
 }
@@ -293,6 +332,46 @@ color: var(--matcha-cream);
     background-color: var(--matcha-accent);
 }
 
+.query-kind-switch {
+    display: flex;
+    gap: 3px;
+    justify-content: flex-end;
+    margin-bottom: 5px;
+}
+
+.query-kind-btn {
+    align-items: center;
+    background: rgba(255, 255, 255, 0.65);
+    border: 1px solid var(--matcha-light);
+    border-radius: 6px;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    height: 25px;
+    justify-content: center;
+    padding: 0;
+    width: 29px;
+}
+
+.query-kind-btn.active {
+    background: var(--matcha-primary);
+    border-color: var(--matcha-dark);
+    color: white;
+}
+
+.query-kind-btn svg {
+    height: 14px;
+    width: 14px;
+}
+
+.search-input-group[data-query-kind="image"] .translated-query-display,
+.search-input-group[data-query-kind="image"] .autocorrect-suggestion-display,
+.search-input-group[data-query-kind="image"] .tag-filter-container,
+.search-input-group[data-query-kind="image"] .ocr-filter-container,
+.search-input-group[data-query-kind="image"] .asr-filter-container {
+    display: none !important;
+}
+
 .search-input {
     width: 100%;
     padding: 14px;
@@ -347,7 +426,6 @@ color: var(--matcha-cream);
 /* Image Upload Area */
 .image-upload-area {
     width: 100%;
-    margin-top: 25px;
 }
 
 .upload-zone {
@@ -358,7 +436,7 @@ color: var(--matcha-cream);
     cursor: pointer;
     transition: var(--transition-smooth);
     position: relative;
-    min-height: 140px;
+    min-height: 112px;
     display: flex;
     flex-direction: column;
     align-items: center;
