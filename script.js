@@ -333,8 +333,15 @@ document.addEventListener('DOMContentLoaded', function () {
     let modalCurrentLayout = 'grid'; // 'grid' hoặc 'grouped'
     let modalAllGroupedData = [];
     let modalDisplayedGroupsCount = 0;
+    let modalRenderGeneration = 0;
     const MODAL_GROUPS_PER_BATCH = 10;
     let modalQueryFrame = null;
+    let modalSearchType = 'semantic';
+    let hoveredFrameActionTarget = null;
+    let cirReferenceFrame = null;
+    let cirReference = null;
+    let cirRequestController = null;
+    let cirRequestGeneration = 0;
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
     const translateBtn = document.getElementById('translateBtn');
@@ -452,6 +459,24 @@ document.addEventListener('DOMContentLoaded', function () {
     const semanticSearchModal = document.getElementById('semanticSearchModal');
     const closeSemanticSearchModalBtn = document.getElementById('closeSemanticSearchModalBtn');
     const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
+    const frameSearchModalTitle = document.getElementById('frameSearchModalTitle');
+    const cirSearchForm = document.getElementById('cirSearchForm');
+    const cirReferenceImage = document.getElementById('cirReferenceImage');
+    const cirReferenceFrameInfo = document.getElementById('cirReferenceFrameInfo');
+    const cirEditText = document.getElementById('cirEditText');
+    const cirRemoveText = document.getElementById('cirRemoveText');
+    const cirSearchSubmitBtn = document.getElementById('cirSearchSubmitBtn');
+    const cirSearchMessage = document.getElementById('cirSearchMessage');
+    const cirComposeModal = document.getElementById('cirComposeModal');
+    const closeCirComposeModalBtn = document.getElementById('closeCirComposeModalBtn');
+    const cirComposeForm = document.getElementById('cirComposeForm');
+    const cirComposeReferenceImage = document.getElementById('cirComposeReferenceImage');
+    const cirComposeReferenceFrameInfo = document.getElementById('cirComposeReferenceFrameInfo');
+    const cirComposeEditText = document.getElementById('cirComposeEditText');
+    const cirComposeRemoveText = document.getElementById('cirComposeRemoveText');
+    const cirComposeSubmitBtn = document.getElementById('cirComposeSubmitBtn');
+    const cirComposeCancelBtn = document.getElementById('cirComposeCancelBtn');
+    const cirComposeMessage = document.getElementById('cirComposeMessage');
     const normalSearchPanel = document.getElementById('normalSearchPanel');
     const googleSearchPanel = document.getElementById('googleSearchPanel');
     const googleSearchForm = document.getElementById('googleSearchForm');
@@ -1191,6 +1216,19 @@ document.addEventListener('DOMContentLoaded', function () {
                 semanticSearchModal.querySelector('.modal-overlay').addEventListener('click', closeSemanticSearchModal);
             }
         }
+        cirSearchForm?.addEventListener('submit', handleCirSearchSubmit);
+        cirComposeForm?.addEventListener('submit', handleCirComposeSubmit);
+        closeCirComposeModalBtn?.addEventListener('click', closeCirComposeModal);
+        cirComposeCancelBtn?.addEventListener('click', closeCirComposeModal);
+        cirComposeModal?.querySelector('.modal-overlay')?.addEventListener('click', closeCirComposeModal);
+        [cirEditText, cirRemoveText, cirComposeEditText, cirComposeRemoveText].forEach(input => {
+            input?.addEventListener('keydown', event => {
+                if (event.key === 'Enter' && !event.shiftKey) {
+                    event.preventDefault();
+                    event.currentTarget.closest('form')?.requestSubmit();
+                }
+            });
+        });
 
         googleSearchForm.addEventListener('submit', handleGoogleSearchSubmit);
         saveSerperApiKeyBtn.addEventListener('click', saveSerperApiKey);
@@ -1806,18 +1844,30 @@ document.addEventListener('DOMContentLoaded', function () {
             const neighborController = new AbortController();
             let neighborFrames = [];
             let currentNeighborIndex = -1;
+            let currentQaFrameData = frameData;
             let closed = false;
 
             const displayFrame = (neighborFrame, index = -1) => {
                 currentNeighborIndex = index;
                 if (neighborFrame) {
-                    setFrameImageSource(qaPreviewImage, getFrameUrl(frameData.videoName, neighborFrame.filename));
+                    const neighborPath = getFrameUrl(frameData.videoName, neighborFrame.filename);
+                    setFrameImageSource(qaPreviewImage, neighborPath);
                     const viewedId = `${frameData.videoName}_${neighborFrame.frame_id_ori}`;
+                    currentQaFrameData = {
+                        path: neighborPath,
+                        videoName: frameData.videoName,
+                        frameName: neighborFrame.filename,
+                        frameIdentifier: viewedId,
+                        frame_id_ori: neighborFrame.frame_id_ori,
+                        timestamp: neighborFrame.timestamp,
+                        isFromVideo: false,
+                    };
                     qaViewedFrameInfo.textContent = viewedId === referenceFrameId
                         ? `${viewedId} · reference frame`
                         : `${viewedId} · context only`;
                 } else {
                     setFrameImageSource(qaPreviewImage, frameData.path);
+                    currentQaFrameData = frameData;
                     qaViewedFrameInfo.textContent = `${referenceFrameId} · reference frame`;
                 }
 
@@ -1865,6 +1915,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (event.key === 'Escape') {
                     event.preventDefault();
                     handleClose();
+                } else if (!event.repeat && document.activeElement !== answerInput && event.key.toLowerCase() === 'c') {
+                    event.preventDefault();
+                    openCirSearchModal(currentQaFrameData);
                 } else if (document.activeElement !== answerInput && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
                     event.preventDefault();
                     movePreview(event.key === 'ArrowRight' ? 1 : -1);
@@ -2117,6 +2170,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Cập nhật trạng thái các nút submit sau mỗi lần thay đổi
         updateSubmitButtonStates();
+    });
+    submitQueueContainer.addEventListener('mouseover', event => {
+        const frameItem = event.target.closest('.queue-frame-item');
+        if (!frameItem) return;
+        hoveredFrameActionTarget = submitQueueFrames.get(frameItem.dataset.frameId) || null;
+    });
+    submitQueueContainer.addEventListener('mouseout', event => {
+        const frameItem = event.target.closest('.queue-frame-item');
+        if (!frameItem || frameItem.contains(event.relatedTarget)) return;
+        const frameData = submitQueueFrames.get(frameItem.dataset.frameId);
+        if (hoveredFrameActionTarget === frameData) hoveredFrameActionTarget = null;
     });
 
     // Gán sự kiện cho nút Submit as KIS
@@ -2712,7 +2776,17 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             const originalQueryIndex = sortedQueryIds.findIndex(qid => temporalChain[qid] && temporalChain[qid].metadata.frame_id === frame_id_ori);
             const queryLabel = (frameIdentifier === baseFrame.frameIdentifier) ? 'A (Start)' : `Chain ${String.fromCharCode(65 + originalQueryIndex + 1)}`;
-            return { path, frameIdentifier, queryLabel, score, videoName, timestamp, frame_id_ori };
+            return {
+                path,
+                frameIdentifier,
+                frameName: frame.frameName || frame.filename || getCirFrameName({ path }),
+                milvusId: frame.milvusId ?? frame.id,
+                queryLabel,
+                score,
+                videoName,
+                timestamp,
+                frame_id_ori,
+            };
         }).filter(Boolean);
 
 
@@ -2783,6 +2857,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else {
                     closeModal(() => initiateImageTemporalSearch(currentModalFrameData.path));
                 }
+            } else if (key === 'c' && !e.repeat) {
+                openCirSearchModal(currentModalFrameData);
             }
         };
 
@@ -4666,6 +4742,7 @@ document.addEventListener('DOMContentLoaded', function () {
             currentModalFrameData = {
                 path: framePath,
                 videoName: videoId,
+                frameName: frameDataToDisplay.filename,
                 timestamp: frameDataToDisplay.timestamp,
                 frameIdentifier: `${videoId}_${frameDataToDisplay.frame_id_ori}`,
                 frame_id_ori: frameDataToDisplay.frame_id_ori,
@@ -4882,6 +4959,8 @@ document.addEventListener('DOMContentLoaded', function () {
                         openSemanticSearchModal(frameDataForSearch);
                     }
                 }, 100);
+            } else if (key === 'c' && !e.repeat) {
+                openCirSearchModal(currentModalFrameData);
             }
         };
 
@@ -5521,6 +5600,21 @@ document.addEventListener('DOMContentLoaded', function () {
             button.dataset.filename = frame.filename;
             button.dataset.label = `${state.videoName} frame ${frame.frame_id_ori}`;
             button.title = `${state.videoName} · frame ${frame.frame_id_ori} · ${formatVideoKeyframeTime(frame.timestamp)}`;
+            const frameData = {
+                path: getFrameUrl(state.videoName, frame.filename),
+                videoName: state.videoName,
+                frameName: frame.filename,
+                frameIdentifier: `${state.videoName}_${frame.frame_id_ori}`,
+                frame_id_ori: frame.frame_id_ori,
+                timestamp: frame.timestamp,
+                isFromVideo: false,
+            };
+            button.addEventListener('mouseenter', () => {
+                hoveredFrameActionTarget = frameData;
+            });
+            button.addEventListener('mouseleave', () => {
+                if (hoveredFrameActionTarget === frameData) hoveredFrameActionTarget = null;
+            });
             const placeholder = document.createElement('span');
             placeholder.className = 'video-keyframe-placeholder';
             placeholder.textContent = 'Loading frame...';
@@ -5936,6 +6030,23 @@ document.addEventListener('DOMContentLoaded', function () {
                         closeTranscriptPanel();
                     }
                 }
+                return;
+            }
+
+            if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
+                const activeFrame = state?.frames?.[state.activeIndex];
+                const frameToSearch = hoveredFrameActionTarget || (activeFrame ? {
+                    path: getFrameUrl(state.videoName, activeFrame.filename),
+                    videoName: state.videoName,
+                    frameName: activeFrame.filename,
+                    frameIdentifier: `${state.videoName}_${activeFrame.frame_id_ori}`,
+                    frame_id_ori: activeFrame.frame_id_ori,
+                    timestamp: activeFrame.timestamp,
+                    isFromVideo: false,
+                } : null);
+                e.preventDefault();
+                if (frameToSearch) openCirSearchModal(frameToSearch);
+                else showToastNotification('No database keyframe is available for CIR.', 'info');
                 return;
             }
 
@@ -6569,6 +6680,38 @@ document.addEventListener('DOMContentLoaded', function () {
                         showToastNotification("No temporal chain available for this frame.", "info");
                     }
                 }
+            }
+
+            if ((e.key === 'c' || e.key === 'C') && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                const activeElement = document.activeElement;
+                const isTyping = activeElement.tagName === 'INPUT'
+                    || activeElement.tagName === 'TEXTAREA'
+                    || activeElement.isContentEditable;
+                const hasHoveredFrame = Boolean(
+                    hoveredFrameActionTarget
+                    || currentlyTargetedTrakeFrameData
+                    || currentlyHoveredPreviewFrameData
+                    || currentlyHoveredFormQueueFrameData
+                    || hoveredGoogleImage
+                );
+                if (e.repeat || (isTyping && !hasHoveredFrame)) return;
+
+                e.preventDefault();
+                if (hoveredGoogleImage) {
+                    showToastNotification('Google images are not indexed in the database and cannot use CIR.', 'info');
+                    return;
+                }
+                const frameToSearch = resolveFrameActionTarget();
+                if (frameToSearch) {
+                    openCirSearchModal(frameToSearch);
+                    if (keyframePreviewBar.classList.contains('visible')) {
+                        keyframePreviewBar.classList.remove('visible');
+                        header.classList.remove('header-expanded');
+                    }
+                } else {
+                    showToastNotification('Hover or select one database frame to use CIR.', 'info');
+                }
+                return;
             }
 
             if ((e.key === 's' || e.key === 'S') && !e.ctrlKey && !e.metaKey) {
@@ -8132,17 +8275,255 @@ document.addEventListener('DOMContentLoaded', function () {
         startGoogleAiSummary(query, data);
     }
 
+    function getCirFrameFileName(frameData) {
+        const explicitName = frameData?.frameName || frameData?.filename;
+        if (explicitName) return String(explicitName).split('?')[0];
+
+        const frameSpecify = String(frameData?.frame_specify || '');
+        if (frameSpecify.includes('/')) return frameSpecify.split('/').pop();
+
+        const path = String(frameData?.path || '').split('?')[0];
+        if (!path || path.startsWith('data:') || path.startsWith('blob:')) return '';
+        const segments = path.split('/');
+        return decodeURIComponent(segments[segments.length - 1] || '');
+    }
+
+    function getCirFrameName(frameData) {
+        // Milvus stores keyframe identities without the on-disk image extension.
+        return getCirFrameFileName(frameData).replace(/\.(?:webp|jpe?g|png)$/i, '');
+    }
+
+    function resolveCirFrame(frameData) {
+        if (!frameData || frameData.isFromVideo) return null;
+
+        const milvusId = Number(frameData.milvusId);
+        const hasMilvusId = Number.isInteger(milvusId) && milvusId >= 0;
+        const videoName = String(frameData.videoName || frameData.video_name || '').trim();
+        const frameFileName = getCirFrameFileName(frameData);
+        const frameName = getCirFrameName(frameData);
+        if (!hasMilvusId && (!videoName || !frameName)) return null;
+
+        return {
+            frame: {
+                ...frameData,
+                milvusId: hasMilvusId ? milvusId : frameData.milvusId,
+                videoName,
+                frameName,
+                frameIdentifier: frameData.frameIdentifier
+                    || `${videoName}_${frameData.frame_id_ori ?? frameName}`,
+                // Keep the physical filename for image loading while using the
+                // extensionless name above as the Milvus CIR reference.
+                path: frameData.path || getFrameUrl(videoName, frameFileName),
+            },
+            // Search results can originate from another model collection (notably
+            // multi-model and temporal search). Resolve by frame identity so CIR
+            // looks up the reference in its own configured collection.
+            reference: { video_name: videoName, frame_name: frameName },
+        };
+    }
+
+    function resolveFrameActionTarget() {
+        if (hoveredFrameActionTarget) return hoveredFrameActionTarget;
+        if (currentlyTargetedTrakeFrameData) return currentlyTargetedTrakeFrameData;
+        if (currentlyHoveredPreviewFrameData) return currentlyHoveredPreviewFrameData;
+        if (currentlyHoveredFormQueueFrameData) return currentlyHoveredFormQueueFrameData;
+        if (frameSelectionManager.getSelectionCount() === 1) {
+            return frameSelectionManager.getAllSelectedFrames()[0].data;
+        }
+        if (selectedQueueFrameIds.size === 1) {
+            return submitQueueFrames.get(Array.from(selectedQueueFrameIds)[0]);
+        }
+        return null;
+    }
+
+    function setCirLoading(loading) {
+        [cirEditText, cirRemoveText, cirSearchSubmitBtn, cirComposeEditText, cirComposeRemoveText, cirComposeSubmitBtn]
+            .forEach(element => { if (element) element.disabled = loading; });
+        [cirSearchSubmitBtn, cirComposeSubmitBtn].forEach(button => {
+            if (!button) return;
+            const label = button.querySelector('span');
+            if (label) label.textContent = loading ? 'Searching...' : 'Search';
+            button.querySelector('i')?.classList.toggle('fa-spin', loading);
+        });
+    }
+
+    function ensureFrameSearchModalOpen() {
+        if (semanticSearchModal.style.display !== 'flex') {
+            registerModalOpen(semanticSearchModal, closeSemanticSearchModal);
+            semanticSearchModal.style.display = 'flex';
+        }
+        document.addEventListener('keydown', handleModalKeyDown);
+    }
+
+    function openCirSearchModal(frameData) {
+        const resolved = resolveCirFrame(frameData);
+        if (!resolved) {
+            showToastNotification('Frame này chưa được index trong database nên không thể dùng cho CIR.', 'info');
+            return;
+        }
+
+        cirRequestController?.abort();
+        cirRequestController = null;
+        cirRequestGeneration++;
+        cirReferenceFrame = resolved.frame;
+        cirReference = resolved.reference;
+        modalQueryFrame = resolved.frame;
+        modalSearchType = 'cir';
+        modalCurrentLayout = 'grid';
+        updateModalLayoutButton();
+        modalFrameSelectionManager.clearAllSelections();
+
+        cirComposeEditText.value = '';
+        cirComposeRemoveText.value = '';
+        cirComposeMessage.textContent = '';
+        cirComposeReferenceFrameInfo.textContent = resolved.frame.frameIdentifier;
+        setFrameImageSource(cirComposeReferenceImage, resolved.frame.path);
+        setCirLoading(false);
+
+        if (cirComposeModal.style.display !== 'flex') {
+            registerModalOpen(cirComposeModal, closeCirComposeModal);
+            cirComposeModal.style.display = 'flex';
+        }
+        // mini-modal remains transparent and non-interactive until it is visible.
+        cirComposeModal.classList.add('visible');
+        setTimeout(() => cirComposeEditText.focus(), 0);
+    }
+
+    function closeCirComposeModal() {
+        if (cirComposeModal.style.display !== 'flex' && !cirComposeModal.classList.contains('visible')) return;
+        cirComposeModal.classList.remove('visible');
+        cirComposeModal.style.display = 'none';
+        registerModalClose(cirComposeModal);
+    }
+
+    function handleCirComposeSubmit(event) {
+        event.preventDefault();
+        const editText = cirComposeEditText.value.trim();
+        const removeText = cirComposeRemoveText.value.trim();
+        if (!editText && !removeText) {
+            cirComposeMessage.textContent = 'Enter an Edit or Remove concept before searching.';
+            cirComposeEditText.focus();
+            return;
+        }
+
+        cirEditText.value = editText;
+        cirRemoveText.value = removeText;
+        cirSearchMessage.textContent = '';
+        cirReferenceFrameInfo.textContent = cirReferenceFrame.frameIdentifier;
+        setFrameImageSource(cirReferenceImage, cirReferenceFrame.path);
+        closeCirComposeModal();
+
+        modalSearchType = 'cir';
+        modalCurrentLayout = 'grid';
+        updateModalLayoutButton();
+        frameSearchModalTitle.textContent = 'CIR Search Results';
+        cirSearchForm.hidden = false;
+        semanticSearchModal.classList.remove('cir-compose-only');
+        semanticSearchModal.classList.add('cir-results-active');
+        ensureFrameSearchModalOpen();
+        cirSearchForm.requestSubmit();
+    }
+
+    async function handleCirSearchSubmit(event) {
+        event.preventDefault();
+        if (!cirReference || !cirReferenceFrame || cirSearchSubmitBtn.disabled) return;
+
+        const editText = cirEditText.value.trim();
+        const removeText = cirRemoveText.value.trim();
+        if (!editText && !removeText) {
+            cirSearchMessage.textContent = 'Enter an Edit or Remove concept before searching.';
+            cirEditText.focus();
+            return;
+        }
+
+        const generation = ++cirRequestGeneration;
+        cirRequestController?.abort();
+        cirRequestController = new AbortController();
+        cirSearchMessage.textContent = '';
+        setCirLoading(true);
+        modalRenderGeneration++;
+        modalObserver?.disconnect();
+        modalObserver = null;
+        isModalLoading = false;
+        semanticSearchModal.classList.remove('cir-compose-only');
+        frameSearchModalTitle.textContent = 'CIR Search Results';
+        semanticSearchResultsContainer.className = '';
+        semanticSearchResultsContainer.innerHTML = `
+            <div class="loading-indicator">
+                <div class="loading-spinner"></div>
+                <p>Searching with CIR...</p>
+            </div>`;
+
+        try {
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/cir`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    reference: cirReference,
+                    edit_text: editText || null,
+                    remove_text: removeText || null,
+                    top_k: 120,
+                    cluster_mode_enabled: clusterModeEnabled,
+                }),
+                signal: cirRequestController.signal,
+            });
+            const responseText = await response.text();
+            let payload = null;
+            try {
+                payload = responseText ? JSON.parse(responseText) : null;
+            } catch (_) {
+                // The status and response excerpt below provide the useful error.
+            }
+            if (!response.ok) {
+                const detail = payload?.detail;
+                const message = typeof detail === 'string'
+                    ? detail
+                    : detail?.message || `CIR search failed (${response.status}).`;
+                throw new Error(message);
+            }
+            if (!Array.isArray(payload)) {
+                throw new Error('CIR returned an invalid result payload.');
+            }
+            if (generation !== cirRequestGeneration) return;
+            renderResultsInModal(cirReferenceFrame, payload, { showQueryFrame: false });
+        } catch (error) {
+            if (error.name === 'AbortError' || generation !== cirRequestGeneration) return;
+            console.error('CIR search failed:', error);
+            semanticSearchResultsContainer.className = '';
+            semanticSearchResultsContainer.innerHTML = `
+                <div class="content-placeholder">
+                    <h2>CIR search failed</h2>
+                    <p>Unable to retrieve CIR results. Please try again.</p>
+                </div>`;
+            cirSearchMessage.textContent = error.message || 'Search failed. Edit the request or try again.';
+        } finally {
+            if (generation === cirRequestGeneration) {
+                cirRequestController = null;
+                setCirLoading(false);
+            }
+        }
+    }
+
     async function openSemanticSearchModal(queryFrameData) {
         if (!queryFrameData || !queryFrameData.path) {
             showToastNotification("Dữ liệu frame không hợp lệ.", "error");
             return;
         }
+        cirRequestController?.abort();
+        cirRequestController = null;
+        cirRequestGeneration++;
+        cirReferenceFrame = null;
+        cirReference = null;
         modalQueryFrame = queryFrameData;
+        modalSearchType = 'semantic';
         modalCurrentLayout = 'grid'; // Luôn reset về layout grid
         updateModalLayoutButton(); // Cập nhật icon cho đúng
-        registerModalOpen(semanticSearchModal, closeSemanticSearchModal);
+        frameSearchModalTitle.textContent = 'Semantic Search Results';
+        cirSearchForm.hidden = true;
+        semanticSearchModal.classList.remove('cir-results-active');
+        semanticSearchModal.classList.remove('cir-compose-only');
+        ensureFrameSearchModalOpen();
         // 1. Hiển thị Modal với trạng thái loading
-        semanticSearchModal.style.display = 'flex';
         semanticSearchResultsContainer.innerHTML = `
             <div class="loading-indicator">
                 <div class="loading-spinner"></div>
@@ -8154,7 +8535,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const results = await initiateImageTemporalSearch(queryFrameData.path);
             // Render after the request completes; status classes are applied from shared live state.
             renderResultsInModal(queryFrameData, results);
-            document.addEventListener('keydown', handleModalKeyDown);
         } catch (error) {
             // 4. Xử lý lỗi nếu API thất bại
             semanticSearchResultsContainer.innerHTML = `
@@ -8169,7 +8549,21 @@ document.addEventListener('DOMContentLoaded', function () {
      * Đóng và dọn dẹp modal semantic search
      */
     function closeSemanticSearchModal() {
+        cirRequestController?.abort();
+        cirRequestController = null;
+        cirRequestGeneration++;
+        cirReferenceFrame = null;
+        cirReference = null;
+        modalSearchType = 'semantic';
+        hoveredFrameActionTarget = null;
+        modalRenderGeneration++;
         semanticSearchModal.style.display = 'none';
+        closeCirComposeModal();
+        semanticSearchModal.classList.remove('cir-results-active');
+        semanticSearchModal.classList.remove('cir-compose-only');
+        cirSearchForm.hidden = true;
+        cirSearchMessage.textContent = '';
+        setCirLoading(false);
         semanticSearchResultsContainer.innerHTML = ''; // Chỉ cần dòng này là đủ
 
         if (modalObserver) {
@@ -8191,6 +8585,36 @@ document.addEventListener('DOMContentLoaded', function () {
             return; // A child modal, such as cluster confirmation, owns the keyboard.
         }
 
+        if (e.repeat && e.key.toLowerCase() === 'c') return;
+
+        const activeElement = document.activeElement;
+        const isTyping = activeElement.tagName === 'INPUT'
+            || activeElement.tagName === 'TEXTAREA'
+            || activeElement.isContentEditable;
+
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            if (!isTyping && modalFrameSelectionManager.getSelectionCount() > 0) {
+                modalFrameSelectionManager.clearAllSelections();
+            } else {
+                closeSemanticSearchModal();
+            }
+            return;
+        }
+
+        if (isTyping) {
+            if (e.key.toLowerCase() === 'c' && hoveredFrameActionTarget) {
+                e.preventDefault();
+                openCirSearchModal(hoveredFrameActionTarget);
+                return;
+            }
+            if (modalSearchType === 'cir' && e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                cirSearchForm.requestSubmit();
+            }
+            return;
+        }
+
         if (e.key === 'Tab') {
             e.preventDefault(); // Ngăn hành vi mặc định (chuyển focus)
             e.stopPropagation(); // << RẤT QUAN TRỌNG: Ngăn sự kiện lan ra các trình xử lý khác
@@ -8201,8 +8625,18 @@ document.addEventListener('DOMContentLoaded', function () {
 
         const selectedFramesData = modalFrameSelectionManager.getAllSelectedFrames().map(f => f.data);
         const selectedCount = selectedFramesData.length;
-        const activeElement = document.activeElement;
-        const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA' || activeElement.isContentEditable;
+
+        if (e.key.toLowerCase() === 'c') {
+            const frameToSearch = hoveredFrameActionTarget || (selectedCount === 1 ? selectedFramesData[0] : null);
+            if (frameToSearch) {
+                e.preventDefault();
+                e.stopPropagation();
+                openCirSearchModal(frameToSearch);
+            } else {
+                showToastNotification('Hover or select one database frame to use CIR.', 'info');
+            }
+            return;
+        }
 
         if (e.key.toLowerCase() === 'v') {
             if (!isTyping && selectedCount === 1) {
@@ -8263,22 +8697,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             }
         }
-        // Phím Escape: Bỏ chọn hoặc đóng modal
-        else if (e.key === 'Escape') {
-            e.preventDefault();
-            if (selectedCount > 0) {
-                modalFrameSelectionManager.clearAllSelections();
-            } else {
-                closeSemanticSearchModal();
-            }
-        }
     }
 
-    function renderResultsInModal(queryFrame, results) {
+    function renderResultsInModal(queryFrame, results, options = {}) {
+        const showQueryFrame = options.showQueryFrame !== false;
+        modalRenderGeneration++;
+        hoveredFrameActionTarget = null;
         // 1. Reset trạng thái
-        if (results) {
-            modalAllImages = results.filter(img => img.frameIdentifier !== queryFrame.frameIdentifier);
-        }
+        modalAllImages = Array.isArray(results)
+            ? results.filter(img => img.frameIdentifier !== queryFrame.frameIdentifier)
+            : [];
         modalDisplayedImagesCount = 0;
         modalDisplayedGroupsCount = 0;
         isModalLoading = false;
@@ -8293,16 +8721,17 @@ document.addEventListener('DOMContentLoaded', function () {
         // 3. Xử lý trường hợp không có kết quả
         if (modalAllImages.length === 0) {
             semanticSearchResultsContainer.className = ''; // Reset class
-            const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
-            queryFrameElement.classList.add('query-frame');
-
             const emptyStateWrapper = document.createElement('div');
             emptyStateWrapper.className = 'video-group-row';
-            emptyStateWrapper.innerHTML = `<h4 class="video-group-title">Frame Nguồn (Không tìm thấy kết quả nào khác)</h4>`;
-            const frameStrip = document.createElement('div');
-            frameStrip.className = 'frame-strip';
-            frameStrip.appendChild(queryFrameElement);
-            emptyStateWrapper.appendChild(frameStrip);
+            emptyStateWrapper.innerHTML = `<h4 class="video-group-title">No results found</h4>`;
+            if (showQueryFrame) {
+                const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
+                queryFrameElement.classList.add('query-frame');
+                const frameStrip = document.createElement('div');
+                frameStrip.className = 'frame-strip';
+                frameStrip.appendChild(queryFrameElement);
+                emptyStateWrapper.appendChild(frameStrip);
+            }
             semanticSearchResultsContainer.appendChild(emptyStateWrapper);
             return;
         }
@@ -8324,9 +8753,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 semanticSearchResultsContainer.appendChild(column);
             }
 
-            const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
-            queryFrameElement.classList.add('query-frame');
-            semanticSearchResultsContainer.querySelector('.masonry-column').appendChild(queryFrameElement);
+            if (showQueryFrame) {
+                const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
+                queryFrameElement.classList.add('query-frame');
+                semanticSearchResultsContainer.querySelector('.masonry-column').appendChild(queryFrameElement);
+            }
 
             semanticSearchResultsContainer.appendChild(loadingMore);
             loadMoreModalImages();
@@ -8334,16 +8765,18 @@ document.addEventListener('DOMContentLoaded', function () {
             semanticSearchResultsContainer.className = 'grouped-layout';
             modalAllGroupedData = groupResultsByVideo(modalAllImages);
 
-            const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
-            queryFrameElement.classList.add('query-frame');
-            const queryFrameWrapper = document.createElement('div');
-            queryFrameWrapper.className = 'video-group-row';
-            queryFrameWrapper.innerHTML = '<h4 class="video-group-title">Frame Nguồn</h4>';
-            const frameStrip = document.createElement('div');
-            frameStrip.className = 'frame-strip';
-            frameStrip.appendChild(queryFrameElement);
-            queryFrameWrapper.appendChild(frameStrip);
-            semanticSearchResultsContainer.appendChild(queryFrameWrapper);
+            if (showQueryFrame) {
+                const queryFrameElement = createImageItemElement(queryFrame, modalFrameSelectionManager);
+                queryFrameElement.classList.add('query-frame');
+                const queryFrameWrapper = document.createElement('div');
+                queryFrameWrapper.className = 'video-group-row';
+                queryFrameWrapper.innerHTML = '<h4 class="video-group-title">Frame Nguồn</h4>';
+                const frameStrip = document.createElement('div');
+                frameStrip.className = 'frame-strip';
+                frameStrip.appendChild(queryFrameElement);
+                queryFrameWrapper.appendChild(frameStrip);
+                semanticSearchResultsContainer.appendChild(queryFrameWrapper);
+            }
 
             semanticSearchResultsContainer.appendChild(loadingMore);
             loadMoreModalGroups();
@@ -8355,6 +8788,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function loadMoreModalImages() {
         if (isModalLoading || modalHasReachedEnd) return;
 
+        const renderGeneration = modalRenderGeneration;
         isModalLoading = true;
         const loadingMore = document.getElementById('modalLoadingMore');
 
@@ -8368,6 +8802,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         setTimeout(() => {
+            if (renderGeneration !== modalRenderGeneration) return;
             for (let i = startIndex; i < endIndex; i++) {
                 const image = modalAllImages[i];
                 const imageItem = createImageItemElement(image, modalFrameSelectionManager);
@@ -8400,9 +8835,11 @@ document.addEventListener('DOMContentLoaded', function () {
     function setupModalInfiniteScroll() {
         const loadingMore = document.getElementById('modalLoadingMore');
         if (!loadingMore) return;
+        const renderGeneration = modalRenderGeneration;
 
         // Hàm callback sẽ được gọi mỗi khi loader thay đổi trạng thái "trong tầm nhìn"
         const observerCallback = (entries) => {
+            if (renderGeneration !== modalRenderGeneration) return;
             // Lấy entry duy nhất cho loader
             const entry = entries[0];
 
@@ -8434,6 +8871,7 @@ document.addEventListener('DOMContentLoaded', function () {
         // Sau khi thiết lập, ngay lập tức kiểm tra xem loader có đang trong tầm nhìn không.
         // Điều này sẽ xử lý trường hợp nội dung ban đầu quá thấp.
         setTimeout(() => {
+            if (renderGeneration !== modalRenderGeneration || !loadingMore.isConnected) return;
             const isVisible = (loadingMore.getBoundingClientRect().top <= semanticSearchResultsContainer.getBoundingClientRect().bottom);
             if (isVisible && !modalHasReachedEnd) {
                 if (modalCurrentLayout === 'grid') {
@@ -8811,6 +9249,12 @@ document.addEventListener('DOMContentLoaded', function () {
         imageItem.setAttribute('data-frame-id', uniqueFrameId);
         imageItem.setAttribute('data-frame-identifier', image.frameIdentifier);
         imageItem.draggable = true;
+        imageItem.addEventListener('mouseenter', () => {
+            hoveredFrameActionTarget = image;
+        });
+        imageItem.addEventListener('mouseleave', () => {
+            if (hoveredFrameActionTarget === image) hoveredFrameActionTarget = null;
+        });
         imageItem.addEventListener('dragstart', event => {
             const transferableFrame = {
                 path: image.path,
@@ -9849,7 +10293,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (modalQueryFrame) {
             // Render lại toàn bộ kết quả với layout mới
             // `modalAllImages` vẫn được lưu từ lần tải đầu tiên
-            renderResultsInModal(modalQueryFrame, modalAllImages);
+            renderResultsInModal(modalQueryFrame, modalAllImages, {
+                showQueryFrame: modalSearchType !== 'cir',
+            });
         }
     }
 
@@ -9874,6 +10320,7 @@ document.addEventListener('DOMContentLoaded', function () {
      */
     function loadMoreModalGroups() {
         if (isModalLoading || modalHasReachedEnd) return;
+        const renderGeneration = modalRenderGeneration;
         isModalLoading = true;
 
         const loadingMore = document.getElementById('modalLoadingMore');
@@ -9882,6 +10329,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Dùng setTimeout để tránh UI bị "khựng" khi render nhiều
         setTimeout(() => {
+            if (renderGeneration !== modalRenderGeneration) return;
             for (let i = startIndex; i < endIndex; i++) {
                 const group = modalAllGroupedData[i];
                 const groupRow = document.createElement('div');
