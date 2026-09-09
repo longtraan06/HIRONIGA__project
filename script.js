@@ -1269,6 +1269,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         setupKeyboardNavigation();
+        setupSearchTypingAutofocus();
         connectWebSocket();
 
         // Prevent right-click context menu
@@ -3022,6 +3023,79 @@ document.addEventListener('DOMContentLoaded', function () {
                 btn.classList.remove('header-btn-hover');
             });
         });
+    }
+
+    function isKeyboardInputTarget(element = document.activeElement) {
+        return Boolean(element) && (
+            element.tagName === 'INPUT'
+            || element.tagName === 'TEXTAREA'
+            || element.tagName === 'SELECT'
+            || element.isContentEditable
+        );
+    }
+
+    function hasSelectedFrameTarget() {
+        return frameSelectionManager.getSelectionCount() > 0 || selectedQueueFrameIds.size > 0;
+    }
+
+    function hasHoveredFrameTarget() {
+        // Main search results do not block typing; their selected state does.
+        // Other frame surfaces retain hover-driven keyboard shortcuts.
+        const isHoveringMainSearchResult = Boolean(document.querySelector('.main-content .image-item:hover'));
+        return Boolean(
+            (hoveredFrameActionTarget && !isHoveringMainSearchResult)
+            || currentlyHoveredPreviewFrameData
+            || currentlyHoveredFormQueueFrameData
+            || currentlyTargetedTrakeFrameData
+            || hoveredGoogleImage
+        );
+    }
+
+    function hasFocusedFrameTarget() {
+        return Boolean(document.activeElement?.closest?.(
+            '.image-item, .queue-frame-item, .video-keyframe-item'
+        ));
+    }
+
+    function getVisibleSearchInput() {
+        return Array.from(searchInputsContainer.querySelectorAll('.search-input')).reverse().find(input => (
+            input.offsetParent !== null && !input.disabled && !input.readOnly
+        ));
+    }
+
+    function setupSearchTypingAutofocus() {
+        document.addEventListener('keydown', event => {
+            const isTextEntry = event.key.length === 1
+                && !event.ctrlKey
+                && !event.metaKey
+                && !event.altKey
+                && !event.isComposing
+                && !event.repeat;
+            if (
+                !isTextEntry
+                || isGoogleSearchMode
+                || normalSearchPanel.hidden
+                || isModalKeyboardActive()
+                || settingsMenu.classList.contains('visible')
+            ) {
+                return;
+            }
+
+            const activeElement = document.activeElement;
+            if (
+                isKeyboardInputTarget(activeElement)
+                || (activeElement !== document.body && activeElement !== document.documentElement)
+                || hasSelectedFrameTarget()
+                || hasHoveredFrameTarget()
+                || hasFocusedFrameTarget()
+            ) {
+                return;
+            }
+
+            // Capture phase gives the search field first access to ordinary text
+            // keys before the global frame shortcut handlers run.
+            getVisibleSearchInput()?.focus();
+        }, true);
     }
 
 
@@ -6614,6 +6688,12 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
             if (isModalKeyboardActive()) {
+                return;
+            }
+
+            // Text entry always wins over frame shortcuts, even if a frame is
+            // selected or the pointer later moves over one while typing.
+            if (isKeyboardInputTarget()) {
                 return;
             }
 
