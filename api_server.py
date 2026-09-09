@@ -4,7 +4,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import Any, Dict, List, Literal, Optional
 import sys
 import os
@@ -100,6 +100,9 @@ class DatabaseServiceClient:
         payload = await self._request_json("GET", "/v1/models")
         models = payload.get("models")
         return models if isinstance(models, list) and models else [DEFAULT_DATABASE_MODEL]
+
+    async def cir_search(self, request: dict) -> dict:
+        return await self._request_json("POST", "/v1/search/cir", json=request)
 
     @staticmethod
     def _image_bytes(query: Any) -> bytes:
@@ -1035,6 +1038,21 @@ class TextToTextRequest(BaseModel):
     cluster_mode_enabled: bool = True
 
 
+class CIRReferenceRequest(BaseModel):
+    id: Optional[int] = None
+    video_name: Optional[str] = Field(default=None, max_length=255)
+    frame_name: Optional[str] = Field(default=None, max_length=255)
+
+
+class CIRSearchRequest(BaseModel):
+    reference: CIRReferenceRequest
+    edit_text: Optional[str] = Field(default=None, max_length=2000)
+    remove_text: Optional[str] = Field(default=None, max_length=2000)
+    top_k: int = Field(default=60, ge=1, le=1000)
+    edit_strength: float = Field(default=0.95, ge=-3.0, le=5.0)
+    cluster_mode_enabled: bool = True
+
+
 class ClusterFrameRequest(BaseModel):
     frame_specify: str
 
@@ -1369,6 +1387,58 @@ async def search_image(
         cluster_mode_enabled=cluster_mode_enabled,
     )
 
+    return process_milvus_results_for_frontend(results)
+
+
+@app.post("/api/search/cir")
+async def search_cir(req: CIRSearchRequest):
+    edit_text = (req.edit_text or "").strip()
+    remove_text = (req.remove_text or "").strip()
+    if not edit_text and not remove_text:
+        raise HTTPException(status_code=422, detail="Provide edit_text, remove_text, or both.")
+
+    video_name = (req.reference.video_name or "").strip()
+    frame_name = (req.reference.frame_name or "").strip()
+    has_id = req.reference.id is not None
+    has_named_frame = bool(video_name and frame_name)
+    has_any_named_field = bool(video_name or frame_name)
+    if (has_id and has_any_named_field) or (not has_id and not has_named_frame):
+        raise HTTPException(
+            status_code=422,
+            detail="Reference must contain either id or video_name with frame_name.",
+        )
+
+    reference = {"id": req.reference.id} if has_id else {
+        "video_name": video_name,
+        "frame_name": frame_name,
+    }
+    excluded_cluster_ids = get_search_cluster_filter(req.cluster_mode_enabled)
+    payload = {
+        "reference": reference,
+        "composition_mode": "directional",
+        "top_k": req.top_k,
+        "edit_strength": req.edit_strength,
+        "filters": {"exclude_cluster_ids": excluded_cluster_ids},
+    }
+    if edit_text:
+        payload["edit_text"] = edit_text
+    if remove_text:
+        payload["remove_text"] = remove_text
+
+    log_search_debug(
+        "cir",
+        reference=reference,
+        operation="replace" if edit_text and remove_text else "add" if edit_text else "remove",
+        top_k=req.top_k,
+        edit_strength=req.edit_strength,
+        cluster_mode_enabled=req.cluster_mode_enabled,
+        cluster_filter_count=len(excluded_cluster_ids),
+    )
+    response = await milvus.cir_search(payload)
+    raw_results = response.get("results")
+    if not isinstance(raw_results, list):
+        raise DatabaseServiceError("CIR returned an invalid results payload.", 502)
+    results = milvus._format_hits(raw_results)
     return process_milvus_results_for_frontend(results)
 
 
@@ -1994,15 +2064,14 @@ def process_milvus_results_for_frontend(results: list) -> list:
     processed_list = []
     start = time.time()
     for res in results:
-        metadata = res.get("metadata", {})
-        frame_name = metadata.get("frame_name", "unknown_frame")
-        try:
-            video_name = metadata.get("video_name")
-        except:
-            raise HTTPException(
-                status_code=500,
-                detail="Metadata missing 'video_name' field"
-            )
+        metadata = res.get("metadata") or {}
+        frame_name = metadata.get("frame_name") or res.get("frame_name", "unknown_frame")
+        video_name = metadata.get("video_name") or res.get("video_name")
+        frame_specify = metadata.get("frame_specify") or res.get("frame_specify", "")
+        if not video_name and "/" in frame_specify:
+            video_name = frame_specify.split("/", 1)[0]
+        if not video_name:
+            continue
 
         # THAY ĐỔI: Đường dẫn mới cho frames
         full_frame_name = frame_name if frame_name.endswith('.webp') else f"{frame_name}.webp"
@@ -2014,20 +2083,22 @@ def process_milvus_results_for_frontend(results: list) -> list:
         match = re.search(r'_(\d+)', frame_name)
         frame_id = int(match.group(1)) if match else 0
         temporal_chain_data = res.get("temporal_chain", {})
-        frame_id_ori = metadata.get("frame_id", 0)  # Lấy frame_id từ metadata, mặc định là 0 nếu không có
+        frame_id_ori = metadata.get("frame_id", res.get("frame_id", 0))
         frame_identifier = f"{video_name}_{frame_id_ori}"
         fps_value = metadata.get("fps", 1)
         score = res.get("score", res.get("temporal_score", res.get("original_score", res.get("sim_score", 0))))
         processed_list.append({
+            "milvusId": res.get("id"),
             "frame_id_ori": frame_id_ori,  # Thêm frame_id_ori
+            "frameName": frame_name,
             "path": path,  # Đường dẫn mới
             "videoName": video_name,
-            "timestamp": metadata.get("timestamp", "00:00.000"),
+            "timestamp": metadata.get("timestamp", res.get("timestamp", "00:00.000")),
             "score": score,
             "temporal_score": res.get("temporal_score"),
             "frameIdentifier": frame_identifier,
-            "frame_specify": metadata.get("frame_specify", f"{video_name}/{frame_name}"),
-            "cluster_id": res.get("cluster_id", ""),
+            "frame_specify": frame_specify or f"{video_name}/{frame_name}",
+            "cluster_id": res.get("cluster_id", metadata.get("cluster_id", "")),
             "has_temporal_chain": True if temporal_chain_data and len(temporal_chain_data) > 0 else False
         })
     end = time.time()
