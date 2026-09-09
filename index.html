@@ -483,6 +483,10 @@
                     <span class="shortcut-key">S</span>
                 </div>
                 <div class="shortcut-item">
+                    <span class="shortcut-description">CIR Search</span>
+                    <span class="shortcut-key">C</span>
+                </div>
+                <div class="shortcut-item">
                     <span class="shortcut-description">Submit Queue</span>
                     <span class="shortcut-key">D</span>
                 </div>
@@ -693,11 +697,45 @@
         </div>
     </div>
 
-    <div id="semanticSearchModal" class="image-modal" style="display: none;">
+    <div id="cirComposeModal" class="mini-modal cir-compose-modal" style="display: none;" role="dialog" aria-modal="true"
+        aria-labelledby="cirComposeTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-content">
+            <button id="closeCirComposeModalBtn" class="close-btn" type="button" aria-label="Close CIR search">×</button>
+            <div class="cir-compose-preview">
+                <img id="cirComposeReferenceImage" src="" alt="CIR reference frame">
+                <strong id="cirComposeReferenceFrameInfo"></strong>
+            </div>
+            <form id="cirComposeForm" class="cir-compose-form" aria-label="CIR search controls">
+                <h3 id="cirComposeTitle">Composed Image Retrieval</h3>
+                <p>Describe what to add or remove</p>
+                <label class="cir-query-field" for="cirComposeEditText">
+                    <span>Edit / add concept</span>
+                    <textarea id="cirComposeEditText" rows="3" maxlength="2000"
+                        placeholder="What should appear in the result?"></textarea>
+                </label>
+                <label class="cir-query-field" for="cirComposeRemoveText">
+                    <span>Remove concept</span>
+                    <textarea id="cirComposeRemoveText" rows="3" maxlength="2000"
+                        placeholder="What should be absent from the result?"></textarea>
+                </label>
+                <div class="cir-compose-actions">
+                    <button id="cirComposeCancelBtn" class="queue-action-btn cancel-btn" type="button">Cancel</button>
+                    <button id="cirComposeSubmitBtn" class="cir-search-submit" type="submit">
+                        <i class="fas fa-search"></i><span>Search</span>
+                    </button>
+                </div>
+                <p id="cirComposeMessage" class="cir-search-message" aria-live="polite"></p>
+            </form>
+        </div>
+    </div>
+
+    <div id="semanticSearchModal" class="image-modal" style="display: none;" role="dialog" aria-modal="true"
+        aria-labelledby="frameSearchModalTitle">
         <div class="modal-overlay"></div>
         <div class="modal-content semantic-search-modal">
             <div class="modal-section-header">
-                <h3>Semantic Search Results</h3>
+                <h3 id="frameSearchModalTitle">Semantic Search Results</h3>
                 <div class="modal-header-actions">
                     <button id="modalToggleLayoutBtn" class="queue-action-btn" title="Chuyển Layout (Tab)">
                         <i class="fas fa-list"></i> <!-- Bắt đầu với icon của layout Grouped -->
@@ -707,6 +745,30 @@
                     </button>
                 </div>
             </div>
+            <form id="cirSearchForm" class="cir-search-composer" aria-label="CIR search controls" hidden>
+                <div class="cir-reference-card">
+                    <img id="cirReferenceImage" src="" alt="CIR reference frame">
+                    <div>
+                        <span>Reference frame</span>
+                        <strong id="cirReferenceFrameInfo"></strong>
+                    </div>
+                </div>
+                <label class="cir-query-field" for="cirEditText">
+                    <span>Edit / add concept</span>
+                    <textarea id="cirEditText" rows="2" maxlength="2000"
+                        placeholder="What should appear in the result?"></textarea>
+                </label>
+                <label class="cir-query-field" for="cirRemoveText">
+                    <span>Remove concept</span>
+                    <textarea id="cirRemoveText" rows="2" maxlength="2000"
+                        placeholder="What should be absent from the result?"></textarea>
+                </label>
+                <button id="cirSearchSubmitBtn" class="cir-search-submit" type="submit">
+                    <i class="fas fa-search"></i>
+                    <span>Search</span>
+                </button>
+                <p id="cirSearchMessage" class="cir-search-message" aria-live="polite"></p>
+            </form>
             <div id="semanticSearchResultsContainer">
                 <!-- Kết quả sẽ được render vào đây -->
             </div>
