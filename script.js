@@ -203,7 +203,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let selectedQueueFrameIds = new Set();
     let isTranslationEnabled = localStorage.getItem('aic_translation_enabled') === 'true';
     let availableModels = [];
-    let currentSelectedModel = 'all';
+    let currentSelectedModels = null;
     let frameServeLocation = 'remote';
     let videoServeLocation = 'remote';
     let clusterModeEnabled = true;
@@ -523,6 +523,69 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function setUserScopedSetting(key, value) {
         localStorage.setItem(getUserScopedStorageKey(key), value);
+    }
+
+    function normalizeSelectedModels(selection) {
+        if (!selection || selection === 'all') return null;
+        const modelNames = Array.isArray(selection)
+            ? selection
+            : String(selection).split(',');
+        const uniqueModels = [...new Set(modelNames
+            .map(model => String(model).trim())
+            .filter(model => model && model !== 'all'))];
+        return uniqueModels.length > 0 ? uniqueModels : null;
+    }
+
+    function loadSelectedModelsForCurrentUser() {
+        const savedModels = getUserScopedSetting('selected_models');
+        if (savedModels !== null) {
+            try {
+                return normalizeSelectedModels(JSON.parse(savedModels));
+            } catch {
+                return normalizeSelectedModels(savedModels);
+            }
+        }
+
+        // Migrate the prior single-model preference without losing user settings.
+        return normalizeSelectedModels(getUserScopedSetting('selected_model', null, 'user_selected_model'));
+    }
+
+    function getSelectedModelSpec() {
+        return currentSelectedModels?.join(',') || null;
+    }
+
+    function discardUnavailableSelectedModels() {
+        if (!currentSelectedModels || availableModels.length === 0) return;
+        const availableModelSet = new Set(availableModels);
+        const validModels = currentSelectedModels.filter(model => availableModelSet.has(model));
+        if (validModels.length !== currentSelectedModels.length) {
+            selectModels(validModels);
+        }
+    }
+
+    function selectModels(selection, { persist = true } = {}) {
+        currentSelectedModels = normalizeSelectedModels(selection);
+        if (persist) {
+            setUserScopedSetting('selected_models', JSON.stringify(currentSelectedModels));
+        }
+        console.log('Selected models:', currentSelectedModels || 'all', 'for user:', currentUserId);
+        updateSelectedModelUI();
+    }
+
+    function toggleSelectedModel(modelName) {
+        if (modelName === 'all') {
+            selectModels(null);
+            return;
+        }
+
+        const selectedModels = currentSelectedModels ? [...currentSelectedModels] : [];
+        const modelIndex = selectedModels.indexOf(modelName);
+        if (modelIndex === -1) {
+            selectedModels.push(modelName);
+        } else {
+            selectedModels.splice(modelIndex, 1);
+        }
+        selectModels(selectedModels);
     }
 
     function loadVideoPreferencesForCurrentUser() {
@@ -1261,12 +1324,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }, true);
 
 
-        const savedModel = getUserScopedSetting('selected_model', null, 'user_selected_model');
-        if (savedModel) {
-            currentSelectedModel = savedModel;
-        } else {
-            currentSelectedModel = 'all'; // Giá trị mặc định nếu chưa có gì được lưu
-        }
+        selectModels(loadSelectedModelsForCurrentUser(), { persist: false });
 
         setupKeyboardNavigation();
         setupSearchTypingAutofocus();
@@ -1554,8 +1612,7 @@ document.addEventListener('DOMContentLoaded', function () {
             e.stopPropagation();
             if (e.target && e.target.tagName === 'LI') {
                 const modelName = e.target.dataset.model;
-                selectModel(modelName);
-                settingsMenu.classList.remove('visible');
+                toggleSelectedModel(modelName);
             }
         });
 
@@ -3106,6 +3163,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (!response.ok) throw new Error('Failed to fetch models');
             const data = await response.json();
             availableModels = data.models || [];
+            discardUnavailableSelectedModels();
             populateSettingsMenu(); // Điền model vào menu sau khi lấy được
         } catch (error) {
             console.error('Error fetching models:', error);
@@ -3156,23 +3214,14 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    // HÀM MỚI: Xử lý khi người dùng chọn model
-    function selectModel(modelName) {
-        currentSelectedModel = modelName;
-        console.log('Selected model:', currentSelectedModel, 'for user:', currentUserId);
-        setUserScopedSetting('selected_model', modelName);
-        updateSelectedModelUI();
-    }
-
-    // HÀM MỚI: Cập nhật UI để hiển thị model nào đang được chọn
+    // Cập nhật UI để hiển thị tất cả model đang được chọn.
     function updateSelectedModelUI() {
         const menuItems = document.querySelectorAll('#settingsMenu li');
         menuItems.forEach(item => {
-            if (item.dataset.model === currentSelectedModel) {
-                item.classList.add('selected');
-            } else {
-                item.classList.remove('selected');
-            }
+            const isSelected = item.dataset.model === 'all'
+                ? currentSelectedModels === null
+                : currentSelectedModels?.includes(item.dataset.model);
+            item.classList.toggle('selected', Boolean(isSelected));
         });
     }
     function switchSearchMode(mode) {
@@ -3633,7 +3682,118 @@ document.addEventListener('DOMContentLoaded', function () {
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
+        const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+        let autocorrectTimer = null;
+        let autocorrectController = null;
+        let autocorrectRequestVersion = 0;
+        let isComposingText = false;
+        let previousTextValue = textInput.value;
         textInput.title = 'Inline filters: ;OCR;, "ASR", or \'ASR\'';
+
+        const hideAutocorrectSuggestion = () => {
+            suggestionDisplay.classList.remove('visible');
+            suggestionDisplay.dataset.suggestion = '';
+        };
+
+        const cancelPendingAutocorrect = () => {
+            autocorrectRequestVersion++;
+            clearTimeout(autocorrectTimer);
+            autocorrectTimer = null;
+            autocorrectController?.abort();
+            autocorrectController = null;
+        };
+
+        const showAutocorrectSuggestion = suggestion => {
+            suggestionDisplay.replaceChildren('Gợi ý: ');
+            const suggestionText = document.createElement('strong');
+            suggestionText.textContent = suggestion;
+            const keyHint = document.createElement('span');
+            keyHint.className = 'key-hint';
+            keyHint.textContent = 'Nhấn Tab';
+            suggestionDisplay.append(suggestionText, document.createTextNode(' '), keyHint);
+            suggestionDisplay.dataset.suggestion = suggestion;
+            suggestionDisplay.classList.add('visible');
+        };
+
+        const requestAutocorrect = async query => {
+            const requestVersion = ++autocorrectRequestVersion;
+            const controller = new AbortController();
+            autocorrectController = controller;
+
+            try {
+                const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/text/auto-correct/stream`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: query }),
+                    signal: controller.signal,
+                });
+                if (!response.ok || !response.body) return;
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let receivedResult = false;
+                const handleEvent = event => {
+                    const payload = event
+                        .split(/\r?\n/)
+                        .filter(line => line.startsWith('data:'))
+                        .map(line => line.slice(5).trimStart())
+                        .join('\n');
+                    if (!payload || payload === '[DONE]') return;
+
+                    const result = JSON.parse(payload);
+                    console.log('[AUTOCORRECT] Response received', { query, result });
+                    receivedResult = true;
+                    if (requestVersion !== autocorrectRequestVersion || textInput.value !== query) return;
+
+                    if (result.changed && typeof result.result === 'string' && result.result.trim() !== query.trim()) {
+                        showAutocorrectSuggestion(result.result);
+                    } else {
+                        hideAutocorrectSuggestion();
+                    }
+                };
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                    let eventEnd;
+                    while ((eventEnd = buffer.search(/\r?\n\r?\n/)) !== -1) {
+                        const event = buffer.slice(0, eventEnd);
+                        buffer = buffer.slice(eventEnd).replace(/^\r?\n\r?\n/, '');
+                        handleEvent(event);
+                    }
+                    if (done) break;
+                }
+
+                if (buffer.trim()) handleEvent(buffer);
+                if (!receivedResult && requestVersion === autocorrectRequestVersion && textInput.value === query) {
+                    hideAutocorrectSuggestion();
+                }
+            } catch (error) {
+                if (error.name !== 'AbortError') hideAutocorrectSuggestion();
+            } finally {
+                if (autocorrectController === controller) autocorrectController = null;
+            }
+        };
+
+        const scheduleAutocorrect = () => {
+            const query = textInput.value;
+            const completedWordCount = query.trim().split(/\s+/).filter(Boolean).length;
+            const justCompletedWord = /\s$/.test(query) && !/\s$/.test(previousTextValue);
+            previousTextValue = query;
+
+            cancelPendingAutocorrect();
+            hideAutocorrectSuggestion();
+            if (!query.trim()) return;
+
+            if (justCompletedWord && completedWordCount >= 2 && completedWordCount % 2 === 0) {
+                requestAutocorrect(query);
+                return;
+            }
+
+            autocorrectTimer = setTimeout(() => requestAutocorrect(query), 300);
+        };
 
         searchGroup.querySelector('.query-kind-text').addEventListener('click', () => {
             setSearchGroupQueryKind(searchGroup, 'text');
@@ -3643,13 +3803,22 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         setSearchGroupQueryKind(searchGroup, searchGroup.dataset.queryKind, false);
 
-        // Auto-resize textarea + ẩn dòng dịch khi người dùng gõ
+        // Auto-resize textarea and refresh the per-input autocorrect preview.
         textInput.addEventListener('input', function () {
             autoResizeTextarea(this);
             const translationDisplay = searchGroup.querySelector('.translated-query-display');
             if (translationDisplay) {
                 translationDisplay.classList.remove('visible');
             }
+            if (!isComposingText) scheduleAutocorrect();
+        });
+        textInput.addEventListener('compositionstart', () => {
+            isComposingText = true;
+            cancelPendingAutocorrect();
+            hideAutocorrectSuggestion();
+        });
+        textInput.addEventListener('compositionend', () => {
+            isComposingText = false;
         });
         setupInlineDelimiterPairing(textInput, searchGroup);
 
@@ -3800,37 +3969,16 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         });
 
-        textInput.addEventListener('keyup', async function (e) {
-            // Chỉ kích hoạt khi người dùng nhấn phím cách
-            if (e.key === ' ') {
-                const currentText = this.value;
-                const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
-
-                const suggestion = await getAutocorrectSuggestion(currentText);
-
-                // Chỉ hiển thị nếu có gợi ý VÀ gợi ý đó khác với văn bản gốc
-                if (suggestion && suggestion.trim() !== currentText.trim()) {
-                    suggestionDisplay.innerHTML = `Gợi ý: <strong>${suggestion}</strong> <span class="key-hint">Nhấn Tab</span>`;
-                    suggestionDisplay.dataset.suggestion = suggestion; // Lưu lại gợi ý để dùng với phím Tab
-                    suggestionDisplay.classList.add('visible');
-                } else {
-                    suggestionDisplay.classList.remove('visible');
-                    suggestionDisplay.dataset.suggestion = '';
-                }
-            }
-        });
-
         textInput.addEventListener('keydown', function (e) {
             if (e.key === 'Tab') {
-                const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
-
                 if (suggestionDisplay.classList.contains('visible') && suggestionDisplay.dataset.suggestion) {
                     e.preventDefault();
                     const correctedText = suggestionDisplay.dataset.suggestion;
                     this.value = correctedText + ' ';
                     clearPendingInlineDelimiters(this);
-                    suggestionDisplay.classList.remove('visible');
-                    suggestionDisplay.dataset.suggestion = '';
+                    previousTextValue = this.value;
+                    cancelPendingAutocorrect();
+                    hideAutocorrectSuggestion();
                     autoResizeTextarea(this);
                     this.selectionStart = this.selectionEnd = this.value.length;
                 }
@@ -3844,15 +3992,15 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         // Thêm sự kiện click vào ô gợi ý để chấp nhận (UX bonus)
-        const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
         suggestionDisplay.addEventListener('click', function () {
             if (this.classList.contains('visible') && this.dataset.suggestion) {
                 const correctedText = this.dataset.suggestion;
                 textInput.value = correctedText + ' ';
                 clearPendingInlineDelimiters(textInput);
 
-                this.classList.remove('visible');
-                this.dataset.suggestion = '';
+                previousTextValue = textInput.value;
+                cancelPendingAutocorrect();
+                hideAutocorrectSuggestion();
 
                 autoResizeTextarea(textInput);
                 textInput.focus(); // Focus lại vào ô search
@@ -4136,7 +4284,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     // Tách riêng logic temporal search
                     const isFirstSearch = !searchGroup.previousElementSibling;
                         if (isFirstSearch) {
-                            searchPromise = callTemporalSearchStart(finalQuery, currentSelectedModel, filterOptions, searchGroup)
+                            searchPromise = callTemporalSearchStart(finalQuery, getSelectedModelSpec(), filterOptions, searchGroup)
                             .then(response => {
                                 temporalChainActive = true;
                                 searchGroup.dataset.submitted = 'true';
@@ -4144,7 +4292,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 manageNextSearchInput();
                             });
                     } else {
-                        searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, filterOptions, searchGroup)
+                        searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, getSelectedModelSpec(), filterOptions, searchGroup)
                             .then(response => {
                                 searchGroup.dataset.submitted = 'true';
                                 handleSearchResults(response.query_A_reranked, true);
@@ -4152,7 +4300,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             });
                     }
                 } else if (currentSearchMode === 'text-to-text') {
-                    searchPromise = callTextToTextAPI(finalQuery, currentSelectedModel, filterOptions)
+                    searchPromise = callTextToTextAPI(finalQuery, getSelectedModelSpec(), filterOptions)
                         .then(results => {
                             handleSearchResults(results, false);
                             manageNextSearchInput();
@@ -4161,7 +4309,7 @@ document.addEventListener('DOMContentLoaded', function () {
             } else if (type === 'image' && currentSearchMode === 'text-to-image') {
                 const isFirstSearch = !searchGroup.previousElementSibling;
                 if (isFirstSearch) {
-                    searchPromise = callTemporalSearchStartWithImage(query, currentSelectedModel, searchGroup)
+                    searchPromise = callTemporalSearchStartWithImage(query, getSelectedModelSpec(), searchGroup)
                         .then(response => {
                             temporalChainActive = true;
                             searchGroup.dataset.submitted = 'true';
@@ -4169,7 +4317,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             manageNextSearchInput();
                         });
                 } else {
-                    searchPromise = callTemporalSearchContinueWithImage(query, currentSelectedModel, searchGroup)
+                    searchPromise = callTemporalSearchContinueWithImage(query, getSelectedModelSpec(), searchGroup)
                         .then(response => {
                             searchGroup.dataset.submitted = 'true';
                             handleSearchResults(response.query_A_reranked, true);
@@ -4293,7 +4441,7 @@ document.addEventListener('DOMContentLoaded', function () {
             body.use_event_filter = true;
         }
 
-        if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
+        if (modelName) {
             body.model_name = modelName;
         }
 
@@ -4338,7 +4486,7 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('file', imageFile);
         formData.append('query_id', searchGroup.dataset.searchId);
         formData.append('cluster_mode_enabled', String(clusterModeEnabled));
-        if (modelName && modelName !== 'all') formData.append('model_name', modelName);
+        if (modelName) formData.append('model_name', modelName);
         if (isEventFilterEnabled) formData.append('use_event_filter', 'true');
         return formData;
     }
@@ -4362,7 +4510,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Hàm này được gọi khi tìm kiếm query B, C...
-    function callTemporalSearchContinue(query, chainId, filterOptions, searchGroup) {
+    function callTemporalSearchContinue(query, chainId, modelName, filterOptions, searchGroup) {
         const queryId = searchGroup.dataset.searchId;
         const body = {
             query: query,
@@ -4372,6 +4520,9 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         if (filterOptions.use_event_filter) {
             body.use_event_filter = true;
+        }
+        if (modelName) {
+            body.model_name = modelName;
         }
         if (filterOptions.use_tag && filterOptions.tags_filter) {
             body.use_tag = true;
@@ -4451,7 +4602,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const formData = new FormData();
         formData.append("file", imageFile);
         formData.append("cluster_mode_enabled", String(clusterModeEnabled));
-        if (modelName !== 'all') { // Chỉ gửi nếu không phải mặc định
+        if (modelName) {
             formData.append("model_name", modelName);
         }
 
@@ -7135,7 +7286,7 @@ document.addEventListener('DOMContentLoaded', function () {
         const state = {
             description: 'AIC_LUNCH_SEARCH', // Dùng để nhận dạng
             searchMode: currentSearchMode,
-            selectedModel: currentSelectedModel,
+            selectedModels: currentSelectedModels ? [...currentSelectedModels] : null,
             // temporalChainId: temporalChainId,
             queries: [],
             filters: {
@@ -7178,7 +7329,7 @@ document.addEventListener('DOMContentLoaded', function () {
         showLoadingIndicator();
         searchInputsContainer.innerHTML = '';
         switchSearchMode(state.searchMode);
-        selectModel(state.selectedModel);
+        selectModels(state.selectedModels ?? state.selectedModel);
         temporalChainId = state.temporalChainId;
 
         if (state.isImageTemporalStart && state.imageTemporalStartPath) {
@@ -7252,8 +7403,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     formData.append("user_id", currentUserId);
                     formData.append("query_id", state.queries[0]?.id || 'img-start-restored');
                     formData.append("cluster_mode_enabled", String(clusterModeEnabled));
-                    if (state.selectedModel && state.selectedModel !== 'all') {
-                        formData.append("model_name", state.selectedModel);
+                    const modelSpec = getSelectedModelSpec();
+                    if (modelSpec) {
+                        formData.append("model_name", modelSpec);
                     }
 
                     const apiResponse = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start_with_image`, {
@@ -7270,18 +7422,18 @@ document.addEventListener('DOMContentLoaded', function () {
                 } else if (state.searchMode === 'text-to-image') {
                     const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
                     const restoredFilters = buildFilterOptionsFromState(state);
-                    results = await callTextToImageAPI(firstQuery, state.selectedModel, restoredFilters);
+                    results = await callTextToImageAPI(firstQuery, getSelectedModelSpec(), restoredFilters);
 
                 } else if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
                     const response = await fetch(state.imageDataUrl);
                     const blob = await response.blob();
                     const file = new File([blob], "restored_image.jpg", { type: blob.type });
-                    results = await callImageToImageAPI(file, state.selectedModel);
+                    results = await callImageToImageAPI(file, getSelectedModelSpec());
 
                 } else if (state.searchMode === 'text-to-text') {
                     const firstQuery = state.queries.length > 0 ? state.queries[0].value : '';
                     const restoredFilters = buildFilterOptionsFromState(state);
-                    results = await callTextToTextAPI(firstQuery, state.selectedModel, restoredFilters);
+                    results = await callTextToTextAPI(firstQuery, getSelectedModelSpec(), restoredFilters);
 
                 } else {
                     contentArea.innerHTML = '<div class="content-placeholder"><h2>RESULTS</h2></div>';
@@ -7549,8 +7701,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 formData.append("use_event_filter", "true");
             }
 
-            if (currentSelectedModel && currentSelectedModel !== 'all') {
-                formData.append("model_name", currentSelectedModel);
+            const modelSpec = getSelectedModelSpec();
+            if (modelSpec) {
+                formData.append("model_name", modelSpec);
             }
 
             const apiResponse = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/temporal/start_with_image`, {
@@ -7588,6 +7741,8 @@ document.addEventListener('DOMContentLoaded', function () {
         currentUser = newUsername;
         localStorage.setItem('aic_lunch_username', newUsername);
         loadVideoPreferencesForCurrentUser();
+        selectModels(loadSelectedModelsForCurrentUser(), { persist: false });
+        discardUnavailableSelectedModels();
 
         if (ws) {
             try {
@@ -9056,35 +9211,6 @@ document.addEventListener('DOMContentLoaded', function () {
             showToastNotification('Đã xóa lịch sử tìm kiếm!', 'success');
         }
     }
-    async function getAutocorrectSuggestion(text) {
-        if (!text || text.trim() === '') {
-            return null;
-        }
-        const url = isTranslationEnabled
-            ? 'http://192.168.20.164:9090/translate'
-            : 'http://192.168.20.164:9090/correct';
-        try {
-            const response = await fetch(url, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({ text: text }),
-            });
-
-            if (!response.ok) {
-                console.error('Autocorrect/Translate API error:', response.statusText);
-                return null;
-            }
-
-            const result = await response.json();
-            return result.corrected_text || result.translated_text || null;
-        } catch (error) {
-            console.error('Failed to fetch suggestion/translation:', error);
-            return null;
-        }
-    }
-
     async function getFpsForVideo(videoName, options = {}) {
         const cacheKey = `${frameServeLocation}:${videoName}`;
 
