@@ -18,7 +18,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from functools import partial
 from typing import List, Optional, Dict, Any, Union
-from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Depends, status, Query
+from fastapi import FastAPI, APIRouter, HTTPException, UploadFile, File, Form, Depends, status, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel, Field
@@ -38,6 +38,8 @@ from src.schemas import (
     ASRSearchRequest,
     ASRSearchResponse
 )
+
+router = APIRouter()
 
 app = FastAPI(
     title="Database Microservice",
@@ -206,7 +208,7 @@ def serialize_frame_hits(raw_hits: list) -> list[FrameResultHit]:
 
 # --- API Routes ---
 
-@app.get("/health")
+@router.get("/health")
 def health_check():
     mgr = get_milvus()
     return {
@@ -217,7 +219,7 @@ def health_check():
     }
 
 
-@app.post("/v1/search/text", response_model=SearchResponse)
+@router.post("/v1/search/text", response_model=SearchResponse)
 async def search_text(req: BaseSearchRequest):
     """
     Multimodal text query search (text prompt -> top-K frames with OCR/ASR/tag/cluster filters).
@@ -267,7 +269,7 @@ async def search_text(req: BaseSearchRequest):
         raise HTTPException(status_code=500, detail=f"Text search error: {str(e)}")
 
 
-@app.post("/v1/search/image", response_model=SearchResponse)
+@router.post("/v1/search/image", response_model=SearchResponse)
 async def search_image(
     file: UploadFile = File(...),
     top_k: int = Form(650),
@@ -321,7 +323,7 @@ async def search_image(
         raise HTTPException(status_code=500, detail=f"Image search error: {str(e)}")
 
 
-@app.post("/v1/search/temporal/start")
+@router.post("/v1/search/temporal/start")
 async def temporal_search_start(req: TemporalStartRequest):
     """
     Initializes a new temporal sequence search chain for a user.
@@ -373,7 +375,7 @@ async def temporal_search_start(req: TemporalStartRequest):
         raise HTTPException(status_code=500, detail=f"Temporal start error: {str(e)}")
 
 
-@app.post("/v1/search/temporal/continue")
+@router.post("/v1/search/temporal/continue")
 async def temporal_search_continue(req: TemporalContinueRequest):
     """
     Continues or updates an existing query in the user's temporal search sequence chain.
@@ -422,7 +424,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
         raise HTTPException(status_code=500, detail=f"Temporal continue error: {str(e)}")
 
 
-@app.post("/v1/search/temporal/continue_with_image")
+@router.post("/v1/search/temporal/continue_with_image")
 async def temporal_search_continue_with_image(
     file: UploadFile = File(...),
     user_id: str = Form(...),
@@ -476,7 +478,7 @@ async def temporal_search_continue_with_image(
         raise HTTPException(status_code=500, detail=f"Temporal image continue error: {str(e)}")
 
 
-@app.post("/v1/filter/text", response_model=TextFilterResponse)
+@router.post("/v1/filter/text", response_model=TextFilterResponse)
 def text_filter_expression(req: TextFilterRequest):
     """
     Generates filter expressions for OCR or ASR text queries.
@@ -520,7 +522,7 @@ def text_filter_expression(req: TextFilterRequest):
         raise HTTPException(status_code=500, detail=f"Text filter error: {str(e)}")
 
 
-@app.get("/v1/collection/stats")
+@router.get("/v1/collection/stats")
 def collection_stats():
     """
     Returns total entity counts for all loaded Milvus model collections.
@@ -536,7 +538,7 @@ def collection_stats():
     return {"status": "success", "stats": stats}
 
 
-@app.get("/v1/models")
+@router.get("/v1/models")
 def get_available_models():
     """
     Returns list of loaded model names.
@@ -545,7 +547,7 @@ def get_available_models():
     return {"models": getattr(mgr, "model_names", ["google/siglip2-large-patch16-512"])}
 
 
-@app.get("/v1/asr_transcript")
+@router.get("/v1/asr_transcript")
 def get_asr_transcript(
     frame_specify: Optional[str] = Query(None),
     video_name: Optional[str] = Query(None),
@@ -572,7 +574,7 @@ def get_asr_transcript(
         raise HTTPException(status_code=500, detail=f"ASR transcript fetch error: {str(e)}")
 
 
-@app.get("/v1/ocr_text")
+@router.get("/v1/ocr_text")
 def get_ocr_text(
     frame_specify: Optional[str] = Query(None),
     video_name: Optional[str] = Query(None),
@@ -599,7 +601,7 @@ def get_ocr_text(
         raise HTTPException(status_code=500, detail=f"OCR text fetch error: {str(e)}")
 
 
-@app.get("/v1/frame_text")
+@router.get("/v1/frame_text")
 def get_frame_text(
     frame_specify: Optional[str] = Query(None),
     video_name: Optional[str] = Query(None),
@@ -642,7 +644,7 @@ def get_frame_text(
         raise HTTPException(status_code=500, detail=f"Frame text fetch error: {str(e)}")
 
 
-@app.get("/v1/temporal-chain/{user_id}/{frame_identifier:path}")
+@router.get("/v1/temporal-chain/{user_id}/{frame_identifier:path}")
 async def get_temporal_chain(user_id: str, frame_identifier: str):
     """
     Fetches temporal chain for a frame.
@@ -662,7 +664,7 @@ async def get_temporal_chain(user_id: str, frame_identifier: str):
         raise HTTPException(status_code=500, detail=f"Temporal chain fetch error: {str(e)}")
 
 
-@app.delete("/v1/temporal-chain/{user_id}")
+@router.delete("/v1/temporal-chain/{user_id}")
 async def clear_temporal_chain(user_id: str):
     """
     Clears temporal chain for a user.
@@ -676,7 +678,7 @@ async def clear_temporal_chain(user_id: str):
         raise HTTPException(status_code=500, detail=f"Clear temporal chain error: {str(e)}")
 
 
-@app.post("/v1/search/temporal/start_with_image")
+@router.post("/v1/search/temporal/start_with_image")
 async def temporal_search_start_with_image(
     file: UploadFile = File(...),
     top_k: int = Form(650),
@@ -730,7 +732,7 @@ async def temporal_search_start_with_image(
         raise HTTPException(status_code=500, detail=f"Temporal start with image error: {str(e)}")
 
 
-@app.post("/v1/search/asr", response_model=ASRSearchResponse)
+@router.post("/v1/search/asr", response_model=ASRSearchResponse)
 async def search_asr(req: ASRSearchRequest):
     """
     Dense vector search for ASR embedding to find the single most suitable segment for a query and video/time range.
@@ -753,11 +755,14 @@ async def search_asr(req: ASRSearchRequest):
 
 
 
-# --- CIR endpoints (src/apps/cir_endpoints.py) ---
+# Include database router on app
+app.include_router(router)
+
+# --- CIR endpoints (src/apps/cir.py) ---
 # Kept in their own module so CIR stays separate from this service's code.
 # Guarded: if CIR cannot be imported, this service still starts without it.
 try:
-    from src.apps.cir_endpoints import router as cir_router
+    from src.apps.cir import router as cir_router
 
     app.include_router(cir_router)
     print("[DB_SERVICE] CIR endpoints mounted.")
