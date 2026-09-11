@@ -32,7 +32,7 @@ import io
 import urllib.parse
 import httpx
 from bisect import bisect_right
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/csv_submit"
 
@@ -46,6 +46,12 @@ DEFAULT_DATABASE_MODEL = "google/siglip2-large-patch16-512"
 
 
 class DatabaseServiceError(RuntimeError):
+    def __init__(self, message: str, status_code: int = 502):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class TNACServiceError(RuntimeError):
     def __init__(self, message: str, status_code: int = 502):
         super().__init__(message)
         self.status_code = status_code
@@ -324,6 +330,74 @@ class DatabaseServiceClient:
     async def clear_temporal_chain(self, user_id: str) -> bool:
         await self._request_json("DELETE", f"/v1/temporal-chain/{user_id}")
         return True
+
+    async def aclose(self):
+        await self._client.aclose()
+
+
+class TNACServiceClient:
+    def __init__(self, base_url: str):
+        self.base_url = base_url.rstrip("/")
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=httpx.Timeout(connect=2.0, read=15.0, write=10.0, pool=2.0),
+            limits=httpx.Limits(max_keepalive_connections=8, max_connections=16),
+        )
+
+    async def auto_correct(self, text: str) -> dict[str, Any]:
+        try:
+            response = await self._client.post(
+                "/auto-correct",
+                json={"text": text, "language": "vi"},
+            )
+        except httpx.TimeoutException as error:
+            raise TNACServiceError(f"TNAC service timed out: {error}", 504) from error
+        except httpx.RequestError as error:
+            raise TNACServiceError(f"TNAC service is unavailable: {error}", 503) from error
+
+        if response.is_error:
+            status_code = response.status_code if response.status_code < 500 else 502
+            raise TNACServiceError(
+                f"TNAC service returned {response.status_code}: {response.text[:500]}",
+                status_code,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise TNACServiceError("TNAC service returned invalid JSON.") from error
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("result"), str):
+            raise TNACServiceError("TNAC service returned an invalid response shape.")
+
+        return {
+            "result": payload["result"],
+            "changed": bool(payload.get("changed", False)),
+            "request_id": payload.get("request_id"),
+        }
+
+    async def open_auto_correct_stream(self, text: str) -> httpx.Response:
+        request = self._client.build_request(
+            "POST",
+            "/auto-correct/stream",
+            json={"text": text, "language": "vi"},
+        )
+        try:
+            response = await self._client.send(request, stream=True)
+        except httpx.TimeoutException as error:
+            raise TNACServiceError(f"TNAC service timed out: {error}", 504) from error
+        except httpx.RequestError as error:
+            raise TNACServiceError(f"TNAC service is unavailable: {error}", 503) from error
+
+        if response.is_error:
+            body = (await response.aread()).decode(errors="replace")
+            await response.aclose()
+            status_code = response.status_code if response.status_code < 500 else 502
+            raise TNACServiceError(
+                f"TNAC service returned {response.status_code}: {body[:500]}",
+                status_code,
+            )
+        return response
 
     async def aclose(self):
         await self._client.aclose()
@@ -615,6 +689,9 @@ def resolve_database_service_url() -> str:
 
 database_service_url = resolve_database_service_url()
 milvus: Optional[DatabaseServiceClient] = None
+tnac_service_url = os.getenv("TNAC_SERVICE_URL", "http://192.168.20.150:8454")
+tnac: Optional[TNACServiceClient] = None
+tnac_warmup_task: Optional[asyncio.Task] = None
 
 
 # clear cache method
@@ -628,7 +705,7 @@ ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
 @app.on_event("startup")
 async def startup_event():
-    global milvus
+    global milvus, tnac, tnac_warmup_task
     milvus = DatabaseServiceClient(database_service_url)
     try:
         health = await milvus.health_check()
@@ -640,12 +717,32 @@ async def startup_event():
         f"[API_SERVER_SERVICE] Connected to database service at '{database_service_url}' "
         f"with models: {health.get('models', [])}"
     )
+    tnac = TNACServiceClient(tnac_service_url)
+    tnac_warmup_task = asyncio.create_task(warmup_tnac())
+
+
+async def warmup_tnac():
+    if tnac is None:
+        return
+    try:
+        await tnac.auto_correct("warmup")
+    except TNACServiceError as error:
+        print(f"[API_SERVER_SERVICE] TNAC warmup skipped: {error}")
+    else:
+        print(f"[API_SERVER_SERVICE] TNAC warmup completed at '{tnac_service_url}'.")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
+    global tnac_warmup_task
+    if tnac_warmup_task is not None:
+        tnac_warmup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await tnac_warmup_task
     if milvus is not None:
         await milvus.aclose()
+    if tnac is not None:
+        await tnac.aclose()
 
 
 @app.exception_handler(DatabaseServiceError)
@@ -992,6 +1089,7 @@ class TemporalContinueRequest(BaseModel):
     query: str
     chain_id: str
     top_k: int = 500
+    model_name: Optional[str] = None
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
@@ -1036,6 +1134,10 @@ class TextToTextRequest(BaseModel):
     asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
     cluster_mode_enabled: bool = True
+
+
+class TNACAutoCorrectRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
 
 
 class CIRReferenceRequest(BaseModel):
@@ -1257,6 +1359,39 @@ def check_video(video_name: str):
             "available_files": files[:10]  # Show first 10 files
         }
 
+@app.post("/api/text/auto-correct")
+async def auto_correct_text(req: TNACAutoCorrectRequest):
+    if tnac is None:
+        raise HTTPException(status_code=503, detail="TNAC service client is unavailable")
+    try:
+        return await tnac.auto_correct(req.text)
+    except TNACServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.post("/api/text/auto-correct/stream")
+async def auto_correct_text_stream(req: TNACAutoCorrectRequest):
+    if tnac is None:
+        raise HTTPException(status_code=503, detail="TNAC service client is unavailable")
+    try:
+        tnac_response = await tnac.open_auto_correct_stream(req.text)
+    except TNACServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+    async def event_stream():
+        try:
+            async for chunk in tnac_response.aiter_raw():
+                yield chunk
+        finally:
+            await tnac_response.aclose()
+
+    headers = {}
+    request_id = tnac_response.headers.get("x-request-id")
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
 @app.post("/api/search/text-to-image")
 async def search_text_to_image(req: TextToImageRequest):
     cluster_filter = get_search_cluster_filter(req.cluster_mode_enabled)
@@ -1343,7 +1478,7 @@ async def search_text_to_text(req: TextToTextRequest):
 async def search_image(
     file: UploadFile = File(..., description="File ảnh để tìm kiếm"),
     top_k: int = Form(600, description="Số lượng kết quả trả về"),
-    model_name = "google/siglip2-large-patch16-512",  # Mặc định model
+    model_name: Optional[str] = Form(None, description="Tên model hoặc danh sách model phân tách bằng dấu phẩy"),
     use_tag: bool = Form(False, description="Enable tag filtering"),
     top_k_tags: int = Form(5, description="Top K tags to use"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
@@ -1364,7 +1499,7 @@ async def search_image(
         search_in="image",
         top_k=min(top_k, 1000),
         requested_top_k=top_k,
-        model_name="google/siglip2-large-patch16-512",
+        model_name=model_name,
         use_tag=use_tag,
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
@@ -1379,7 +1514,7 @@ async def search_image(
         mode="image",
         search_in="image",
         top_k=min(top_k, 1000),  # Giới hạn top_k
-        model_name="google/siglip2-large-patch16-512",
+        model_name=model_name,
         use_tag=use_tag,            # <<< TRUYỀN THAM SỐ
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
@@ -1949,6 +2084,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             search_in="image",
             top_k=min(req.top_k, 1000),
             requested_top_k=req.top_k,
+            model_name=req.model_name,
             chain_id=req.chain_id,
             user_id=req.user_id,
             query_id=req.query_id,
@@ -1969,6 +2105,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             query=req.query,
             mode="text",
             top_k=min(req.top_k, 1000),
+            model_name=req.model_name,
             use_tag=req.use_tag,
             top_k_tags=req.top_k_tags,
             tags_filter=req.tags_filter,
