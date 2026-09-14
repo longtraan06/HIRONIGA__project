@@ -22,6 +22,7 @@ import hashlib
 import secrets
 import traceback
 import zipfile
+import random
 try:
     import redis.asyncio as aioredis
 except ImportError:
@@ -37,6 +38,12 @@ from pathlib import Path
 FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/csv_submit"
 
 PROJECT_DIR = Path(__file__).resolve().parent
+AUDIO_ROOT = Path(os.getenv(
+    "AUDIO_ROOT",
+    "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/Audio",
+))
+AUDIO_CATEGORY_DIRECTORIES = {"correct": "Correct", "wrong": "Wrong"}
+MAX_AUDIO_UPLOAD_BYTES = 10 * 1024 * 1024
 CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
 CLUSTER_DELETION_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
 ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/qwen3_asr_20s/transcripts_timestamped.json")
@@ -55,6 +62,30 @@ class TNACServiceError(RuntimeError):
     def __init__(self, message: str, status_code: int = 502):
         super().__init__(message)
         self.status_code = status_code
+
+
+def get_audio_category_directory(category: str) -> Path:
+    directory_name = AUDIO_CATEGORY_DIRECTORIES.get(category.lower())
+    if directory_name is None:
+        raise HTTPException(status_code=404, detail="Audio category must be 'correct' or 'wrong'.")
+    return Path(AUDIO_ROOT) / directory_name
+
+
+def choose_submission_audio(submission_status: str) -> Optional[dict[str, str]]:
+    category = submission_status.lower()
+    if category not in AUDIO_CATEGORY_DIRECTORIES:
+        return None
+    directory = get_audio_category_directory(category)
+    try:
+        audio_files = [
+            path for path in directory.iterdir()
+            if path.is_file() and path.suffix.lower() == ".mp3"
+        ]
+    except FileNotFoundError:
+        return None
+    if not audio_files:
+        return None
+    return {"category": category, "filename": random.choice(audio_files).name}
 
 
 class DatabaseServiceClient:
@@ -799,6 +830,46 @@ async def get_hls_segment(video_name: str, segment_filename: str):
         media_type = "video/mp4"
 
     return FileResponse(segment_path, media_type=media_type)
+
+
+@app.get("/api/audio/{category}/{filename}")
+async def get_submission_audio(category: str, filename: str):
+    if Path(filename).name != filename or Path(filename).suffix.lower() != ".mp3":
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    directory = get_audio_category_directory(category).resolve()
+    audio_path = (directory / filename).resolve()
+    if audio_path.parent != directory or not audio_path.is_file():
+        raise HTTPException(status_code=404, detail="Audio file not found")
+
+    return FileResponse(
+        audio_path,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.post("/api/audio/{category}")
+async def upload_submission_audio(category: str, file: UploadFile = File(...)):
+    if not file.filename or Path(file.filename).suffix.lower() != ".mp3":
+        raise HTTPException(status_code=422, detail="Only .mp3 audio files are accepted.")
+
+    directory = get_audio_category_directory(category)
+    contents = await file.read(MAX_AUDIO_UPLOAD_BYTES + 1)
+    if not contents:
+        raise HTTPException(status_code=422, detail="Audio file is empty.")
+    if len(contents) > MAX_AUDIO_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file must be 10 MB or smaller.")
+
+    directory.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}.mp3"
+    (directory / filename).write_bytes(contents)
+    return {
+        "category": category.lower(),
+        "filename": filename,
+        "url": f"/api/audio/{category.lower()}/{filename}",
+    }
+
 
 @app.post("/api/admin/clear-cache")
 async def clear_redis_cache(
@@ -2640,7 +2711,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                         "action": "dres_submission_wrong",
                         "payload": {
                             "submittedBy": username,
-                            "frameIdentifiers": frame_identifiers
+                            "frameIdentifiers": frame_identifiers,
+                            "audio": choose_submission_audio(submission_status),
                         }
                     }
                     await manager.publish_update(json.dumps(broadcast_message))
@@ -2651,7 +2723,8 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                         "action": "dres_submission_correct",
                         "payload": {
                             "submittedBy": username,
-                            "frameIdentifiers": frame_identifiers
+                            "frameIdentifiers": frame_identifiers,
+                            "audio": choose_submission_audio(submission_status),
                         }
                     }
                     await manager.publish_update(json.dumps(broadcast_message))
