@@ -316,6 +316,8 @@ document.addEventListener('DOMContentLoaded', function () {
     let formSubmitLockedVideoId = null;
     let isFormSubmitMode = false; // Mặc định là chế độ cộng tác
     let wrongSubmissionIds = new Set();
+    let isSubmissionSoundEnabled = true;
+    let submissionAudioPlayer = null;
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
     let currentlyTargetedTrakeFrameData = null;
@@ -418,6 +420,11 @@ document.addEventListener('DOMContentLoaded', function () {
     const videoServeLocationLabel = document.getElementById('videoServeLocationLabel');
     const clusterModeToggle = document.getElementById('clusterModeToggle');
     const clusterModeLabel = document.getElementById('clusterModeLabel');
+    const submissionSoundToggle = document.getElementById('submissionSoundToggle');
+    const submissionSoundLabel = document.getElementById('submissionSoundLabel');
+    const audioUploadCategory = document.getElementById('audioUploadCategory');
+    const audioUploadInput = document.getElementById('audioUploadInput');
+    const uploadAudioBtn = document.getElementById('uploadAudioBtn');
     const deletedClustersBtn = document.getElementById('deletedClustersBtn');
     const clusterDeletionConfirmModal = document.getElementById('clusterDeletionConfirmModal');
     const clusterDeletionConfirmText = document.getElementById('clusterDeletionConfirmText');
@@ -523,6 +530,63 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function setUserScopedSetting(key, value) {
         localStorage.setItem(getUserScopedStorageKey(key), value);
+    }
+
+    function updateSubmissionSoundUI() {
+        if (!submissionSoundToggle || !submissionSoundLabel) return;
+        submissionSoundToggle.checked = isSubmissionSoundEnabled;
+        submissionSoundLabel.textContent = isSubmissionSoundEnabled ? 'Enabled' : 'Muted';
+    }
+
+    function playSubmissionAudio(audio) {
+        if (!isSubmissionSoundEnabled || !audio?.filename || !['correct', 'wrong'].includes(audio.category)) return;
+
+        if (!submissionAudioPlayer) {
+            submissionAudioPlayer = new Audio();
+            submissionAudioPlayer.preload = 'auto';
+        }
+        submissionAudioPlayer.pause();
+        submissionAudioPlayer.currentTime = 0;
+        submissionAudioPlayer.src = `${APP_CONFIG.REMOTE_BASE_URL}/api/audio/${audio.category}/${encodeURIComponent(audio.filename)}`;
+        submissionAudioPlayer.play().catch(error => {
+            console.warn('Submission audio playback was blocked or failed:', error);
+        });
+    }
+
+    async function uploadSubmissionAudio() {
+        const file = audioUploadInput?.files?.[0];
+        const category = audioUploadCategory?.value;
+        if (!file || !category) {
+            showToastNotification('Choose a Correct or Wrong MP3 file first.', 'error');
+            return;
+        }
+        if (!file.name.toLowerCase().endsWith('.mp3')) {
+            showToastNotification('Only .mp3 audio files are accepted.', 'error');
+            return;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+            showToastNotification('Audio file must be 10 MB or smaller.', 'error');
+            return;
+        }
+
+        uploadAudioBtn.disabled = true;
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/audio/${category}`, {
+                method: 'POST',
+                body: formData,
+            });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(payload.detail || 'Audio upload failed.');
+            audioUploadInput.value = '';
+            showToastNotification(`${category === 'correct' ? 'Correct' : 'Wrong'} audio uploaded.`, 'success');
+        } catch (error) {
+            console.error('Audio upload failed:', error);
+            showToastNotification(error.message || 'Audio upload failed.', 'error');
+        } finally {
+            uploadAudioBtn.disabled = false;
+        }
     }
 
     function normalizeSelectedModels(selection) {
@@ -1180,6 +1244,8 @@ document.addEventListener('DOMContentLoaded', function () {
         updateVideoServeLocationUI();
         clusterModeEnabled = getUserScopedSetting('cluster_mode_enabled', 'true') !== 'false';
         updateClusterModeUI();
+        isSubmissionSoundEnabled = getUserScopedSetting('submission_sound_enabled', 'true') !== 'false';
+        updateSubmissionSoundUI();
         setupUnloadHandler();
 
         frameServeLocationToggle.addEventListener('change', () => {
@@ -1216,6 +1282,14 @@ document.addEventListener('DOMContentLoaded', function () {
             updateClusterModeUI();
             showToastNotification(`Cluster filtering ${clusterModeEnabled ? 'enabled' : 'disabled'} for new searches.`);
         });
+
+        submissionSoundToggle.addEventListener('change', () => {
+            isSubmissionSoundEnabled = submissionSoundToggle.checked;
+            setUserScopedSetting('submission_sound_enabled', String(isSubmissionSoundEnabled));
+            updateSubmissionSoundUI();
+            if (!isSubmissionSoundEnabled) submissionAudioPlayer?.pause();
+        });
+        uploadAudioBtn.addEventListener('click', uploadSubmissionAudio);
 
         deletedClustersBtn.addEventListener('click', openDeletedClustersModal);
         closeClusterDeletionConfirmBtn.addEventListener('click', closeClusterDeletionConfirmation);
@@ -2482,6 +2556,7 @@ document.addEventListener('DOMContentLoaded', function () {
             payload.frameIdentifiers.forEach(id => wrongSubmissionIds.add(id));
             updateWrongSubmissionUI();
             showGlobalAlert(payload.submittedBy, 'cac');
+            playSubmissionAudio(payload.audio);
             return; // Dừng lại, không xử lý tiếp
         }
 
@@ -2489,6 +2564,7 @@ document.addEventListener('DOMContentLoaded', function () {
             wrongSubmissionIds.clear();
             updateWrongSubmissionUI();
             showGlobalAlert(payload.submittedBy, 'correct');
+            playSubmissionAudio(payload.audio);
             return;
         }
 
@@ -7743,6 +7819,8 @@ document.addEventListener('DOMContentLoaded', function () {
         loadVideoPreferencesForCurrentUser();
         selectModels(loadSelectedModelsForCurrentUser(), { persist: false });
         discardUnavailableSelectedModels();
+        isSubmissionSoundEnabled = getUserScopedSetting('submission_sound_enabled', 'true') !== 'false';
+        updateSubmissionSoundUI();
 
         if (ws) {
             try {
