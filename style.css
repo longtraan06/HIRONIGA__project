@@ -775,6 +775,35 @@ color: var(--matcha-cream);
     outline: 2px solid var(--matcha-dark);
     outline-offset: 2px;
 }
+.audio-upload-controls {
+    display: grid;
+    grid-template-columns: 86px minmax(0, 1fr) auto;
+    gap: 6px;
+    margin: 8px 5px 0;
+}
+.audio-upload-controls select,
+.audio-upload-controls input {
+    min-width: 0;
+    border: 1px solid var(--matcha-border);
+    border-radius: 6px;
+    background: white;
+    color: var(--matcha-dark);
+    padding: 6px;
+}
+.audio-upload-controls input {
+    font-size: 11px;
+}
+.audio-upload-controls .apply-btn {
+    white-space: nowrap;
+}
+@media (max-width: 480px) {
+    .audio-upload-controls {
+        grid-template-columns: 1fr auto;
+    }
+    .audio-upload-controls input {
+        grid-column: 1 / -1;
+    }
+}
 
 /* Tag Filtering */
 .tag-filter-container,
