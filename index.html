@@ -551,6 +551,21 @@
             <span class="serve-location-switch" aria-hidden="true"></span>
         </label>
 
+        <h4 style="margin-top: 15px;">Submission Sounds</h4>
+        <label class="serve-location-toggle" for="submissionSoundToggle">
+            <span id="submissionSoundLabel">Enabled</span>
+            <input id="submissionSoundToggle" type="checkbox" checked>
+            <span class="serve-location-switch" aria-hidden="true"></span>
+        </label>
+        <div class="audio-upload-controls">
+            <select id="audioUploadCategory" aria-label="Audio category">
+                <option value="correct">Correct</option>
+                <option value="wrong">Wrong</option>
+            </select>
+            <input id="audioUploadInput" type="file" accept="audio/mpeg,.mp3" aria-label="MP3 audio file">
+            <button id="uploadAudioBtn" class="apply-btn" type="button">Upload MP3</button>
+        </div>
+
         <h4 style="margin-top: 15px;">Username</h4>
         <div class="setting-input-group">
             <input type="text" id="usernameInput" name="username" placeholder="Enter username..."
