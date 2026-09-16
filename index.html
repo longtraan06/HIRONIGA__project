@@ -557,6 +557,24 @@
             <input id="submissionSoundToggle" type="checkbox" checked>
             <span class="serve-location-switch" aria-hidden="true"></span>
         </label>
+        <label class="sound-volume-control" for="submissionSoundVolume">
+            <span>Volume <strong id="submissionSoundVolumeValue">100%</strong></span>
+            <input id="submissionSoundVolume" type="range" min="0" max="100" value="100" step="1">
+        </label>
+        <div class="sound-preference-controls">
+            <label for="correctSoundMode">Correct sound</label>
+            <select id="correctSoundMode" aria-label="Correct sound mode">
+                <option value="random">Random</option>
+                <option value="fixed">Fixed</option>
+            </select>
+            <select id="correctSoundFile" aria-label="Fixed correct sound" disabled></select>
+            <label for="wrongSoundMode">Wrong sound</label>
+            <select id="wrongSoundMode" aria-label="Wrong sound mode">
+                <option value="random">Random</option>
+                <option value="fixed">Fixed</option>
+            </select>
+            <select id="wrongSoundFile" aria-label="Fixed wrong sound" disabled></select>
+        </div>
         <div class="audio-upload-controls">
             <select id="audioUploadCategory" aria-label="Audio category">
                 <option value="correct">Correct</option>
