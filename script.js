@@ -317,6 +317,12 @@ document.addEventListener('DOMContentLoaded', function () {
     let isFormSubmitMode = false; // Mặc định là chế độ cộng tác
     let wrongSubmissionIds = new Set();
     let isSubmissionSoundEnabled = true;
+    let submissionSoundVolume = 1;
+    let submissionSoundPreferences = {
+        correct: { mode: 'random', filename: null },
+        wrong: { mode: 'random', filename: null },
+    };
+    let submissionAudioFiles = { correct: [], wrong: [] };
     let submissionAudioPlayer = null;
     let draggedItem = null; // Biến để theo dõi item đang được kéo
     let currentlyHoveredFormQueueFrameData = null;
@@ -422,6 +428,12 @@ document.addEventListener('DOMContentLoaded', function () {
     const clusterModeLabel = document.getElementById('clusterModeLabel');
     const submissionSoundToggle = document.getElementById('submissionSoundToggle');
     const submissionSoundLabel = document.getElementById('submissionSoundLabel');
+    const submissionSoundVolumeInput = document.getElementById('submissionSoundVolume');
+    const submissionSoundVolumeValue = document.getElementById('submissionSoundVolumeValue');
+    const correctSoundMode = document.getElementById('correctSoundMode');
+    const correctSoundFile = document.getElementById('correctSoundFile');
+    const wrongSoundMode = document.getElementById('wrongSoundMode');
+    const wrongSoundFile = document.getElementById('wrongSoundFile');
     const audioUploadCategory = document.getElementById('audioUploadCategory');
     const audioUploadInput = document.getElementById('audioUploadInput');
     const uploadAudioBtn = document.getElementById('uploadAudioBtn');
@@ -538,8 +550,101 @@ document.addEventListener('DOMContentLoaded', function () {
         submissionSoundLabel.textContent = isSubmissionSoundEnabled ? 'Enabled' : 'Muted';
     }
 
+    function normalizeSubmissionSoundPreferences(preferences) {
+        return ['correct', 'wrong'].reduce((normalized, category) => {
+            const preference = preferences?.[category] || {};
+            const filename = typeof preference.filename === 'string' && preference.filename.toLowerCase().endsWith('.mp3')
+                ? preference.filename
+                : null;
+            normalized[category] = {
+                mode: preference.mode === 'fixed' ? 'fixed' : 'random',
+                filename,
+            };
+            return normalized;
+        }, {});
+    }
+
+    function loadSubmissionSoundPreferences() {
+        const savedPreferences = getUserScopedSetting('submission_sound_preferences');
+        if (!savedPreferences) return normalizeSubmissionSoundPreferences();
+        try {
+            return normalizeSubmissionSoundPreferences(JSON.parse(savedPreferences));
+        } catch {
+            return normalizeSubmissionSoundPreferences();
+        }
+    }
+
+    function saveSubmissionSoundPreferences() {
+        setUserScopedSetting('submission_sound_preferences', JSON.stringify(submissionSoundPreferences));
+    }
+
+    function setSubmissionSoundPreference(category, preference) {
+        submissionSoundPreferences[category] = {
+            ...submissionSoundPreferences[category],
+            ...preference,
+        };
+        saveSubmissionSoundPreferences();
+        updateSubmissionSoundPreferenceUI();
+    }
+
+    function updateSubmissionSoundPreferenceUI() {
+        const controls = {
+            correct: { mode: correctSoundMode, file: correctSoundFile },
+            wrong: { mode: wrongSoundMode, file: wrongSoundFile },
+        };
+        for (const [category, control] of Object.entries(controls)) {
+            const preference = submissionSoundPreferences[category];
+            control.mode.value = preference.mode;
+            control.file.disabled = preference.mode !== 'fixed' || submissionAudioFiles[category].length === 0;
+        }
+        submissionSoundVolumeInput.value = Math.round(submissionSoundVolume * 100);
+        submissionSoundVolumeValue.textContent = `${Math.round(submissionSoundVolume * 100)}%`;
+    }
+
+    function populateSubmissionAudioOptions() {
+        const controls = { correct: correctSoundFile, wrong: wrongSoundFile };
+        for (const [category, control] of Object.entries(controls)) {
+            const preferredFilename = submissionSoundPreferences[category].filename;
+            control.replaceChildren();
+            const placeholder = document.createElement('option');
+            placeholder.value = '';
+            placeholder.textContent = submissionAudioFiles[category].length ? 'Choose audio...' : 'No MP3 files available';
+            control.appendChild(placeholder);
+            submissionAudioFiles[category].forEach(filename => {
+                const option = document.createElement('option');
+                option.value = filename;
+                option.textContent = filename;
+                option.selected = filename === preferredFilename;
+                control.appendChild(option);
+            });
+        }
+        updateSubmissionSoundPreferenceUI();
+    }
+
+    async function fetchSubmissionAudioFiles() {
+        try {
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/audio`);
+            if (!response.ok) throw new Error(`Audio list request failed: ${response.status}`);
+            const payload = await response.json();
+            submissionAudioFiles = {
+                correct: Array.isArray(payload.correct) ? payload.correct : [],
+                wrong: Array.isArray(payload.wrong) ? payload.wrong : [],
+            };
+            populateSubmissionAudioOptions();
+        } catch (error) {
+            console.warn('Submission audio list is unavailable:', error);
+            submissionAudioFiles = { correct: [], wrong: [] };
+            populateSubmissionAudioOptions();
+        }
+    }
+
     function playSubmissionAudio(audio) {
         if (!isSubmissionSoundEnabled || !audio?.filename || !['correct', 'wrong'].includes(audio.category)) return;
+
+        const preference = submissionSoundPreferences[audio.category];
+        const filename = preference.mode === 'fixed' && preference.filename
+            ? preference.filename
+            : audio.filename;
 
         if (!submissionAudioPlayer) {
             submissionAudioPlayer = new Audio();
@@ -547,7 +652,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         submissionAudioPlayer.pause();
         submissionAudioPlayer.currentTime = 0;
-        submissionAudioPlayer.src = `${APP_CONFIG.REMOTE_BASE_URL}/api/audio/${audio.category}/${encodeURIComponent(audio.filename)}`;
+        submissionAudioPlayer.volume = submissionSoundVolume;
+        submissionAudioPlayer.src = `${APP_CONFIG.REMOTE_BASE_URL}/api/audio/${audio.category}/${encodeURIComponent(filename)}`;
         submissionAudioPlayer.play().catch(error => {
             console.warn('Submission audio playback was blocked or failed:', error);
         });
@@ -580,6 +686,7 @@ document.addEventListener('DOMContentLoaded', function () {
             const payload = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(payload.detail || 'Audio upload failed.');
             audioUploadInput.value = '';
+            await fetchSubmissionAudioFiles();
             showToastNotification(`${category === 'correct' ? 'Correct' : 'Wrong'} audio uploaded.`, 'success');
         } catch (error) {
             console.error('Audio upload failed:', error);
@@ -1246,6 +1353,13 @@ document.addEventListener('DOMContentLoaded', function () {
         updateClusterModeUI();
         isSubmissionSoundEnabled = getUserScopedSetting('submission_sound_enabled', 'true') !== 'false';
         updateSubmissionSoundUI();
+        const savedSubmissionSoundVolume = Number(getUserScopedSetting('submission_sound_volume', '1'));
+        submissionSoundVolume = Number.isFinite(savedSubmissionSoundVolume)
+            ? Math.max(0, Math.min(1, savedSubmissionSoundVolume))
+            : 1;
+        submissionSoundPreferences = loadSubmissionSoundPreferences();
+        updateSubmissionSoundPreferenceUI();
+        fetchSubmissionAudioFiles();
         setupUnloadHandler();
 
         frameServeLocationToggle.addEventListener('change', () => {
@@ -1288,6 +1402,24 @@ document.addEventListener('DOMContentLoaded', function () {
             setUserScopedSetting('submission_sound_enabled', String(isSubmissionSoundEnabled));
             updateSubmissionSoundUI();
             if (!isSubmissionSoundEnabled) submissionAudioPlayer?.pause();
+        });
+        submissionSoundVolumeInput.addEventListener('input', () => {
+            submissionSoundVolume = Number(submissionSoundVolumeInput.value) / 100;
+            setUserScopedSetting('submission_sound_volume', String(submissionSoundVolume));
+            submissionAudioPlayer && (submissionAudioPlayer.volume = submissionSoundVolume);
+            updateSubmissionSoundPreferenceUI();
+        });
+        correctSoundMode.addEventListener('change', () => {
+            setSubmissionSoundPreference('correct', { mode: correctSoundMode.value });
+        });
+        wrongSoundMode.addEventListener('change', () => {
+            setSubmissionSoundPreference('wrong', { mode: wrongSoundMode.value });
+        });
+        correctSoundFile.addEventListener('change', () => {
+            setSubmissionSoundPreference('correct', { filename: correctSoundFile.value || null });
+        });
+        wrongSoundFile.addEventListener('change', () => {
+            setSubmissionSoundPreference('wrong', { filename: wrongSoundFile.value || null });
         });
         uploadAudioBtn.addEventListener('click', uploadSubmissionAudio);
 
@@ -7821,6 +7953,12 @@ document.addEventListener('DOMContentLoaded', function () {
         discardUnavailableSelectedModels();
         isSubmissionSoundEnabled = getUserScopedSetting('submission_sound_enabled', 'true') !== 'false';
         updateSubmissionSoundUI();
+        const savedSubmissionSoundVolume = Number(getUserScopedSetting('submission_sound_volume', '1'));
+        submissionSoundVolume = Number.isFinite(savedSubmissionSoundVolume)
+            ? Math.max(0, Math.min(1, savedSubmissionSoundVolume))
+            : 1;
+        submissionSoundPreferences = loadSubmissionSoundPreferences();
+        updateSubmissionSoundPreferenceUI();
 
         if (ws) {
             try {
