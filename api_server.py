@@ -71,18 +71,22 @@ def get_audio_category_directory(category: str) -> Path:
     return Path(AUDIO_ROOT) / directory_name
 
 
+def get_audio_files(category: str) -> list[Path]:
+    directory = get_audio_category_directory(category)
+    try:
+        return sorted(
+            (path for path in directory.iterdir() if path.is_file() and path.suffix.lower() == ".mp3"),
+            key=lambda path: path.name.lower(),
+        )
+    except FileNotFoundError:
+        return []
+
+
 def choose_submission_audio(submission_status: str) -> Optional[dict[str, str]]:
     category = submission_status.lower()
     if category not in AUDIO_CATEGORY_DIRECTORIES:
         return None
-    directory = get_audio_category_directory(category)
-    try:
-        audio_files = [
-            path for path in directory.iterdir()
-            if path.is_file() and path.suffix.lower() == ".mp3"
-        ]
-    except FileNotFoundError:
-        return None
+    audio_files = get_audio_files(category)
     if not audio_files:
         return None
     return {"category": category, "filename": random.choice(audio_files).name}
@@ -830,6 +834,14 @@ async def get_hls_segment(video_name: str, segment_filename: str):
         media_type = "video/mp4"
 
     return FileResponse(segment_path, media_type=media_type)
+
+
+@app.get("/api/audio")
+async def list_submission_audio():
+    return {
+        category: [path.name for path in get_audio_files(category)]
+        for category in AUDIO_CATEGORY_DIRECTORIES
+    }
 
 
 @app.get("/api/audio/{category}/{filename}")
