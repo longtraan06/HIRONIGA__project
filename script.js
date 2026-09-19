@@ -830,6 +830,16 @@ document.addEventListener('DOMContentLoaded', function () {
         return frameData.path ? resolveFrameUrl(frameData.path) : null;
     }
 
+    function getFrameSearchImagePath(frameData) {
+        if (!frameData) return null;
+        return frameData.path ? resolveFrameUrl(frameData.path) : getQueueThumbnailUrl(frameData);
+    }
+
+    function withFrameSearchImagePath(frameData) {
+        const imagePath = getFrameSearchImagePath(frameData);
+        return imagePath ? { ...frameData, path: imagePath } : null;
+    }
+
     function releaseLocalQueueThumbnail(frameIdentifier) {
         const localUrl = localQueueThumbnailUrls.get(frameIdentifier);
         if (localUrl) URL.revokeObjectURL(localUrl);
@@ -1909,26 +1919,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
                 const key = e.key.toLowerCase();
                 if (key === 's') {
-                    const imageModal = document.getElementById('imageModal');
-                    if (imageModal && imageModal.style.display === 'flex') {
-                        return;
-                    }
-                    e.preventDefault();
-                    if (selectedCountInQueue === 1) {
-                        if (!frameData.path) {
-                            showToastNotification("Frame data is incomplete for this action.", "error");
-                        } else {
-                            const imagePath = frameData.path;
-                            clearQueueSelection(); // Bỏ chọn trước khi bắt đầu
-                            if (e.shiftKey) {
-                                openTemporalImageActionDialog({ ...frameData, path: imagePath });
-                            } else {
-                                initiateImageTemporalSearch(imagePath);
-                            }
-                        }
-                    } else {
-                        showToastNotification("Please select only one frame for this action.", "error");
-                    }
+                    // Similarity search is handled by the shared frame shortcut below.
+                    // Keeping one handler avoids duplicate API requests and conflicting validation.
+                    return;
                 } else {
                     e.preventDefault(); // Ngăn hành vi mặc định cho các phím tắt này
 
@@ -7292,10 +7285,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
                 if (frameToSearch) {
+                    const searchableFrame = withFrameSearchImagePath(frameToSearch);
+                    if (!searchableFrame) {
+                        showToastNotification('Ảnh preview của frame chưa sẵn sàng để search.', 'info');
+                        return;
+                    }
                     if (e.shiftKey) {
-                        openTemporalImageActionDialog(frameToSearch);
+                        openTemporalImageActionDialog(searchableFrame);
                     } else {
-                        openSemanticSearchModal(frameToSearch);
+                        openSemanticSearchModal(searchableFrame);
                     }
 
                     // Nếu đang mở thanh preview, hãy đóng nó đi cho gọn
@@ -7844,8 +7842,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function framePathToImageFile(frameData) {
-        if (!frameData?.path) throw new Error('Selected frame has no image path.');
-        const response = await fetch(frameData.path, {
+        const imagePath = getFrameSearchImagePath(frameData);
+        if (!imagePath) throw new Error('Selected frame has no image path.');
+        const response = await fetch(imagePath, {
             mode: 'cors',
             credentials: 'omit',
             cache: 'force-cache'
@@ -7943,11 +7942,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function openTemporalImageActionDialog(frameData) {
-        if (!frameData?.path) {
+        const searchableFrame = withFrameSearchImagePath(frameData);
+        if (!searchableFrame) {
             showToastNotification('Selected frame has no image available for temporal search.', 'error');
             return;
         }
-        pendingTemporalImageFrame = frameData;
+        pendingTemporalImageFrame = searchableFrame;
         const canContinue = temporalChainActive && Boolean(currentUserId);
         temporalContinueImageBtn.disabled = !canContinue;
         temporalImageActionIndex = canContinue ? 0 : 1;
@@ -9053,10 +9053,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     async function openSemanticSearchModal(queryFrameData) {
-        if (!queryFrameData || !queryFrameData.path) {
+        const searchableFrame = withFrameSearchImagePath(queryFrameData);
+        if (!searchableFrame) {
             showToastNotification("Dữ liệu frame không hợp lệ.", "error");
             return;
         }
+        queryFrameData = searchableFrame;
         cirRequestController?.abort();
         cirRequestController = null;
         cirRequestGeneration++;
