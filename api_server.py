@@ -40,7 +40,7 @@ FORM_SUBMIT_SAVE_PATH = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2
 PROJECT_DIR = Path(__file__).resolve().parent
 AUDIO_ROOT = Path(os.getenv(
     "AUDIO_ROOT",
-    "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/Audio",
+    "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Audio",
 ))
 AUDIO_CATEGORY_DIRECTORIES = {"correct": "Correct", "wrong": "Wrong"}
 MAX_AUDIO_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -1133,6 +1133,25 @@ TRAKE_SLOT_REVISION_KEY = "trake_queue:revisions"
 TRAKE_REQUEST_PREFIX = "trake_queue:request:"
 TRAKE_THUMBNAIL_DIR = PROJECT_DIR / "trake_thumbnails"
 TRAKE_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+QUEUE_THUMBNAIL_DIR = PROJECT_DIR / "queue_thumbnails"
+QUEUE_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
+MAX_QUEUE_THUMBNAIL_BYTES = 1_000_000
+QUEUE_THUMBNAIL_SET_SCRIPT = """
+local raw_frame = redis.call('HGET', KEYS[1], ARGV[1])
+if not raw_frame then
+    return {0, ''}
+end
+local frame = cjson.decode(raw_frame)
+if frame.thumbnailRequestId ~= ARGV[2] then
+    return {0, ''}
+end
+if frame.thumbnailPath then
+    return {2, frame.thumbnailPath}
+end
+frame.thumbnailPath = ARGV[3]
+redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(frame))
+return {1, ''}
+"""
 
 def get_color_for_user(username: str) -> str:
     """Tạo một màu sắc cố định dựa trên tên người dùng."""
@@ -2555,6 +2574,90 @@ def save_trake_thumbnail(image_bytes: bytes, output_path: Path):
         os.replace(temporary_path, output_path)
 
 
+def get_queue_thumbnail_file(frame: dict) -> Optional[Path]:
+    thumbnail_path = frame.get("thumbnailPath")
+    if not isinstance(thumbnail_path, str):
+        return None
+    filename = Path(thumbnail_path).name
+    if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
+        return None
+    return QUEUE_THUMBNAIL_DIR / filename
+
+
+def delete_queue_thumbnail(frame: dict):
+    thumbnail_file = get_queue_thumbnail_file(frame)
+    if thumbnail_file:
+        with suppress(FileNotFoundError):
+            thumbnail_file.unlink()
+
+
+def save_queue_thumbnail(image_bytes: bytes, output_path: Path):
+    with Image.open(io.BytesIO(image_bytes)) as image:
+        image = image.convert("RGB")
+        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+        temporary_path = output_path.with_suffix(".tmp")
+        image.save(temporary_path, format="WEBP", quality=75, method=6)
+        os.replace(temporary_path, output_path)
+
+
+@app.post("/api/queue-thumbnail")
+async def upload_queue_thumbnail(
+    file: UploadFile = File(...),
+    frame_identifier: str = Form(...),
+    thumbnail_request_id: str = Form(...),
+):
+    if not frame_identifier or not thumbnail_request_id or len(thumbnail_request_id) > 128:
+        raise HTTPException(status_code=400, detail="Invalid thumbnail request.")
+    image_bytes = await file.read(MAX_QUEUE_THUMBNAIL_BYTES + 1)
+    if not image_bytes or len(image_bytes) > MAX_QUEUE_THUMBNAIL_BYTES:
+        raise HTTPException(status_code=400, detail="Thumbnail must be between 1 byte and 1 MB.")
+
+    filename = f"{uuid.uuid4().hex}.webp"
+    output_path = QUEUE_THUMBNAIL_DIR / filename
+    try:
+        await asyncio.to_thread(save_queue_thumbnail, image_bytes, output_path)
+    except Exception as error:
+        raise HTTPException(status_code=400, detail=f"Invalid thumbnail: {error}") from error
+
+    thumbnail_path = f"/api/queue-thumbnail/{filename}"
+    result_code, existing_thumbnail_path = await redis_async_client.eval(
+        QUEUE_THUMBNAIL_SET_SCRIPT,
+        1,
+        QUEUE_DATA_HASH_KEY,
+        frame_identifier,
+        thumbnail_request_id,
+        thumbnail_path,
+    )
+    result_code = int(result_code)
+    if result_code == 0:
+        delete_queue_thumbnail({"thumbnailPath": thumbnail_path})
+        raise HTTPException(status_code=409, detail="Thumbnail request no longer matches this frame.")
+    if result_code == 2:
+        delete_queue_thumbnail({"thumbnailPath": thumbnail_path})
+        thumbnail_path = existing_thumbnail_path
+    payload = {"frameIdentifier": frame_identifier, "thumbnailPath": thumbnail_path}
+    await manager.publish_update(json.dumps({"action": "queue_thumbnail_ready", "payload": payload}))
+    return payload
+
+
+@app.get("/api/queue-thumbnail/{filename}")
+async def get_queue_thumbnail(filename: str):
+    if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    thumbnail_path = QUEUE_THUMBNAIL_DIR / filename
+    if not thumbnail_path.is_file():
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(
+        thumbnail_path,
+        media_type="image/webp",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "Access-Control-Allow-Origin": "*",
+            "Cross-Origin-Resource-Policy": "cross-origin",
+        },
+    )
+
+
 @app.post("/api/trake-thumbnail")
 async def upload_trake_thumbnail(
     file: UploadFile = File(...),
@@ -2691,14 +2794,13 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                     if frame.get("isSpecial") is True:
                         special_frame_found = True
 
+                    frame['added_by'] = username
+                    frame['user_color'] = user_color
+                    frame['voters'] = []
+                    frame['vote_count'] = 0
+                    frame['creation_time'] = time.time()
                     if await redis_async_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
-                        frame['added_by'] = username
-                        frame['user_color'] = user_color
-                        frame['voters'] = []
-                        frame['vote_count'] = 0
-                        frame['creation_time'] = time.time()
                         score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
-                        pipe.hset(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame))
                         pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier: score})
 
                 await pipe.execute()
@@ -2745,13 +2847,19 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
                 frame_to_remove = payload
                 identifier_to_remove = frame_to_remove.get("frameIdentifier")
                 if identifier_to_remove:
+                    stored_frame_json = await redis_async_client.hget(QUEUE_DATA_HASH_KEY, identifier_to_remove)
                     pipe = redis_async_client.pipeline()
                     pipe.zrem(QUEUE_SORTED_SET_KEY, identifier_to_remove)
                     pipe.hdel(QUEUE_DATA_HASH_KEY, identifier_to_remove)
                     await pipe.execute()
+                    if stored_frame_json:
+                        delete_queue_thumbnail(json.loads(stored_frame_json))
 
             elif action == "clear_all":
+                queued_frame_jsons = await redis_async_client.hvals(QUEUE_DATA_HASH_KEY)
                 await redis_async_client.delete(QUEUE_SORTED_SET_KEY, QUEUE_DATA_HASH_KEY, QUEUE_USERS_KEY)
+                for frame_json in queued_frame_jsons:
+                    delete_queue_thumbnail(json.loads(frame_json))
 
             elif action == "vote_frame":
                 identifier_to_vote = payload.get("frameIdentifier")
