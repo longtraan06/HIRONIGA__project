@@ -1957,11 +1957,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
                         case 'f': // Xem keyframe lân cận
                             if (selectedCountInQueue === 1) {
-                                if (frameData.isFromVideo) {
-                                    showToastNotification('Cannot view neighboring frames for a captured image.', 'error');
-                                    return;
-                                }
-
                                 if (frameData) { // frameData đã là đối tượng đầy đủ
                                     openImageModal(frameData); // Chỉ cần truyền nó vào
                                 } else {
@@ -2078,19 +2073,30 @@ document.addEventListener('DOMContentLoaded', function () {
         }, 100); // Đợi một chút để đảm bảo DOM đã sẵn sàng
     }
 
-    async function loadNeighborFrameWindow(frameData, lookBehind = 50, lookAhead = 50, signal) {
+    async function resolveKeyframeContext(frameData, lookBehind = 50, lookAhead = 50, signal) {
         if (!frameData?.videoName || typeof frameData.frame_id_ori === 'undefined') {
             throw new Error('Frame data is incomplete.');
         }
 
         if (frameServeLocation === 'remote') {
             const payload = await fetchRemoteKeyframeWindow(frameData.videoName, {
-                frameId: frameData.frame_id_ori,
+                // Captures have no metadata entry. Let the server anchor them to the
+                // preceding keyframe by timestamp instead of requesting an exact ID.
+                ...(frameData.isFromVideo ? {} : { frameId: frameData.frame_id_ori }),
+                timestamp: parseTimestamp(frameData.timestamp),
                 before: lookBehind,
                 after: lookAhead,
                 signal
             });
-            return payload.frames;
+            const anchorOffset = payload.center_index - payload.window_start_index;
+            const representativeFrame = payload.frames[anchorOffset] || payload.frames[0];
+            if (!representativeFrame) throw new Error('No keyframes found for this video.');
+            return {
+                frames: payload.frames,
+                representativeFrameId: Number(representativeFrame.frame_id_ori),
+                hasPrevious: Boolean(payload.has_previous),
+                hasNext: Boolean(payload.has_next),
+            };
         }
 
         const response = await fetch(getFrameMetadataUrl(frameData.videoName), { signal });
@@ -2114,15 +2120,28 @@ document.addEventListener('DOMContentLoaded', function () {
             }))
             .sort((a, b) => a.frame_id_ori - b.frame_id_ori);
 
-        const targetIndex = allFrames.findIndex(frame => frame.frame_id_ori === Number(frameData.frame_id_ori));
+        const capturedFrameId = Number(frameData.frame_id_ori);
+        let targetIndex = allFrames.findIndex(frame => frame.frame_id_ori === capturedFrameId);
+        if (targetIndex === -1 && frameData.isFromVideo) {
+            // Keep the context on the last known keyframe at or before the LIVE capture.
+            for (let index = 0; index < allFrames.length; index++) {
+                if (allFrames[index].frame_id_ori > capturedFrameId) break;
+                targetIndex = index;
+            }
+            if (targetIndex === -1) targetIndex = 0;
+        }
         if (targetIndex === -1) {
             throw new Error('The selected frame is not present in keyframe metadata.');
         }
 
-        return allFrames.slice(
-            Math.max(0, targetIndex - lookBehind),
-            Math.min(allFrames.length, targetIndex + lookAhead + 1)
-        );
+        const startIndex = Math.max(0, targetIndex - lookBehind);
+        const endIndex = Math.min(allFrames.length, targetIndex + lookAhead + 1);
+        return {
+            frames: allFrames.slice(startIndex, endIndex),
+            representativeFrameId: Number(allFrames[targetIndex].frame_id_ori),
+            hasPrevious: startIndex > 0,
+            hasNext: endIndex < allFrames.length,
+        };
     }
 
     function getQaAnswerFromModal(frameData) {
@@ -2132,14 +2151,15 @@ document.addEventListener('DOMContentLoaded', function () {
             const answerInput = qaAnswerTextInput;
             const referenceFrameId = frameData.frameIdentifier || `${frameData.videoName}_${frameData.frame_id_ori}`;
             const neighborController = new AbortController();
-            let neighborFrames = [];
+            let previewEntries = [];
             let currentNeighborIndex = -1;
             let currentQaFrameData = frameData;
             let closed = false;
 
-            const displayFrame = (neighborFrame, index = -1) => {
+            const displayFrame = (entry, index = -1) => {
                 currentNeighborIndex = index;
-                if (neighborFrame) {
+                if (entry?.kind === 'keyframe') {
+                    const neighborFrame = entry.frame;
                     const neighborPath = getFrameUrl(frameData.videoName, neighborFrame.filename);
                     setFrameImageSource(qaPreviewImage, neighborPath);
                     const viewedId = `${frameData.videoName}_${neighborFrame.frame_id_ori}`;
@@ -2156,12 +2176,14 @@ document.addEventListener('DOMContentLoaded', function () {
                         ? `${viewedId} · reference frame`
                         : `${viewedId} · context only`;
                 } else {
-                    setFrameImageSource(qaPreviewImage, frameData.path);
+                    const liveThumbnailUrl = getQueueThumbnailUrl(frameData);
+                    if (liveThumbnailUrl) setFrameImageSource(qaPreviewImage, liveThumbnailUrl);
+                    else qaPreviewImage.removeAttribute('src');
                     currentQaFrameData = frameData;
-                    qaViewedFrameInfo.textContent = `${referenceFrameId} · reference frame`;
+                    qaViewedFrameInfo.textContent = `${referenceFrameId} · LIVE reference frame`;
                 }
 
-                qaThumbnailStrip.querySelectorAll('img').forEach((thumbnail, thumbnailIndex) => {
+                qaThumbnailStrip.querySelectorAll('.qa-context-thumbnail').forEach((thumbnail, thumbnailIndex) => {
                     thumbnail.classList.toggle('current-frame', thumbnailIndex === currentNeighborIndex);
                 });
                 qaThumbnailStrip.children[currentNeighborIndex]?.scrollIntoView({
@@ -2172,9 +2194,9 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             const movePreview = direction => {
-                if (!neighborFrames.length) return;
-                const nextIndex = Math.max(0, Math.min(neighborFrames.length - 1, currentNeighborIndex + direction));
-                if (nextIndex !== currentNeighborIndex) displayFrame(neighborFrames[nextIndex], nextIndex);
+                if (!previewEntries.length) return;
+                const nextIndex = Math.max(0, Math.min(previewEntries.length - 1, currentNeighborIndex + direction));
+                if (nextIndex !== currentNeighborIndex) displayFrame(previewEntries[nextIndex], nextIndex);
             };
 
             const handleSubmit = event => {
@@ -2195,7 +2217,7 @@ document.addEventListener('DOMContentLoaded', function () {
             };
 
             const handleWheel = event => {
-                if (!neighborFrames.length) return;
+                if (!previewEntries.length) return;
                 event.preventDefault();
                 movePreview(event.deltaY > 0 ? 1 : -1);
             };
@@ -2238,13 +2260,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
             form.reset();
             qaReferenceFrameInfo.textContent = `Reference: ${referenceFrameId}`;
-            qaFrameSourceBadge.textContent = frameData.isFromVideo ? 'Captured frame' : `${frameServeLocation} frames`;
+            qaFrameSourceBadge.textContent = frameData.isFromVideo ? 'LIVE capture' : `${frameServeLocation} frames`;
             qaThumbnailStrip.innerHTML = '';
             qaThumbnailStrip.hidden = true;
-            qaNeighborStatus.textContent = frameData.isFromVideo
-                ? 'Nearby keyframes are unavailable for a captured frame.'
-                : 'Loading nearby keyframes...';
-            displayFrame(null);
+            qaNeighborStatus.textContent = 'Loading nearby keyframes...';
+            displayFrame({ kind: 'live', frame: frameData });
 
             form.addEventListener('submit', handleSubmit);
             qaInputModalCloseBtn.addEventListener('click', handleClose);
@@ -2258,32 +2278,60 @@ document.addEventListener('DOMContentLoaded', function () {
                 answerInput.focus();
             }, 10);
 
-            if (!frameData.isFromVideo) {
-                loadNeighborFrameWindow(frameData, 50, 50, neighborController.signal)
-                    .then(frames => {
+            resolveKeyframeContext(frameData, 50, 50, neighborController.signal)
+                    .then(context => {
                         if (closed) return;
-                        neighborFrames = frames;
-                        const referenceIndex = frames.findIndex(frame => frame.frame_id_ori === Number(frameData.frame_id_ori));
-                        frames.forEach((neighborFrame, index) => {
-                            const thumbnail = document.createElement('img');
-                            thumbnail.loading = 'lazy';
-                            thumbnail.alt = `${frameData.videoName}_${neighborFrame.frame_id_ori}`;
-                            thumbnail.title = thumbnail.alt;
-                            setFrameImageSource(thumbnail, getFrameUrl(frameData.videoName, neighborFrame.filename));
-                            thumbnail.classList.toggle('active-frame', index === referenceIndex);
-                            thumbnail.addEventListener('click', () => displayFrame(neighborFrame, index));
+                        const capturedFrameId = Number(frameData.frame_id_ori);
+                        const beforeLive = context.frames.filter(frame => frame.frame_id_ori < capturedFrameId);
+                        const afterLive = context.frames.filter(frame => frame.frame_id_ori > capturedFrameId);
+                        previewEntries = [
+                            ...beforeLive.map(frame => ({ kind: 'keyframe', frame })),
+                            { kind: 'live', frame: frameData },
+                            ...afterLive.map(frame => ({ kind: 'keyframe', frame })),
+                        ];
+                        const liveIndex = beforeLive.length;
+                        previewEntries.forEach((entry, index) => {
+                            const thumbnail = document.createElement('button');
+                            thumbnail.type = 'button';
+                            thumbnail.className = 'qa-context-thumbnail';
+                            if (entry.kind === 'live') {
+                                thumbnail.classList.add('qa-live-thumbnail');
+                                thumbnail.title = `${referenceFrameId} · LIVE captured frame`;
+                                const liveThumbnailUrl = getQueueThumbnailUrl(frameData);
+                                if (liveThumbnailUrl) {
+                                    const image = document.createElement('img');
+                                    image.alt = `${referenceFrameId} LIVE`;
+                                    setFrameImageSource(image, liveThumbnailUrl);
+                                    thumbnail.appendChild(image);
+                                } else {
+                                    thumbnail.classList.add('no-preview');
+                                    thumbnail.textContent = 'LIVE preview unavailable';
+                                }
+                            } else {
+                                const neighborFrame = entry.frame;
+                                const image = document.createElement('img');
+                                image.loading = 'lazy';
+                                image.alt = `${frameData.videoName}_${neighborFrame.frame_id_ori}`;
+                                image.title = image.alt;
+                                setFrameImageSource(image, getFrameUrl(frameData.videoName, neighborFrame.filename));
+                                thumbnail.title = image.title;
+                                thumbnail.appendChild(image);
+                            }
+                            thumbnail.classList.toggle('active-frame', index === liveIndex);
+                            thumbnail.addEventListener('click', () => displayFrame(entry, index));
                             qaThumbnailStrip.appendChild(thumbnail);
                         });
-                        qaThumbnailStrip.hidden = frames.length === 0;
-                        qaNeighborStatus.textContent = frames.length ? '' : 'No nearby keyframes found.';
-                        if (referenceIndex >= 0) displayFrame(frames[referenceIndex], referenceIndex);
+                        qaThumbnailStrip.hidden = previewEntries.length === 0;
+                        qaNeighborStatus.textContent = frameData.isFromVideo
+                            ? `Context anchored at keyframe ${context.representativeFrameId}.`
+                            : '';
+                        displayFrame(previewEntries[liveIndex], liveIndex);
                     })
                     .catch(error => {
                         if (closed || error.name === 'AbortError') return;
                         console.warn('Unable to load QA neighboring keyframes:', error);
                         qaNeighborStatus.textContent = 'Nearby keyframes could not be loaded. The reference frame remains available.';
                     });
-            }
         });
     }
 
@@ -2445,9 +2493,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     frameItem.classList.add('selected');
                 }
                 const frameData = submitQueueFrames.get(frameId);
-                if (frameData && !frameData.isFromVideo) {
-                    showKeyframePreview(frameData);
-                }
+                if (frameData) showKeyframePreview(frameData);
             }
 
             // Cập nhật frame được click cuối cùng (nếu không phải là Ctrl+Click để bỏ chọn)
@@ -5100,7 +5146,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const modalFrameInfo = document.getElementById('modalFrameInfo');
         const mainPreviewOverlay = document.getElementById('mainPreviewOverlay');
         const videoId = clickedFrameData.videoName;
-        const targetFrameIdOri = Number(clickedFrameData.frame_id_ori);
+        let targetFrameIdOri = Number(clickedFrameData.frame_id_ori);
+        const isCapturedReference = Boolean(clickedFrameData.isFromVideo);
         const initialWindowSize = 20;
         const pageSize = 40;
         const prefetchThreshold = 8;
@@ -5178,7 +5225,23 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         try {
-            const payload = await fetchWindow(targetFrameIdOri, initialWindowSize, initialWindowSize);
+            let payload;
+            if (isCapturedReference) {
+                const context = await resolveKeyframeContext(
+                    clickedFrameData,
+                    initialWindowSize,
+                    initialWindowSize,
+                    requestController.signal
+                );
+                targetFrameIdOri = context.representativeFrameId;
+                payload = {
+                    frames: context.frames,
+                    has_previous: context.hasPrevious,
+                    has_next: context.hasNext,
+                };
+            } else {
+                payload = await fetchWindow(targetFrameIdOri, initialWindowSize, initialWindowSize);
+            }
             neighborFrames = Array.isArray(payload.frames) ? payload.frames : [];
             hasPrevious = Boolean(payload.has_previous);
             hasNext = Boolean(payload.has_next);
@@ -5211,7 +5274,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 isFromVideo: false
             };
 
-            modalFrameInfo.textContent = currentModalFrameData.frameIdentifier;
+            modalFrameInfo.textContent = isCapturedReference
+                ? `${currentModalFrameData.frameIdentifier} · context for LIVE ${clickedFrameData.frameIdentifier}`
+                : currentModalFrameData.frameIdentifier;
 
             const oldCurrent = thumbnailStrip.querySelector('.current-frame');
             if (oldCurrent) oldCurrent.classList.remove('current-frame');
@@ -9532,49 +9597,11 @@ document.addEventListener('DOMContentLoaded', function () {
         previewPlaceholder.style.display = 'block';
 
         try {
-            const targetFrameId = parseInt(frameData.frame_id_ori, 10);
             const lookBehind = 20;
             const lookAhead = 20;
-            let neighbors;
-
-            if (frameServeLocation === 'remote') {
-                const payload = await fetchRemoteKeyframeWindow(frameData.videoName, {
-                    frameId: targetFrameId,
-                    before: lookBehind,
-                    after: lookAhead
-                });
-                neighbors = payload.frames;
-            } else {
-                const metadataUrl = getFrameMetadataUrl(frameData.videoName);
-                const response = await fetch(metadataUrl);
-
-                if (!response.ok) {
-                    throw new Error(`Không tìm thấy tệp ${metadataUrl}. Status: ${response.statusText}`);
-                }
-                const metadataFileContent = await response.json();
-                const videoMetadataObject = metadataFileContent[frameData.videoName];
-
-                if (!videoMetadataObject) {
-                    throw new Error(`Không tìm thấy key '${frameData.videoName}' trong tệp metadata.json.`);
-                }
-
-                const allKeyframes = Object.entries(videoMetadataObject).map(([frameKey, frameInfo]) => ({
-                    frame_id_ori: frameInfo.id,
-                    timestamp: frameInfo["time-stamp"],
-                    filename: `${frameKey}.webp`,
-                    ...frameInfo
-                }));
-                allKeyframes.sort((a, b) => a.frame_id_ori - b.frame_id_ori);
-
-                const targetIndex = allKeyframes.findIndex(kf => kf.frame_id_ori === targetFrameId);
-                if (targetIndex === -1) {
-                    throw new Error(`Frame ID ${targetFrameId} không tìm thấy trong metadata của video ${frameData.videoName}.`);
-                }
-
-                const startIndex = Math.max(0, targetIndex - lookBehind);
-                const endIndex = Math.min(allKeyframes.length, targetIndex + lookAhead + 1);
-                neighbors = allKeyframes.slice(startIndex, endIndex);
-            }
+            const context = await resolveKeyframeContext(frameData, lookBehind, lookAhead);
+            const neighbors = context.frames;
+            const targetFrameId = context.representativeFrameId;
 
             if (neighbors.length === 0) {
                 previewPlaceholder.textContent = 'Không tìm thấy frame lân cận.';
