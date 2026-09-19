@@ -216,6 +216,8 @@ document.addEventListener('DOMContentLoaded', function () {
     let pendingFormSubmitConflict = null;
     let highlightedModelIndex = -1; // -1 nghĩa là chưa có mục nào được highlight
     let submitQueueFrames = new Map();
+    const localQueueThumbnailUrls = new Map();
+    const queueThumbnailUploadFailures = new Set();
     let lastClickedFrameId = null;
     let lastAddedFrameId = null;
     let currentlyHoveredPreviewFrameData = null;
@@ -814,6 +816,30 @@ document.addEventListener('DOMContentLoaded', function () {
             return `${baseUrl}${url.pathname}${url.search}`;
         } catch {
             return path;
+        }
+    }
+
+    function getQueueThumbnailUrl(frameData) {
+        const localUrl = localQueueThumbnailUrls.get(frameData.frameIdentifier);
+        if (localUrl) return localUrl;
+        if (frameData.thumbnailPath) {
+            return frameData.thumbnailPath.startsWith('http')
+                ? frameData.thumbnailPath
+                : `${APP_CONFIG.REMOTE_BASE_URL}${frameData.thumbnailPath}`;
+        }
+        return frameData.path ? resolveFrameUrl(frameData.path) : null;
+    }
+
+    function releaseLocalQueueThumbnail(frameIdentifier) {
+        const localUrl = localQueueThumbnailUrls.get(frameIdentifier);
+        if (localUrl) URL.revokeObjectURL(localUrl);
+        localQueueThumbnailUrls.delete(frameIdentifier);
+    }
+
+    function releaseMissingLocalQueueThumbnails(queueItems) {
+        const queuedFrameIds = new Set(queueItems.map(frame => frame.frameIdentifier));
+        for (const frameIdentifier of localQueueThumbnailUrls.keys()) {
+            if (!queuedFrameIds.has(frameIdentifier)) releaseLocalQueueThumbnail(frameIdentifier);
         }
     }
 
@@ -2718,6 +2744,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     resolveInitialStatePromise();
                     resolveInitialStatePromise = null;
                 }
+                break;
+            case 'queue_thumbnail_ready':
+                applyQueueThumbnailUpdate(payload);
                 break;
 
             case 'user_update':
@@ -6593,44 +6622,39 @@ document.addEventListener('DOMContentLoaded', function () {
         const captureFrameAndAddToQueue = async () => {
             player.pause();
             try {
-                const currentTime = player.currentTime;
+                const currentTime = await getRenderedVideoTime(player);
                 const fps = await getFpsForVideo(videoName);
                 const frameNumber = Math.round(currentTime * fps);
-
-                // === BẮT ĐẦU PHẦN TỐI ƯU HÓA ===
-
-                // 1. THÊM VÀO: Định nghĩa chiều rộng cho thumbnail (ví dụ: 320px là đủ)
                 const THUMBNAIL_WIDTH = 320;
-
-                // 2. THÊM VÀO: Tính toán chiều cao tương ứng để giữ đúng tỷ lệ khung hình
+                if (!player.videoWidth || !player.videoHeight) {
+                    throw new Error('Video chưa sẵn sàng để chụp frame.');
+                }
                 const aspectRatio = player.videoHeight / player.videoWidth;
                 const thumbnailHeight = Math.round(THUMBNAIL_WIDTH * aspectRatio);
-
-                // 3. SỬA ĐỔI: Set kích thước canvas theo thumbnail, không phải video gốc
                 captureCanvas.width = THUMBNAIL_WIDTH;
                 captureCanvas.height = thumbnailHeight;
-
                 const context = captureCanvas.getContext('2d');
-
-                // 4. SỬA ĐỔI: Vẽ video gốc vào canvas nhỏ (nó sẽ tự động co lại)
+                if (!context) throw new Error('Không thể khởi tạo canvas để chụp frame.');
                 context.drawImage(player, 0, 0, THUMBNAIL_WIDTH, thumbnailHeight);
-
-                // 5. SỬA ĐỔI: Tạo Data URL từ canvas nhỏ này, chất lượng có thể giảm một chút để tối ưu hơn
-                const imagePathDataUrl = captureCanvas.toDataURL('image/jpeg', 0.8); // Giảm quality xuống 0.8
-
-                // === KẾT THÚC PHẦN TỐI ƯU HÓA ===
+                const thumbnailBlob = await new Promise(resolve => captureCanvas.toBlob(resolve, 'image/webp', 0.75));
+                if (!thumbnailBlob) throw new Error('Không thể nén thumbnail frame.');
 
                 const minutes = Math.floor(currentTime / 60);
                 const seconds = (currentTime % 60).toFixed(3);
                 const newTimestamp = `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(6, '0')}`;
+                const frameIdentifier = `${videoName}_${frameNumber}`;
+                if (queuedFramesSet.has(frameIdentifier)) {
+                    showToastNotification(`Frame ${frameIdentifier} đã có trong queue.`, 'info');
+                    return;
+                }
 
                 const newFrameData = {
                     videoName,
-                    path: imagePathDataUrl, // Gửi đi Data URL của thumbnail
                     frame_id_ori: frameNumber,
                     id: frameNumber,
                     timestamp: newTimestamp,
-                    frameIdentifier: `${videoName}_${frameNumber}`,
+                    frameIdentifier,
+                    thumbnailRequestId: createRequestId(),
                     score: 0,
                     temporal_score: 0,
                     videoPath: getHlsPlaylistUrl(videoName),
@@ -6638,7 +6662,10 @@ document.addEventListener('DOMContentLoaded', function () {
                     isFromVideo: true
                 };
 
+                releaseLocalQueueThumbnail(frameIdentifier);
+                localQueueThumbnailUrls.set(frameIdentifier, URL.createObjectURL(thumbnailBlob));
                 addFramesToQueue([newFrameData]);
+                void uploadQueueThumbnail(newFrameData, thumbnailBlob);
             } catch (error) {
                 console.error("Lỗi khi chụp frame:", error);
                 showToastNotification("Không thể chụp frame.", "error");
@@ -7382,6 +7409,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function renderFullQueue(queueItems) {
         // queueItems.reverse();
         // Cập nhật Map cục bộ để dễ truy xuất
+        releaseMissingLocalQueueThumbnails(queueItems);
         submitQueueFrames.clear();
         queueItems.forEach(item => submitQueueFrames.set(item.frameIdentifier, item));
 
@@ -7409,6 +7437,10 @@ document.addEventListener('DOMContentLoaded', function () {
             const isWrongClass = wrongSubmissionIds.has(frameData.frameIdentifier) ? 'is-wrong-submission' : '';
 
             const frameElement = document.createElement('div');
+            const thumbnailUrl = getQueueThumbnailUrl(frameData);
+            const thumbnailMarkup = thumbnailUrl
+                ? `<img src="${thumbnailUrl}" data-frame-source="${thumbnailUrl}" alt="Queued frame" loading="lazy">`
+                : `<div class="queue-thumbnail-placeholder">${queueThumbnailUploadFailures.has(frameData.frameIdentifier) ? 'Preview unavailable' : 'Loading preview...'}</div>`;
             frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass} ${isSpecialClass} ${isWrongClass}`; frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.style.borderColor = userColor;
@@ -7416,7 +7448,7 @@ document.addEventListener('DOMContentLoaded', function () {
             // Tạo cấu trúc HTML bên trong
             frameElement.innerHTML = `
             <div class="queue-frame-image-container">
-            <img src="${resolveFrameUrl(frameData.path)}" data-frame-source="${frameData.path}" alt="Queued frame">
+            ${thumbnailMarkup}
             <div class="queue-frame-user">${frameData.added_by}</div>
             ${frameData.vote_count > 0 ? `
                 <div class="queue-frame-vote">
@@ -9660,6 +9692,40 @@ document.addEventListener('DOMContentLoaded', function () {
         if (frameSelectionManager.getSelectionCount() > 0) {
             frameSelectionManager.clearAllSelections();
         }
+    }
+
+    async function uploadQueueThumbnail(frameData, thumbnailBlob, attempt = 0) {
+        const formData = new FormData();
+        formData.append('file', thumbnailBlob, `${frameData.frameIdentifier}.webp`);
+        formData.append('frame_identifier', frameData.frameIdentifier);
+        formData.append('thumbnail_request_id', frameData.thumbnailRequestId);
+
+        try {
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/queue-thumbnail`, {
+                method: 'POST',
+                body: formData,
+            });
+            if (!response.ok) throw new Error(`HTTP ${response.status}`);
+            applyQueueThumbnailUpdate(await response.json());
+        } catch (error) {
+            if (attempt < 2) {
+                setTimeout(() => void uploadQueueThumbnail(frameData, thumbnailBlob, attempt + 1), 1500 * (attempt + 1));
+                return;
+            }
+            queueThumbnailUploadFailures.add(frameData.frameIdentifier);
+            console.warn('Queue thumbnail upload failed; the frame remains in the queue.', error);
+            showToastNotification('Frame đã vào queue, nhưng preview chưa thể đồng bộ.', 'error');
+            renderFullQueue([...submitQueueFrames.values()]);
+        }
+    }
+
+    function applyQueueThumbnailUpdate({ frameIdentifier, thumbnailPath }) {
+        const frameData = submitQueueFrames.get(frameIdentifier);
+        if (!frameData || !thumbnailPath) return;
+        frameData.thumbnailPath = thumbnailPath;
+        queueThumbnailUploadFailures.delete(frameIdentifier);
+        releaseLocalQueueThumbnail(frameIdentifier);
+        renderFullQueue([...submitQueueFrames.values()]);
     }
 
 
