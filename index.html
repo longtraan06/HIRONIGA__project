@@ -688,6 +688,25 @@
         </div>
     </div>
 
+    <section id="activeQueryBar" class="active-query-bar" aria-label="Active user query history">
+        <div id="activeQueryUsers" class="active-query-users" aria-live="polite">
+            <span class="active-query-bar-status">Connecting query history...</span>
+        </div>
+        <button id="collapseActiveQueryBarBtn" class="active-query-bar-toggle" type="button" title="Hide active query history" aria-label="Hide active query history">
+            <i class="fas fa-chevron-down" aria-hidden="true"></i>
+        </button>
+    </section>
+    <button id="expandActiveQueryBarBtn" class="active-query-bar-reveal" type="button" title="Show active query history" aria-label="Show active query history" hidden>
+        <i class="fas fa-users" aria-hidden="true"></i>
+    </button>
+    <section id="activeQueryHistoryPopover" class="active-query-history-popover" hidden role="dialog" aria-label="User query history">
+        <div class="active-query-history-header">
+            <strong id="activeQueryHistoryTitle"></strong>
+            <button id="closeActiveQueryHistoryBtn" type="button" aria-label="Close query history">&times;</button>
+        </div>
+        <div id="activeQueryHistoryContent" class="active-query-history-content"></div>
+    </section>
+
     <div id="historyMenu" class="history-menu">
         <div class="history-menu-header">
             <h3>Search History</h3>

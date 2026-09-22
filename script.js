@@ -295,7 +295,17 @@ document.addEventListener('DOMContentLoaded', function () {
     let pendingTemporalImageFrame = null;
     let temporalImageActionIndex = 0;
     let wsRetryDelayMs = 3000;
+    let wsGeneration = 0;
+    let wsReconnectTimer = null;
     let userColors = {}; // Lưu màu của tất cả user
+    const queryActivityUsers = new Map();
+    const queryActivityHistory = new Map();
+    let activeQueryHistoryUserId = null;
+    let activeQueryHistoryAbortController = null;
+    let activeQueryHistoryViewBaseline = 0;
+    let queryActivityRenderFrame = null;
+    let queryActivityConnectionId = null;
+    let isActiveQueryBarCollapsed = false;
 
     let metadataCache = new Map();
     const videoKeyframeWindowCache = new Map();
@@ -1600,6 +1610,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         setupKeyboardNavigation();
         setupSearchTypingAutofocus();
+        setupActiveQueryHistory();
         connectWebSocket();
 
         // Prevent right-click context menu
@@ -2731,6 +2742,304 @@ document.addEventListener('DOMContentLoaded', function () {
 
 
     // quan ly nguoi dung
+    function getActiveQueryBarStorageKey() {
+        return `aic_lunch:${currentUserId}:active_query_bar_collapsed`;
+    }
+
+    function getQueryActivitySeenStorageKey() {
+        return `aic_lunch:${currentUserId}:query_activity_seen_revisions`;
+    }
+
+    function getQueryActivityUserToken(user) {
+        return `${user.userId}:${user.generation}`;
+    }
+
+    function getQueryActivitySeenRevisions() {
+        try {
+            const parsed = JSON.parse(localStorage.getItem(getQueryActivitySeenStorageKey()) || '{}');
+            return parsed && typeof parsed === 'object' ? parsed : {};
+        } catch (error) {
+            console.warn('Unable to read query activity view state.', error);
+            return {};
+        }
+    }
+
+    function markQueryActivitySeen(user) {
+        if (!user) return;
+        const seen = getQueryActivitySeenRevisions();
+        seen[getQueryActivityUserToken(user)] = Number(user.revision) || 0;
+        try {
+            localStorage.setItem(getQueryActivitySeenStorageKey(), JSON.stringify(seen));
+        } catch (error) {
+            console.warn('Unable to save query activity view state.', error);
+        }
+    }
+
+    function isQueryActivityUnread(user) {
+        if (!user || user.userId === currentUserId || activeQueryHistoryUserId === user.userId) return false;
+        const seen = getQueryActivitySeenRevisions();
+        return (Number(user.revision) || 0) > (Number(seen[getQueryActivityUserToken(user)]) || 0);
+    }
+
+    function scheduleActiveQueryBarRender() {
+        if (queryActivityRenderFrame !== null) return;
+        queryActivityRenderFrame = requestAnimationFrame(() => {
+            queryActivityRenderFrame = null;
+            renderActiveQueryBar();
+        });
+    }
+
+    function updateActiveQueryBarVisibility() {
+        const bar = document.getElementById('activeQueryBar');
+        const revealButton = document.getElementById('expandActiveQueryBarBtn');
+        if (!bar || !revealButton) return;
+        bar.hidden = isActiveQueryBarCollapsed;
+        revealButton.hidden = !isActiveQueryBarCollapsed;
+        document.body.classList.toggle('active-query-bar-visible', !isActiveQueryBarCollapsed);
+    }
+
+    function setActiveQueryBarCollapsed(collapsed) {
+        isActiveQueryBarCollapsed = collapsed;
+        try {
+            localStorage.setItem(getActiveQueryBarStorageKey(), String(collapsed));
+        } catch (error) {
+            console.warn('Unable to save active query bar visibility.', error);
+        }
+        if (collapsed) closeActiveQueryHistory();
+        updateActiveQueryBarVisibility();
+    }
+
+    function renderActiveQueryBar() {
+        const usersContainer = document.getElementById('activeQueryUsers');
+        if (!usersContainer) return;
+        const users = [...queryActivityUsers.values()]
+            .filter(user => user.userId !== currentUserId)
+            .sort((left, right) => String(left.username || '').localeCompare(String(right.username || '')));
+        const fragment = document.createDocumentFragment();
+        if (!users.length) {
+            const status = document.createElement('span');
+            status.className = 'active-query-bar-status';
+            status.textContent = 'No active users';
+            fragment.appendChild(status);
+        } else {
+            users.forEach(user => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'active-query-user';
+                button.classList.toggle('is-open', activeQueryHistoryUserId === user.userId);
+                button.dataset.userId = user.userId;
+                button.style.setProperty('--query-user-color', user.color || '#8AB86E');
+                button.title = `View ${user.username}'s query history`;
+                button.textContent = user.username || 'Anonymous';
+                if (isQueryActivityUnread(user)) {
+                    const dot = document.createElement('span');
+                    dot.className = 'active-query-unread-dot';
+                    dot.setAttribute('aria-label', 'New queries');
+                    button.appendChild(dot);
+                }
+                button.addEventListener('click', event => openActiveQueryHistory(user.userId, event.currentTarget));
+                fragment.appendChild(button);
+            });
+        }
+        usersContainer.replaceChildren(fragment);
+    }
+
+    function renderActiveQueryHistory() {
+        const content = document.getElementById('activeQueryHistoryContent');
+        const title = document.getElementById('activeQueryHistoryTitle');
+        const user = queryActivityUsers.get(activeQueryHistoryUserId);
+        if (!content || !title || !user) return;
+        title.textContent = `${user.username || 'Anonymous'}'s queries`;
+        const fragment = document.createDocumentFragment();
+        if (user.historyLoading) {
+            const loading = document.createElement('p');
+            loading.className = 'active-query-history-state';
+            loading.textContent = 'Loading history...';
+            fragment.appendChild(loading);
+        } else if (user.historyError) {
+            const error = document.createElement('p');
+            error.className = 'active-query-history-state';
+            error.textContent = 'Unable to load history.';
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.className = 'active-query-history-retry';
+            retry.textContent = 'Try again';
+            retry.addEventListener('click', () => loadActiveQueryHistory(user));
+            fragment.append(error, retry);
+        } else {
+            const entries = queryActivityHistory.get(user.userId) || [];
+            if (!entries.length) {
+                const empty = document.createElement('p');
+                empty.className = 'active-query-history-empty';
+                empty.textContent = 'No submitted queries in this session.';
+                fragment.appendChild(empty);
+            } else {
+                entries.forEach(entry => {
+                    const item = document.createElement('button');
+                    item.type = 'button';
+                    item.className = 'active-query-history-item';
+                    item.classList.toggle('is-new', Number(entry.revision) > activeQueryHistoryViewBaseline);
+                    item.title = 'Copy query';
+                    item.setAttribute('aria-label', `Copy query: ${entry.text || ''}`);
+                    item.addEventListener('click', () => {
+                        copyQueryToClipboard(entry.text || '')
+                            .then(() => showToastNotification('Đã sao chép query.', 'success'))
+                            .catch(error => {
+                                console.error('Unable to copy active query history entry.', error);
+                                showToastNotification('Không thể sao chép query.', 'error');
+                            });
+                    });
+                    const text = document.createElement('div');
+                    text.className = 'active-query-history-text';
+                    text.textContent = entry.text || '';
+                    const timestamp = document.createElement('time');
+                    timestamp.className = 'active-query-history-time';
+                    timestamp.textContent = Number.isFinite(Number(entry.createdAt))
+                        ? new Date(Number(entry.createdAt)).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                        : '';
+                    item.append(text, timestamp);
+                    fragment.appendChild(item);
+                });
+            }
+        }
+        content.replaceChildren(fragment);
+    }
+
+    function mergeQueryActivityEntries(userId, entries) {
+        const existing = queryActivityHistory.get(userId) || [];
+        const byId = new Map(existing.map(entry => [entry.id, entry]));
+        entries.forEach(entry => {
+            if (entry?.id) byId.set(entry.id, entry);
+        });
+        queryActivityHistory.set(userId, [...byId.values()]
+            .sort((left, right) => Number(right.revision) - Number(left.revision))
+            .slice(0, 50));
+    }
+
+    function positionActiveQueryHistoryPopover(anchor) {
+        const popover = document.getElementById('activeQueryHistoryPopover');
+        if (!popover || !anchor) return;
+        const desiredLeft = anchor.getBoundingClientRect().left;
+        popover.style.left = `${Math.max(8, Math.min(desiredLeft, window.innerWidth - 368))}px`;
+    }
+
+    function openActiveQueryHistory(userId, anchor) {
+        const user = queryActivityUsers.get(userId);
+        const popover = document.getElementById('activeQueryHistoryPopover');
+        if (!user || !popover) return;
+        if (activeQueryHistoryUserId === userId && !popover.hidden) {
+            closeActiveQueryHistory();
+            return;
+        }
+        activeQueryHistoryAbortController?.abort();
+        const seen = getQueryActivitySeenRevisions();
+        activeQueryHistoryViewBaseline = Number(seen[getQueryActivityUserToken(user)]) || 0;
+        activeQueryHistoryUserId = userId;
+        markQueryActivitySeen(user);
+        popover.hidden = false;
+        positionActiveQueryHistoryPopover(anchor);
+        scheduleActiveQueryBarRender();
+        if ((queryActivityHistory.get(userId) || []).length) {
+            renderActiveQueryHistory();
+        }
+        loadActiveQueryHistory(user);
+    }
+
+    function closeActiveQueryHistory() {
+        activeQueryHistoryAbortController?.abort();
+        activeQueryHistoryAbortController = null;
+        activeQueryHistoryUserId = null;
+        const popover = document.getElementById('activeQueryHistoryPopover');
+        if (popover) popover.hidden = true;
+        scheduleActiveQueryBarRender();
+    }
+
+    async function loadActiveQueryHistory(user) {
+        if (!user || activeQueryHistoryUserId !== user.userId) return;
+        activeQueryHistoryAbortController?.abort();
+        const controller = new AbortController();
+        activeQueryHistoryAbortController = controller;
+        user.historyLoading = true;
+        user.historyError = false;
+        renderActiveQueryHistory();
+        try {
+            const response = await fetch(
+                `${APP_CONFIG.REMOTE_BASE_URL}/api/query-activity/${encodeURIComponent(user.userId)}?generation=${encodeURIComponent(user.generation)}`,
+                { signal: controller.signal },
+            );
+            if (!response.ok) throw new Error(`History request failed with ${response.status}`);
+            const data = await response.json();
+            if (activeQueryHistoryUserId !== user.userId || user.generation !== data.generation) return;
+            mergeQueryActivityEntries(user.userId, Array.isArray(data.entries) ? data.entries : []);
+            user.revision = Math.max(Number(user.revision) || 0, Number(data.revision) || 0);
+            markQueryActivitySeen(user);
+            user.historyError = false;
+        } catch (error) {
+            if (error.name === 'AbortError') return;
+            console.warn('Unable to load active query history.', error);
+            user.historyError = true;
+        } finally {
+            if (activeQueryHistoryAbortController === controller) activeQueryHistoryAbortController = null;
+            user.historyLoading = false;
+            if (activeQueryHistoryUserId === user.userId) renderActiveQueryHistory();
+        }
+    }
+
+    function applyQueryActivitySnapshot(users) {
+        queryActivityUsers.clear();
+        (Array.isArray(users) ? users : []).forEach(user => {
+            if (!user?.userId || !user.generation) return;
+            queryActivityUsers.set(user.userId, { ...user, revision: Number(user.revision) || 0 });
+        });
+        scheduleActiveQueryBarRender();
+    }
+
+    function applyQueryActivityUserUpdate(user) {
+        if (!user?.userId || !user.generation) return;
+        const previous = queryActivityUsers.get(user.userId);
+        if (previous?.generation !== user.generation) queryActivityHistory.delete(user.userId);
+        queryActivityUsers.set(user.userId, {
+            ...previous,
+            ...user,
+            revision: Math.max(Number(previous?.revision) || 0, Number(user.revision) || 0),
+        });
+        scheduleActiveQueryBarRender();
+    }
+
+    function applyQueryActivityAdded(payload) {
+        if (payload?.user) applyQueryActivityUserUpdate(payload.user);
+        const user = queryActivityUsers.get(payload?.userId);
+        if (!user || user.generation !== payload.generation || !payload.query?.id) return;
+        user.revision = Math.max(Number(user.revision) || 0, Number(payload.revision) || 0);
+        mergeQueryActivityEntries(user.userId, [payload.query]);
+        if (activeQueryHistoryUserId === user.userId) {
+            markQueryActivitySeen(user);
+            renderActiveQueryHistory();
+        }
+        scheduleActiveQueryBarRender();
+    }
+
+    function setupActiveQueryHistory() {
+        const collapseButton = document.getElementById('collapseActiveQueryBarBtn');
+        const expandButton = document.getElementById('expandActiveQueryBarBtn');
+        const closeButton = document.getElementById('closeActiveQueryHistoryBtn');
+        isActiveQueryBarCollapsed = localStorage.getItem(getActiveQueryBarStorageKey()) === 'true';
+        collapseButton?.addEventListener('click', () => setActiveQueryBarCollapsed(true));
+        expandButton?.addEventListener('click', () => setActiveQueryBarCollapsed(false));
+        closeButton?.addEventListener('click', closeActiveQueryHistory);
+        document.addEventListener('click', event => {
+            const popover = document.getElementById('activeQueryHistoryPopover');
+            const bar = document.getElementById('activeQueryBar');
+            if (!popover?.hidden && !popover.contains(event.target) && !bar?.contains(event.target)) {
+                closeActiveQueryHistory();
+            }
+        });
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape' && activeQueryHistoryUserId) closeActiveQueryHistory();
+        });
+        updateActiveQueryBarVisibility();
+    }
+
     function getUsername() {
         let username = localStorage.getItem('aic_lunch_username');
         while (!username || username.trim() === '') {
@@ -2742,11 +3051,26 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function connectWebSocket() {
         currentUser = getUsername();
+        const previousSocket = ws;
+        const connectionGeneration = ++wsGeneration;
+        if (wsReconnectTimer) {
+            clearTimeout(wsReconnectTimer);
+            wsReconnectTimer = null;
+        }
+        if (previousSocket && (previousSocket.readyState === WebSocket.CONNECTING || previousSocket.readyState === WebSocket.OPEN)) {
+            previousSocket.close();
+        }
+        queryActivityConnectionId = createRequestId();
+        const params = new URLSearchParams({
+            user_id: currentUserId,
+            connection_id: queryActivityConnectionId,
+        });
+        const wsUrl = `${APP_CONFIG.WEBSOCKET_URL}/ws/queue/${encodeURIComponent(currentUser)}?${params}`;
+        const socket = new WebSocket(wsUrl);
+        ws = socket;
 
-        const wsUrl = `${APP_CONFIG.WEBSOCKET_URL}/ws/queue/${currentUser}`;
-        ws = new WebSocket(wsUrl);
-
-        ws.onopen = () => {
+        socket.onopen = () => {
+            if (connectionGeneration !== wsGeneration) return;
             console.log("WebSocket connection established for user:", currentUser);
             wsRetryDelayMs = 3000; // reset backoff
             trakePendingMutations.forEach(mutation => {
@@ -2755,25 +3079,29 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
             });
             trakePendingClears.forEach(clear => {
-                ws.send(JSON.stringify({ action: 'clear_trake_event', payload: clear.payload }));
+                socket.send(JSON.stringify({ action: 'clear_trake_event', payload: clear.payload }));
             });
         };
 
-        ws.onmessage = (event) => {
-            const message = JSON.parse(event.data);
-            handleWebSocketMessage(message);
+        socket.onmessage = (event) => {
+            if (connectionGeneration !== wsGeneration) return;
+            try {
+                handleWebSocketMessage(JSON.parse(event.data));
+            } catch (error) {
+                console.warn('Invalid WebSocket message ignored.', error);
+            }
         };
 
-        ws.onclose = () => {
+        socket.onclose = () => {
+            if (connectionGeneration !== wsGeneration) return;
             console.log("WebSocket connection closed. Attempting to reconnect...");
-            // Thử kết nối lại sau 3 giây
-            setTimeout(connectWebSocket, wsRetryDelayMs);
+            wsReconnectTimer = setTimeout(connectWebSocket, wsRetryDelayMs);
             wsRetryDelayMs = Math.min(wsRetryDelayMs * 2, 60000);
         };
 
-        ws.onerror = (error) => {
+        socket.onerror = (error) => {
             console.error("WebSocket error:", error);
-            ws.close();
+            socket.close();
         };
     }
 
@@ -2802,6 +3130,35 @@ document.addEventListener('DOMContentLoaded', function () {
         // Xử lý các action cập nhật queue và trạng thái ban đầu
         // Những action này sẽ render lại một phần hoặc toàn bộ giao diện
         switch (action) {
+            case 'query_activity_snapshot':
+                try {
+                    applyQueryActivitySnapshot(payload?.users);
+                } catch (error) {
+                    console.warn('Query activity snapshot ignored.', error);
+                }
+                break;
+            case 'query_activity_user_updated':
+                try {
+                    applyQueryActivityUserUpdate(payload?.user);
+                } catch (error) {
+                    console.warn('Query activity user update ignored.', error);
+                }
+                break;
+            case 'query_activity_added':
+                try {
+                    applyQueryActivityAdded(payload);
+                } catch (error) {
+                    console.warn('Query activity update ignored.', error);
+                }
+                break;
+            case 'query_activity_user_left':
+                if (payload?.userId) {
+                    queryActivityUsers.delete(payload.userId);
+                    queryActivityHistory.delete(payload.userId);
+                    if (activeQueryHistoryUserId === payload.userId) closeActiveQueryHistory();
+                    scheduleActiveQueryBarRender();
+                }
+                break;
             case 'init_state':
                 if (window.isInitialStateReceived === undefined) {
                     wrongSubmissionIds = new Set(payload.wrongSubmissionIds || []);
@@ -4594,11 +4951,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
             let searchPromise;
             if (type === 'text') {
+                const queryHistoryId = createRequestId();
                 if (currentSearchMode === 'text-to-image') {
                     // Tách riêng logic temporal search
                     const isFirstSearch = !searchGroup.previousElementSibling;
                         if (isFirstSearch) {
-                            searchPromise = callTemporalSearchStart(finalQuery, getSelectedModelSpec(), filterOptions, searchGroup)
+                            searchPromise = callTemporalSearchStart(finalQuery, getSelectedModelSpec(), filterOptions, searchGroup, queryHistoryId)
                             .then(response => {
                                 temporalChainActive = true;
                                 searchGroup.dataset.submitted = 'true';
@@ -4606,7 +4964,7 @@ document.addEventListener('DOMContentLoaded', function () {
                                 manageNextSearchInput();
                             });
                     } else {
-                        searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, getSelectedModelSpec(), filterOptions, searchGroup)
+                        searchPromise = callTemporalSearchContinue(finalQuery, currentUserId, getSelectedModelSpec(), filterOptions, searchGroup, queryHistoryId)
                             .then(response => {
                                 searchGroup.dataset.submitted = 'true';
                                 handleSearchResults(response.query_A_reranked, true);
@@ -4743,12 +5101,14 @@ document.addEventListener('DOMContentLoaded', function () {
             });
     }
 
-    function callTemporalSearchStart(query, modelName, filterOptions, searchGroup) {
+    function callTemporalSearchStart(query, modelName, filterOptions, searchGroup, queryHistoryId) {
         const queryId = searchGroup.dataset.searchId;
         const body = {
             query: query,
             user_id: currentUserId,
             query_id: queryId,
+            username: currentUser,
+            query_history_id: queryHistoryId,
             cluster_mode_enabled: clusterModeEnabled
         };
         if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
@@ -4824,12 +5184,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // Hàm này được gọi khi tìm kiếm query B, C...
-    function callTemporalSearchContinue(query, chainId, modelName, filterOptions, searchGroup) {
+    function callTemporalSearchContinue(query, chainId, modelName, filterOptions, searchGroup, queryHistoryId) {
         const queryId = searchGroup.dataset.searchId;
         const body = {
             query: query,
             chain_id: chainId,
+            user_id: currentUserId,
             query_id: queryId,
+            username: currentUser,
+            query_history_id: queryHistoryId,
             cluster_mode_enabled: clusterModeEnabled
         };
         if (filterOptions.use_event_filter) {

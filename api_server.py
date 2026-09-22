@@ -727,6 +727,8 @@ milvus: Optional[DatabaseServiceClient] = None
 tnac_service_url = os.getenv("TNAC_SERVICE_URL", "http://192.168.20.150:8454")
 tnac: Optional[TNACServiceClient] = None
 tnac_warmup_task: Optional[asyncio.Task] = None
+query_history_worker_task: Optional[asyncio.Task] = None
+query_presence_maintenance_task: Optional[asyncio.Task] = None
 
 
 # clear cache method
@@ -740,7 +742,7 @@ ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
 @app.on_event("startup")
 async def startup_event():
-    global milvus, tnac, tnac_warmup_task
+    global milvus, tnac, tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task
     milvus = DatabaseServiceClient(database_service_url)
     try:
         health = await milvus.health_check()
@@ -754,6 +756,8 @@ async def startup_event():
     )
     tnac = TNACServiceClient(tnac_service_url)
     tnac_warmup_task = asyncio.create_task(warmup_tnac())
+    query_history_worker_task = asyncio.create_task(query_history_worker())
+    query_presence_maintenance_task = asyncio.create_task(query_presence_maintenance_loop())
 
 
 async def warmup_tnac():
@@ -769,11 +773,12 @@ async def warmup_tnac():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global tnac_warmup_task
-    if tnac_warmup_task is not None:
-        tnac_warmup_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await tnac_warmup_task
+    global tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task
+    for task in (tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task):
+        if task is not None:
+            task.cancel()
+            with suppress(asyncio.CancelledError):
+                await task
     if milvus is not None:
         await milvus.aclose()
     if tnac is not None:
@@ -1017,17 +1022,20 @@ class ConnectionManager:
         self.connection_users: Dict[WebSocket, str] = {}
         self.connection_queues: Dict[WebSocket, asyncio.PriorityQueue] = {}
         self.writer_tasks: Dict[WebSocket, asyncio.Task] = {}
+        self.connection_query_sessions: Dict[WebSocket, tuple[str, str]] = {}
         self.message_sequence = 0
         self.redis_pubsub_client = None
         self.listener_task = None
 
-    async def connect(self, websocket: WebSocket, username: str):
+    async def connect(self, websocket: WebSocket, username: str, user_id: Optional[str] = None, connection_id: Optional[str] = None):
         """Chấp nhận kết nối mới và khởi tạo listener nếu cần."""
         await websocket.accept()
         self.active_connections.setdefault(username, set()).add(websocket)
         self.connection_users[websocket] = username
         self.connection_queues[websocket] = asyncio.PriorityQueue(maxsize=64)
         self.writer_tasks[websocket] = asyncio.create_task(self._connection_writer(websocket))
+        if user_id and connection_id:
+            self.connection_query_sessions[websocket] = (user_id, connection_id)
 
         # Chỉ khởi tạo một lần cho mỗi worker
         if self.redis_pubsub_client is None:
@@ -1057,6 +1065,10 @@ class ConnectionManager:
                     self.active_connections.pop(username, None)
 
         self.connection_queues.pop(websocket, None)
+        query_session = self.connection_query_sessions.pop(websocket, None)
+        if query_session:
+            # Keep the session visible for the reconnect grace period after a clean close.
+            asyncio.create_task(defer_query_activity_connection_expiry(*query_session))
         writer_task = self.writer_tasks.pop(websocket, None)
         if writer_task and writer_task is not asyncio.current_task():
             writer_task.cancel()
@@ -1069,7 +1081,7 @@ class ConnectionManager:
         for connection in connections:
             self._remove_connection(connection)
 
-    def enqueue(self, websocket: WebSocket, message: str, priority: int = 1) -> bool:
+    def enqueue(self, websocket: WebSocket, message: str, priority: int = 1, drop_if_full: bool = False) -> bool:
         queue = self.connection_queues.get(websocket)
         if queue is None:
             return False
@@ -1078,6 +1090,8 @@ class ConnectionManager:
             queue.put_nowait((priority, self.message_sequence, message))
             return True
         except asyncio.QueueFull:
+            if drop_if_full:
+                return False
             print("[WS] Closing slow client with a full outbound queue")
             self._remove_connection(websocket)
             asyncio.create_task(websocket.close(code=1013, reason="Outbound queue full"))
@@ -1099,9 +1113,19 @@ class ConnectionManager:
                     while True:
                         message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=None)
                         if message and message["type"] == "message":
+                            try:
+                                action = json.loads(message["data"]).get("action")
+                            except (TypeError, ValueError, json.JSONDecodeError):
+                                action = None
+                            is_query_activity = action in {
+                                "query_activity_snapshot",
+                                "query_activity_user_updated",
+                                "query_activity_added",
+                                "query_activity_user_left",
+                            }
                             living_connections = list(self.connection_queues)
                             for connection in living_connections:
-                                self.enqueue(connection, message["data"])
+                                self.enqueue(message=message["data"], websocket=connection, priority=2 if is_query_activity else 1, drop_if_full=is_query_activity)
 
             except (aioredis.exceptions.ConnectionError, asyncio.TimeoutError) as e:
                 # Nếu mất kết nối với Redis, in lỗi và thử kết nối lại sau 1 khoảng thời gian
@@ -1136,6 +1160,14 @@ TRAKE_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 QUEUE_THUMBNAIL_DIR = PROJECT_DIR / "queue_thumbnails"
 QUEUE_THUMBNAIL_DIR.mkdir(parents=True, exist_ok=True)
 MAX_QUEUE_THUMBNAIL_BYTES = 1_000_000
+QUERY_ACTIVITY_PROFILES_KEY = "query_activity:profiles"
+QUERY_ACTIVITY_CONNECTION_PREFIX = "query_activity:connections:"
+QUERY_ACTIVITY_HISTORY_PREFIX = "query_activity:history:"
+QUERY_ACTIVITY_REVISION_PREFIX = "query_activity:revision:"
+QUERY_ACTIVITY_CONNECTION_TTL_SECONDS = 15
+QUERY_ACTIVITY_HISTORY_TTL_SECONDS = 3600
+QUERY_ACTIVITY_MAX_HISTORY = 50
+query_history_events: asyncio.Queue[dict] = asyncio.Queue(maxsize=500)
 QUEUE_THUMBNAIL_SET_SCRIPT = """
 local raw_frame = redis.call('HGET', KEYS[1], ARGV[1])
 if not raw_frame then
@@ -1165,6 +1197,206 @@ def get_color_for_user(username: str) -> str:
     return f"rgb({r},{g},{b})"
 
 
+def normalize_query_activity_value(value: Optional[str], maximum_length: int) -> str:
+    return str(value or "").strip()[:maximum_length]
+
+
+def query_activity_history_key(user_id: str, generation: str) -> str:
+    return f"{QUERY_ACTIVITY_HISTORY_PREFIX}{user_id}:{generation}"
+
+
+def query_activity_revision_key(user_id: str, generation: str) -> str:
+    return f"{QUERY_ACTIVITY_REVISION_PREFIX}{user_id}:{generation}"
+
+
+async def publish_query_activity(action: str, payload: dict) -> None:
+    try:
+        await manager.publish_update(json.dumps({"action": action, "payload": payload}))
+    except Exception as error:
+        print(f"[QUERY ACTIVITY] Failed to broadcast {action}: {error}")
+
+
+async def register_query_activity_connection(user_id: str, username: str, connection_id: str) -> dict:
+    now = time.time()
+    user_id = normalize_query_activity_value(user_id, 160)
+    username = normalize_query_activity_value(username, 80) or "Anonymous"
+    connection_id = normalize_query_activity_value(connection_id, 160)
+    if not user_id or not connection_id:
+        return {}
+    raw_profile = await redis_async_client.hget(QUERY_ACTIVITY_PROFILES_KEY, user_id)
+    try:
+        profile = json.loads(raw_profile) if raw_profile else {}
+    except (TypeError, ValueError):
+        profile = {}
+    profile = {
+        "userId": user_id,
+        "username": username,
+        "color": get_color_for_user(username),
+        "generation": profile.get("generation") or uuid.uuid4().hex,
+        "revision": int(profile.get("revision") or 0),
+    }
+    connection_key = f"{QUERY_ACTIVITY_CONNECTION_PREFIX}{user_id}"
+    pipe = redis_async_client.pipeline()
+    pipe.hset(QUERY_ACTIVITY_PROFILES_KEY, user_id, json.dumps(profile))
+    pipe.zadd(connection_key, {connection_id: now + QUERY_ACTIVITY_CONNECTION_TTL_SECONDS})
+    pipe.expire(connection_key, QUERY_ACTIVITY_CONNECTION_TTL_SECONDS * 3)
+    await pipe.execute()
+    return profile
+
+
+async def renew_query_activity_connections() -> None:
+    leases = list(manager.connection_query_sessions.values())
+    if not leases:
+        return
+    now = time.time()
+    pipe = redis_async_client.pipeline()
+    for user_id, connection_id in leases:
+        connection_key = f"{QUERY_ACTIVITY_CONNECTION_PREFIX}{user_id}"
+        pipe.zadd(connection_key, {connection_id: now + QUERY_ACTIVITY_CONNECTION_TTL_SECONDS})
+        pipe.expire(connection_key, QUERY_ACTIVITY_CONNECTION_TTL_SECONDS * 3)
+    await pipe.execute()
+
+
+async def defer_query_activity_connection_expiry(user_id: str, connection_id: str) -> None:
+    try:
+        await redis_async_client.zadd(
+            f"{QUERY_ACTIVITY_CONNECTION_PREFIX}{user_id}",
+            {connection_id: time.time() + QUERY_ACTIVITY_CONNECTION_TTL_SECONDS},
+        )
+    except Exception as error:
+        print(f"[QUERY ACTIVITY] Failed to preserve disconnect grace period: {error}")
+
+
+async def get_query_activity_snapshot() -> list[dict]:
+    profiles = await redis_async_client.hgetall(QUERY_ACTIVITY_PROFILES_KEY)
+    if not profiles:
+        return []
+    now = time.time()
+    parsed_profiles = []
+    pipe = redis_async_client.pipeline()
+    for user_id, raw_profile in profiles.items():
+        try:
+            profile = json.loads(raw_profile)
+        except (TypeError, ValueError):
+            continue
+        parsed_profiles.append((user_id, profile))
+        connection_key = f"{QUERY_ACTIVITY_CONNECTION_PREFIX}{user_id}"
+        pipe.zremrangebyscore(connection_key, "-inf", now)
+        pipe.zcard(connection_key)
+    counts = await pipe.execute() if parsed_profiles else []
+    active_profiles = [profile for index, (_, profile) in enumerate(parsed_profiles) if counts[index * 2 + 1]]
+    return sorted(active_profiles, key=lambda profile: profile.get("username", "").casefold())
+
+
+async def queue_query_history_event(user_id: Optional[str], username: Optional[str], event_id: Optional[str], query: str) -> None:
+    event = {
+        "user_id": normalize_query_activity_value(user_id, 160),
+        "username": normalize_query_activity_value(username, 80),
+        "event_id": normalize_query_activity_value(event_id, 160) or uuid.uuid4().hex,
+        "query": normalize_query_activity_value(query, 1000),
+    }
+    if not event["user_id"] or not event["query"]:
+        return
+    try:
+        query_history_events.put_nowait(event)
+    except asyncio.QueueFull:
+        print("[QUERY ACTIVITY] History queue is full; dropping non-critical event.")
+
+
+async def query_history_worker() -> None:
+    while True:
+        event = await query_history_events.get()
+        try:
+            raw_profile = await redis_async_client.hget(QUERY_ACTIVITY_PROFILES_KEY, event["user_id"])
+            if not raw_profile:
+                continue
+            profile = json.loads(raw_profile)
+            generation = profile.get("generation")
+            if not generation:
+                continue
+            history_key = query_activity_history_key(event["user_id"], generation)
+            existing_entries = await redis_async_client.lrange(history_key, 0, QUERY_ACTIVITY_MAX_HISTORY - 1)
+            if any(json.loads(item).get("id") == event["event_id"] for item in existing_entries):
+                continue
+            revision = await redis_async_client.incr(query_activity_revision_key(event["user_id"], generation))
+            entry = {"id": event["event_id"], "text": event["query"], "revision": revision, "createdAt": int(time.time() * 1000)}
+            profile["revision"] = revision
+            pipe = redis_async_client.pipeline()
+            pipe.lpush(history_key, json.dumps(entry))
+            pipe.ltrim(history_key, 0, QUERY_ACTIVITY_MAX_HISTORY - 1)
+            pipe.expire(history_key, QUERY_ACTIVITY_HISTORY_TTL_SECONDS)
+            pipe.expire(query_activity_revision_key(event["user_id"], generation), QUERY_ACTIVITY_HISTORY_TTL_SECONDS)
+            pipe.hset(QUERY_ACTIVITY_PROFILES_KEY, event["user_id"], json.dumps(profile))
+            await pipe.execute()
+            await publish_query_activity("query_activity_added", {
+                "userId": event["user_id"],
+                "generation": generation,
+                "revision": revision,
+                "query": entry,
+                "user": profile,
+            })
+        except Exception as error:
+            print(f"[QUERY ACTIVITY] Failed to record query: {error}")
+        finally:
+            query_history_events.task_done()
+
+
+QUERY_ACTIVITY_REMOVE_EXPIRED_USER_SCRIPT = """
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if redis.call('ZCARD', KEYS[1]) > 0 then return 0 end
+local raw_profile = redis.call('HGET', KEYS[2], ARGV[2])
+if not raw_profile then return 0 end
+local profile = cjson.decode(raw_profile)
+if profile.generation ~= ARGV[3] then return 0 end
+redis.call('HDEL', KEYS[2], ARGV[2])
+redis.call('DEL', KEYS[1], KEYS[3], KEYS[4])
+return 1
+"""
+
+
+async def expire_inactive_query_activity_users() -> None:
+    profiles = await redis_async_client.hgetall(QUERY_ACTIVITY_PROFILES_KEY)
+    now = time.time()
+    for user_id, raw_profile in profiles.items():
+        try:
+            profile = json.loads(raw_profile)
+            generation = profile["generation"]
+        except (TypeError, ValueError, KeyError):
+            continue
+        removed = await redis_async_client.eval(QUERY_ACTIVITY_REMOVE_EXPIRED_USER_SCRIPT, 4, f"{QUERY_ACTIVITY_CONNECTION_PREFIX}{user_id}", QUERY_ACTIVITY_PROFILES_KEY, query_activity_history_key(user_id, generation), query_activity_revision_key(user_id, generation), now, user_id, generation)
+        if int(removed):
+            await publish_query_activity("query_activity_user_left", {"userId": user_id, "generation": generation})
+
+
+async def query_presence_maintenance_loop() -> None:
+    while True:
+        try:
+            await renew_query_activity_connections()
+            await expire_inactive_query_activity_users()
+        except Exception as error:
+            print(f"[QUERY ACTIVITY] Presence maintenance failed: {error}")
+        await asyncio.sleep(5)
+
+
+@app.get("/api/query-activity/{user_id}")
+async def get_query_activity_history(user_id: str, generation: str = Query(..., max_length=160)):
+    user_id = normalize_query_activity_value(user_id, 160)
+    raw_profile = await redis_async_client.hget(QUERY_ACTIVITY_PROFILES_KEY, user_id)
+    if not raw_profile:
+        raise HTTPException(status_code=404, detail="User is no longer active.")
+    profile = json.loads(raw_profile)
+    if profile.get("generation") != generation:
+        raise HTTPException(status_code=409, detail="Query activity session has changed.")
+    raw_entries = await redis_async_client.lrange(query_activity_history_key(user_id, generation), 0, QUERY_ACTIVITY_MAX_HISTORY - 1)
+    entries = []
+    for raw_entry in raw_entries:
+        try:
+            entries.append(json.loads(raw_entry))
+        except (TypeError, ValueError):
+            continue
+    return {"generation": generation, "revision": profile.get("revision", 0), "entries": entries}
+
+
 
 
 # Models
@@ -1180,6 +1412,8 @@ class TemporalStartRequest(BaseModel):
     ocr_mode: Optional[str] = "cascading"
     user_id: Optional[str] = None    # <<< THÊM VÀO
     query_id: Optional[str] = None
+    username: Optional[str] = Field(default=None, max_length=80)
+    query_history_id: Optional[str] = Field(default=None, max_length=160)
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
@@ -1195,11 +1429,14 @@ class TemporalContinueRequest(BaseModel):
     use_tag: Optional[bool] = False    # <<< THÊM VÀO
     top_k_tags: Optional[int] = 5
     tags_filter: Optional[List[str]] = None
+    tag_filter: Optional[List[str]] = None
     ocr: str = None
     asr: str = None
     ocr_mode: Optional[str] = "cascading"
     query_id: Optional[str] = None
     user_id: Optional[str] = None
+    username: Optional[str] = Field(default=None, max_length=80)
+    query_history_id: Optional[str] = Field(default=None, max_length=160)
     use_event_filter: Optional[bool] = False
     ocr_fuzzy: Optional[bool] = False
     asr_fuzzy: Optional[bool] = False
@@ -2138,6 +2375,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             cluster_filter_count=len(cluster_filter),
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
+        await queue_query_history_event(req.user_id, req.username, req.query_history_id, req.query)
         # 2. Thực hiện tìm kiếm đầu tiên với user_id và query_id
         initial_results = await milvus.search(
             query=req.query,
@@ -2201,6 +2439,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             cluster_filter_count=len(cluster_filter),
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
+        await queue_query_history_event(req.user_id or req.chain_id, req.username, req.query_history_id, req.query)
 
         # 4. Thực hiện temporal search sequence
         temporal_answer = await milvus.temporal_search_sequence(
@@ -2722,8 +2961,14 @@ async def get_trake_thumbnail(filename: str):
 
 
 @app.websocket("/ws/queue/{username}")
-async def websocket_endpoint(websocket: WebSocket, username: str):
-    await manager.connect(websocket, username)
+async def websocket_endpoint(
+    websocket: WebSocket,
+    username: str,
+    user_id: Optional[str] = Query(default=None, max_length=160),
+    connection_id: Optional[str] = Query(default=None, max_length=160),
+):
+    username = normalize_query_activity_value(username, 80) or "Anonymous"
+    await manager.connect(websocket, username, user_id, connection_id)
 
     user_color = get_color_for_user(username)
     await redis_async_client.hset(QUEUE_USERS_KEY, username, user_color)
@@ -2748,6 +2993,28 @@ async def websocket_endpoint(websocket: WebSocket, username: str):
         }
     }
     manager.enqueue(websocket, json.dumps(initial_state), priority=0)
+
+    if user_id and connection_id:
+        try:
+            profile = await register_query_activity_connection(user_id, username, connection_id)
+            manager.enqueue(websocket, json.dumps({"action": "query_activity_snapshot", "payload": {"users": await get_query_activity_snapshot()}}), priority=2, drop_if_full=True)
+            if profile:
+                await publish_query_activity("query_activity_user_updated", {"user": profile})
+        except Exception as error:
+            print(f"[QUERY ACTIVITY] Failed to initialize presence: {error}")
+
+    if user_id and connection_id:
+        try:
+            profile = await register_query_activity_connection(user_id, username, connection_id)
+            snapshot = await get_query_activity_snapshot()
+            manager.enqueue(websocket, json.dumps({
+                "action": "query_activity_snapshot",
+                "payload": {"users": snapshot},
+            }), priority=2, drop_if_full=True)
+            if profile:
+                await publish_query_activity("query_activity_user_updated", {"user": profile})
+        except Exception as error:
+            print(f"[QUERY ACTIVITY] Failed to initialize presence: {error}")
 
     join_notification = {
         "action": "user_update",
