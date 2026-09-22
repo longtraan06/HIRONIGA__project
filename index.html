@@ -383,12 +383,18 @@
                                 <input id="videoTranscriptSearchInput" type="search" autocomplete="off" placeholder="Find in transcript" aria-label="Find in transcript">
                             </div>
                             <span id="videoTranscriptSearchCount" class="video-transcript-search-count" aria-live="polite">0 / 0</span>
+                            <button id="focusCurrentTranscriptBtn" class="video-transcript-focus-current-btn" type="button" aria-label="Focus current transcript" title="Focus current transcript" disabled>
+                                <i class="fas fa-crosshairs"></i>
+                            </button>
                             <button id="videoTranscriptPreviousMatchBtn" type="button" aria-label="Previous transcript match" title="Previous match">
                                 <i class="fas fa-chevron-up"></i>
                             </button>
                             <button id="videoTranscriptNextMatchBtn" type="button" aria-label="Next transcript match" title="Next match">
                                 <i class="fas fa-chevron-down"></i>
                             </button>
+                        </div>
+                        <div id="videoTranscriptSourceNotice" class="video-transcript-source-notice" hidden>
+                            Đang sử dụng transcript server fallback.
                         </div>
                         <div id="videoTranscriptStatus" class="video-transcript-status">Loading transcript...</div>
                         <div id="videoTranscriptList" class="video-transcript-list" aria-live="polite"></div>
