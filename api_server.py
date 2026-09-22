@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
+from starlette.websockets import WebSocketState
 from typing import Any, Dict, List, Literal, Optional
 import sys
 import os
@@ -1029,7 +1030,8 @@ class ConnectionManager:
 
     async def connect(self, websocket: WebSocket, username: str, user_id: Optional[str] = None, connection_id: Optional[str] = None):
         """Chấp nhận kết nối mới và khởi tạo listener nếu cần."""
-        await websocket.accept()
+        if websocket.application_state == WebSocketState.CONNECTING:
+            await websocket.accept()
         self.active_connections.setdefault(username, set()).add(websocket)
         self.connection_users[websocket] = username
         self.connection_queues[websocket] = asyncio.PriorityQueue(maxsize=64)
@@ -2968,6 +2970,8 @@ async def websocket_endpoint(
     connection_id: Optional[str] = Query(default=None, max_length=160),
 ):
     username = normalize_query_activity_value(username, 80) or "Anonymous"
+    if websocket.application_state == WebSocketState.CONNECTING:
+        await websocket.accept()
     await manager.connect(websocket, username, user_id, connection_id)
 
     user_color = get_color_for_user(username)
@@ -2998,19 +3002,6 @@ async def websocket_endpoint(
         try:
             profile = await register_query_activity_connection(user_id, username, connection_id)
             manager.enqueue(websocket, json.dumps({"action": "query_activity_snapshot", "payload": {"users": await get_query_activity_snapshot()}}), priority=2, drop_if_full=True)
-            if profile:
-                await publish_query_activity("query_activity_user_updated", {"user": profile})
-        except Exception as error:
-            print(f"[QUERY ACTIVITY] Failed to initialize presence: {error}")
-
-    if user_id and connection_id:
-        try:
-            profile = await register_query_activity_connection(user_id, username, connection_id)
-            snapshot = await get_query_activity_snapshot()
-            manager.enqueue(websocket, json.dumps({
-                "action": "query_activity_snapshot",
-                "payload": {"users": snapshot},
-            }), priority=2, drop_if_full=True)
             if profile:
                 await publish_query_activity("query_activity_user_updated", {"user": profile})
         except Exception as error:
