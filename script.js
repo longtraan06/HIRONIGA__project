@@ -93,12 +93,26 @@ async function fetchDresJson(url) {
 
 let zIndexCounter = 10000; // Bắt đầu từ một số lớn để tránh xung đột
 const activeModalStack = [];
+let imageModalRequestGeneration = 0;
+let activeImageModalClose = null;
+
+function pruneActiveModalStack() {
+    for (let index = activeModalStack.length - 1; index >= 0; index--) {
+        const modalElement = activeModalStack[index].element;
+        if (!modalElement?.isConnected || modalElement.style.display === 'none') {
+            activeModalStack.splice(index, 1);
+        }
+    }
+}
 
 function registerModalOpen(modalElement, closeFunction) {
+    pruneActiveModalStack();
     zIndexCounter++;
     modalElement.style.zIndex = zIndexCounter;
 
-    // Lưu lại thông tin modal và hàm đóng của nó
+    // A modal can be opened from overlapping async flows. Keep one stack entry
+    // per element so a close cannot leave a stale keyboard owner behind.
+    registerModalClose(modalElement);
     activeModalStack.push({
         element: modalElement,
         close: closeFunction
@@ -106,13 +120,15 @@ function registerModalOpen(modalElement, closeFunction) {
 }
 
 function registerModalClose(modalElement) {
-    const index = activeModalStack.findIndex(modal => modal.element === modalElement);
-    if (index > -1) {
-        activeModalStack.splice(index, 1);
+    for (let index = activeModalStack.length - 1; index >= 0; index--) {
+        if (activeModalStack[index].element === modalElement) {
+            activeModalStack.splice(index, 1);
+        }
     }
 }
 
 function getTopActiveModal() {
+    pruneActiveModalStack();
     if (activeModalStack.length > 0) {
         return activeModalStack[activeModalStack.length - 1];
     }
@@ -120,7 +136,13 @@ function getTopActiveModal() {
 }
 
 function closeAllActiveModals() {
-    [...activeModalStack].reverse().forEach(modal => modal.close());
+    pruneActiveModalStack();
+    const closedElements = new Set();
+    [...activeModalStack].reverse().forEach(modal => {
+        if (closedElements.has(modal.element)) return;
+        closedElements.add(modal.element);
+        modal.close();
+    });
 }
 
 function isModalKeyboardActive() {
@@ -130,6 +152,10 @@ function isModalKeyboardActive() {
 
     return Array.from(document.querySelectorAll('.image-modal, .video-modal, .vqa-modal, .mini-modal, .shortcuts-modal'))
         .some(modal => modal.style.display === 'flex');
+}
+
+function isBrowserReservedShortcut(event) {
+    return event.key === 'F5' || event.key === 'F12';
 }
 
 function getNewTopZIndex() {
@@ -278,6 +304,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const legacyVideoKeyframeIndexCache = new Map();
     const videoTranscriptCache = new Map();
     const videoTranscriptInFlight = new Map();
+    let localTranscriptIndexPromise = null;
     const VIDEO_PLAYBACK_RATES = [0.25, 0.5, 1, 1.25, 1.5, 1.75, 2];
     const VIDEO_WHEEL_STEPS = [0.25, 0.5, 1, 2, 5, 10];
     let videoWorkbenchSessionId = 0;
@@ -1407,6 +1434,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 prepareTrakeTimeline(currentVideoModalData.videoName, document.getElementById('videoPlayer').currentTime);
                 reloadVideoKeyframeWindow();
             }
+            if (videoModal.style.display === 'flex') {
+                loadVideoTranscript();
+            }
             showToastNotification(`Frame source: ${frameServeLocation === 'remote' ? 'Remote serve' : 'Local serve'}.`);
         });
 
@@ -1900,6 +1930,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Thêm listener cho phím tắt khi tương tác với queue
         document.addEventListener('keydown', (e) => {
+            if (isBrowserReservedShortcut(e)) {
+                return;
+            }
+
             if (isModalKeyboardActive()) {
                 return;
             }
@@ -3156,6 +3190,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Hàm con keydownHandler CỦA RIÊNG MODAL NÀY, sử dụng 'processedFrames'
         const keydownHandler = (e) => {
+            if (isBrowserReservedShortcut(e)) {
+                return;
+            }
+
             if (getTopActiveModal()?.element !== modal) {
                 return;
             }
@@ -5133,6 +5171,8 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
+        const requestGeneration = ++imageModalRequestGeneration;
+        activeImageModalClose?.();
         const modal = document.getElementById('imageModal');
         const mainPreview = document.getElementById('mainPreviewImage');
         const thumbnailStrip = document.getElementById('thumbnailStrip');
@@ -5246,6 +5286,13 @@ document.addEventListener('DOMContentLoaded', function () {
             if (error.name === 'AbortError') return;
             console.error("Lỗi khi tải frame lân cận trong openImageModal:", error);
             showToastNotification("Lỗi: Không thể tải dữ liệu frame lân cận.", "error");
+            return;
+        }
+
+        // Ignore an older request that finished after a newer frame was opened.
+        // Without this guard both requests register key handlers for one modal.
+        if (requestGeneration !== imageModalRequestGeneration) {
+            requestController.abort();
             return;
         }
 
@@ -5443,6 +5490,10 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         const keydownHandler = (e) => {
+            if (isBrowserReservedShortcut(e)) {
+                return;
+            }
+
             if (getTopActiveModal()?.element !== modal) {
                 return;
             }
@@ -5501,6 +5552,9 @@ document.addEventListener('DOMContentLoaded', function () {
             thumbnailStrip.replaceChildren();
 
             registerModalClose(modal);
+            if (activeImageModalClose === closeModal) {
+                activeImageModalClose = null;
+            }
 
             if (typeof onClosedCallback === 'function') {
                 setTimeout(onClosedCallback, 50);
@@ -5527,6 +5581,7 @@ document.addEventListener('DOMContentLoaded', function () {
             updateMainPreview(initialFrame);
         }
 
+        activeImageModalClose = closeModal;
         registerModalOpen(modal, closeModal);
         modal.style.display = 'flex';
 
@@ -5664,8 +5719,85 @@ document.addEventListener('DOMContentLoaded', function () {
         return match;
     }
 
-    function getVideoTranscriptApiUrl(videoName) {
+    function getRemoteVideoTranscriptApiUrl(videoName) {
         return `${APP_CONFIG.REMOTE_BASE_URL}/api/transcripts/${encodeURIComponent(videoName)}`;
+    }
+
+    function normalizeTranscriptVideoName(videoName) {
+        return String(videoName || '').replace(/\.(?:wav|mp3|mp4)$/i, '');
+    }
+
+    function parseTranscriptTimestamp(value) {
+        const parts = String(value || '').trim().split(':');
+        if (parts.length !== 3) return null;
+        const [hours, minutes, seconds] = parts.map(Number);
+        if (![hours, minutes, seconds].every(Number.isFinite)) return null;
+        return hours * 3600 + minutes * 60 + seconds;
+    }
+
+    function normalizeLocalVideoTranscript(videoName, rawSegments) {
+        const segments = rawSegments && typeof rawSegments === 'object' && !Array.isArray(rawSegments)
+            ? Object.entries(rawSegments)
+                .map(([timeRange, text]) => {
+                    if (typeof timeRange !== 'string' || typeof text !== 'string') return null;
+                    const labels = timeRange.split('-->', 2).map(label => label.trim());
+                    if (labels.length !== 2) return null;
+                    const start = parseTranscriptTimestamp(labels[0]);
+                    const end = parseTranscriptTimestamp(labels[1]);
+                    if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+                    return {
+                        start,
+                        end,
+                        start_label: labels[0],
+                        end_label: labels[1],
+                        text
+                    };
+                })
+                .filter(Boolean)
+                .sort((a, b) => a.start - b.start || a.end - b.end)
+            : [];
+        return {
+            video_name: normalizeTranscriptVideoName(videoName),
+            segments
+        };
+    }
+
+    function fetchLocalTranscriptIndex({ retry = false } = {}) {
+        if (retry) localTranscriptIndexPromise = null;
+        if (localTranscriptIndexPromise) return localTranscriptIndexPromise;
+
+        const request = fetch('transcript.json', { cache: 'force-cache' })
+            .then(async response => {
+                if (response.status === 404) return null;
+                if (!response.ok) throw new Error(`Local transcript request failed: ${response.status}`);
+                const rawTranscripts = await response.json();
+                if (!rawTranscripts || typeof rawTranscripts !== 'object' || Array.isArray(rawTranscripts)) {
+                    throw new Error('Local transcript file is invalid.');
+                }
+
+                const index = new Map();
+                Object.entries(rawTranscripts).forEach(([sourceName, rawSegments]) => {
+                    if (rawSegments && typeof rawSegments === 'object' && !Array.isArray(rawSegments)) {
+                        index.set(normalizeTranscriptVideoName(sourceName), rawSegments);
+                    }
+                });
+                return index;
+            })
+            .catch(error => {
+                if (localTranscriptIndexPromise === request) localTranscriptIndexPromise = null;
+                throw error;
+            });
+        localTranscriptIndexPromise = request;
+        return request;
+    }
+
+    function fetchRemoteVideoTranscript(videoName) {
+        return fetch(getRemoteVideoTranscriptApiUrl(videoName), { cache: 'force-cache' })
+            .then(async response => {
+                if (response.status === 404) return null;
+                if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`);
+                return normalizeVideoTranscript(videoName, await response.json());
+            });
     }
 
     function normalizeVideoTranscript(videoName, payload) {
@@ -5686,30 +5818,47 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function fetchVideoTranscript(videoName, { retry = false } = {}) {
+        const source = frameServeLocation === 'local' ? 'local' : 'remote';
+        const normalizedVideoName = normalizeTranscriptVideoName(videoName);
+        const cacheKey = `${source}:${normalizedVideoName}`;
         if (retry) {
-            videoTranscriptCache.delete(videoName);
-            videoTranscriptInFlight.delete(videoName);
+            videoTranscriptCache.delete(cacheKey);
+            videoTranscriptInFlight.delete(cacheKey);
+            if (source === 'local') localTranscriptIndexPromise = null;
         }
-        if (videoTranscriptCache.has(videoName)) {
-            return Promise.resolve(videoTranscriptCache.get(videoName));
+        if (videoTranscriptCache.has(cacheKey)) {
+            return Promise.resolve(videoTranscriptCache.get(cacheKey));
         }
-        if (videoTranscriptInFlight.has(videoName)) {
-            return videoTranscriptInFlight.get(videoName);
+        if (videoTranscriptInFlight.has(cacheKey)) {
+            return videoTranscriptInFlight.get(cacheKey);
         }
 
-        const request = fetch(getVideoTranscriptApiUrl(videoName), { cache: 'force-cache' })
-            .then(async response => {
-                if (response.status === 404) {
-                    videoTranscriptCache.set(videoName, null);
-                    return null;
-                }
-                if (!response.ok) throw new Error(`Transcript request failed: ${response.status}`);
-                const transcript = normalizeVideoTranscript(videoName, await response.json());
-                videoTranscriptCache.set(videoName, transcript);
-                return transcript;
+        const request = (source === 'local'
+            ? fetchLocalTranscriptIndex({ retry })
+                .then(async index => {
+                    if (!index) {
+                        const transcript = await fetchRemoteVideoTranscript(normalizedVideoName);
+                        return { transcript, usedServerFallback: Boolean(transcript) };
+                    }
+                    const rawSegments = index.get(normalizedVideoName);
+                    if (!rawSegments) {
+                        return { transcript: null, usedServerFallback: false };
+                    }
+                    const transcript = normalizeLocalVideoTranscript(normalizedVideoName, rawSegments);
+                    return { transcript, usedServerFallback: false };
+                })
+            : fetchRemoteVideoTranscript(normalizedVideoName)
+                .then(transcript => ({ transcript, usedServerFallback: false })))
+            .then(result => {
+                videoTranscriptCache.set(cacheKey, result);
+                return result;
             })
-            .finally(() => videoTranscriptInFlight.delete(videoName));
-        videoTranscriptInFlight.set(videoName, request);
+            .finally(() => {
+                if (videoTranscriptInFlight.get(cacheKey) === request) {
+                    videoTranscriptInFlight.delete(cacheKey);
+                }
+            });
+        videoTranscriptInFlight.set(cacheKey, request);
         return request;
     }
 
@@ -5765,13 +5914,17 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function updateActiveVideoTranscript(timestamp, focus = true, forceFocus = false) {
         const state = videoWorkbenchState;
-        if (!state?.transcriptSegments?.length) return;
+        if (!state?.transcriptSegments?.length || state.transcriptLoading) {
+            if (state?.transcriptFocusCurrentButton) state.transcriptFocusCurrentButton.disabled = true;
+            return;
+        }
         const nextIndex = findTranscriptAtTime(state.transcriptSegments, timestamp);
         const changed = nextIndex !== state.activeTranscriptIndex;
         state.transcriptList.querySelector('.video-transcript-segment.active')?.classList.remove('active');
         state.activeTranscriptIndex = nextIndex;
         const activeSegment = state.transcriptList.querySelector(`[data-transcript-index="${nextIndex}"]`);
         activeSegment?.classList.add('active');
+        state.transcriptFocusCurrentButton.disabled = !activeSegment;
         if (
             (changed || forceFocus)
             && focus
@@ -5781,6 +5934,16 @@ document.addEventListener('DOMContentLoaded', function () {
         ) {
             scrollTranscriptElementIntoView(activeSegment);
         }
+    }
+
+    function focusCurrentVideoTranscript() {
+        const state = videoWorkbenchState;
+        if (!state?.transcriptSegments?.length || state.transcriptLoading) return;
+
+        // Keep search highlights and keyboard focus intact while jumping to the active segment.
+        updateActiveVideoTranscript(document.getElementById('videoPlayer').currentTime, false);
+        const activeSegment = state.transcriptList.querySelector('.video-transcript-segment.active');
+        if (activeSegment) scrollTranscriptElementIntoView(activeSegment);
     }
 
     function renderVideoTranscriptSegments() {
@@ -5864,11 +6027,18 @@ document.addEventListener('DOMContentLoaded', function () {
         const state = videoWorkbenchState;
         if (!state) return;
         const requestSessionId = state.sessionId;
+        const requestId = ++state.transcriptRequestId;
+        state.transcriptLoading = true;
+        state.transcriptFocusCurrentButton.disabled = true;
+        state.transcriptSourceNotice.hidden = true;
         state.transcriptStatus.textContent = 'Loading transcript...';
         state.transcriptStatus.replaceChildren(document.createTextNode('Loading transcript...'));
         try {
-            const transcript = await fetchVideoTranscript(state.videoName, options);
-            if (videoWorkbenchState?.sessionId !== requestSessionId) return;
+            const result = await fetchVideoTranscript(state.videoName, options);
+            if (videoWorkbenchState?.sessionId !== requestSessionId || state.transcriptRequestId !== requestId) return;
+            state.transcriptLoading = false;
+            const transcript = result.transcript;
+            state.transcriptSourceNotice.hidden = !result.usedServerFallback;
             state.transcriptSegments = transcript?.segments || [];
             state.activeTranscriptIndex = -1;
             if (!transcript) {
@@ -5884,9 +6054,11 @@ document.addEventListener('DOMContentLoaded', function () {
             state.transcriptStatus.textContent = '';
             renderVideoTranscriptSegments();
         } catch (error) {
-            if (videoWorkbenchState?.sessionId !== requestSessionId) return;
+            if (videoWorkbenchState?.sessionId !== requestSessionId || state.transcriptRequestId !== requestId) return;
             console.error('Unable to load video transcript:', error);
+            state.transcriptLoading = false;
             state.transcriptSegments = [];
+            state.transcriptFocusCurrentButton.disabled = true;
             state.transcriptList.replaceChildren();
             const message = document.createElement('span');
             message.textContent = 'Unable to load transcript.';
@@ -6251,8 +6423,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const transcriptTitle = document.getElementById('videoTranscriptTitle');
         const transcriptSearchInput = document.getElementById('videoTranscriptSearchInput');
         const transcriptSearchCount = document.getElementById('videoTranscriptSearchCount');
+        const transcriptFocusCurrentButton = document.getElementById('focusCurrentTranscriptBtn');
         const transcriptPreviousButton = document.getElementById('videoTranscriptPreviousMatchBtn');
         const transcriptNextButton = document.getElementById('videoTranscriptNextMatchBtn');
+        const transcriptSourceNotice = document.getElementById('videoTranscriptSourceNotice');
         const transcriptStatus = document.getElementById('videoTranscriptStatus');
         const transcriptList = document.getElementById('videoTranscriptList');
         document.getElementById('videoWorkbenchTitle').textContent = videoName;
@@ -6261,6 +6435,8 @@ document.addEventListener('DOMContentLoaded', function () {
         transcriptPanel.hidden = true;
         toolRail.classList.remove('transcript-open');
         transcriptSearchInput.value = '';
+        transcriptFocusCurrentButton.disabled = true;
+        transcriptSourceNotice.hidden = true;
         workbenchBody.style.removeProperty('--video-tool-rail-width');
 
         videoWorkbenchState = {
@@ -6280,6 +6456,8 @@ document.addEventListener('DOMContentLoaded', function () {
             videoWheelDelta: 0,
             keyframeWheelLocked: false,
             transcriptOpen: false,
+            transcriptLoading: false,
+            transcriptRequestId: 0,
             transcriptSegments: [],
             activeTranscriptIndex: -1,
             transcriptSearchQuery: '',
@@ -6288,7 +6466,9 @@ document.addEventListener('DOMContentLoaded', function () {
             transcriptPanel,
             transcriptList,
             transcriptStatus,
+            transcriptSourceNotice,
             transcriptSearchCount,
+            transcriptFocusCurrentButton,
             transcriptPreviousButton,
             transcriptNextButton
         };
@@ -6367,6 +6547,7 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         const handleTranscriptSearchInput = () => updateVideoTranscriptSearch(transcriptSearchInput.value);
+        const focusCurrentTranscript = () => focusCurrentVideoTranscript();
         const showPreviousTranscriptMatch = () => focusTranscriptSearchMatch(videoWorkbenchState.transcriptSearchIndex - 1);
         const showNextTranscriptMatch = () => focusTranscriptSearchMatch(videoWorkbenchState.transcriptSearchIndex + 1);
         const handleWorkbenchResize = () => updateTranscriptPanelWidth();
@@ -6524,6 +6705,10 @@ document.addEventListener('DOMContentLoaded', function () {
         };
 
         const handleKeyDown = (e) => {
+            if (isBrowserReservedShortcut(e)) {
+                return;
+            }
+
             if (getTopActiveModal()?.element !== modal) {
                 return;
             }
@@ -6766,6 +6951,7 @@ document.addEventListener('DOMContentLoaded', function () {
             openTranscriptButton.removeEventListener('click', openTranscriptPanel);
             closeTranscriptButton.removeEventListener('click', closeTranscriptPanel);
             transcriptSearchInput.removeEventListener('input', handleTranscriptSearchInput);
+            transcriptFocusCurrentButton.removeEventListener('click', focusCurrentTranscript);
             transcriptPreviousButton.removeEventListener('click', showPreviousTranscriptMatch);
             transcriptNextButton.removeEventListener('click', showNextTranscriptMatch);
             window.removeEventListener('resize', handleWorkbenchResize);
@@ -6813,6 +6999,7 @@ document.addEventListener('DOMContentLoaded', function () {
         openTranscriptButton.addEventListener('click', openTranscriptPanel);
         closeTranscriptButton.addEventListener('click', closeTranscriptPanel);
         transcriptSearchInput.addEventListener('input', handleTranscriptSearchInput);
+        transcriptFocusCurrentButton.addEventListener('click', focusCurrentTranscript);
         transcriptPreviousButton.addEventListener('click', showPreviousTranscriptMatch);
         transcriptNextButton.addEventListener('click', showNextTranscriptMatch);
         window.addEventListener('resize', handleWorkbenchResize);
