@@ -49,16 +49,7 @@
                         <path d="M7 15h4" />
                     </svg>
                 </button>
-                <button id="tagFilterBtn" class="header-btn" title="Enable/Disable Tag Filter (F3)">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                        class="lucide lucide-tags">
-                        <path d="M9 5H2v7l6.29 6.29c.94.94 2.48.94 3.42 0l3.58-3.58c.94-.94.94-2.48 0-3.42L9 5Z" />
-                        <path d="M6 9.01V9" />
-                        <path d="m15 5 6.3 6.3a2.69 2.69 0 0 1 0 3.79L18.02 18" />
-                        <path d="m13.5 15.5 5-5" />
-                    </svg>
-                </button>
+                
                 <button id="asrFilterBtn" class="header-btn" title="Enable/Disable ASR Filter (F2)">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -68,16 +59,13 @@
                         <line x1="12" x2="12" y1="19" y2="22" />
                     </svg>
                 </button>
-                <button id="eventFilterBtn" class="header-btn" title="Enable/Disable Event Filter (F4)">
+                <button id="videoPrefixFilterBtn" class="header-btn" title="Enable/Disable Video Prefix Filter (F3)" aria-pressed="false">
                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
                         stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                        class="lucide lucide-calendar-heart-icon lucide-calendar-heart">
-                        <path d="M12.127 22H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v5.125" />
-                        <path
-                            d="M14.62 18.8A2.25 2.25 0 1 1 18 15.836a2.25 2.25 0 1 1 3.38 2.966l-2.626 2.856a.998.998 0 0 1-1.507 0z" />
-                        <path d="M16 2v4" />
-                        <path d="M3 10h18" />
-                        <path d="M8 2v4" />
+                        class="lucide lucide-list-filter">
+                        <path d="M3 5h18" />
+                        <path d="M6 12h12" />
+                        <path d="M10 19h4" />
                     </svg>
                 </button>
                 <button id="translateBtn" class="header-btn" title="Enable/Disable Translation">
@@ -153,9 +141,6 @@
                                 data-mode="text-to-image"></textarea>
                             <div class="translated-query-display"></div>
                             <div class="autocorrect-suggestion-display"></div>
-                            <div class="tag-filter-container">
-                                <input type="text" class="tag-input" placeholder="Enter tags">
-                            </div>
                             <div class="ocr-filter-container">
                                 <input type="text" class="ocr-input" placeholder="Enter OCR">
                                 <div class="fuzzy-switch-wrapper">
@@ -452,12 +437,8 @@
                     <span class="shortcut-key">F2</span>
                 </div>
                 <div class="shortcut-item">
-                    <span class="shortcut-description">On/Off Tag Filter</span>
+                    <span class="shortcut-description">On/Off Video Prefix Filter</span>
                     <span class="shortcut-key">F3</span>
-                </div>
-                <div class="shortcut-item">
-                    <span class="shortcut-description">On/Off Event Filter</span>
-                    <span class="shortcut-key">F4</span>
                 </div>
                 <div class="shortcut-item">
                     <span class="shortcut-description">Model Setting</span>
@@ -562,6 +543,12 @@
             <input id="clusterModeToggle" type="checkbox" checked>
             <span class="serve-location-switch" aria-hidden="true"></span>
         </label>
+
+        <h4 style="margin-top: 15px;">Excluded Video Prefixes</h4>
+        <div class="setting-input-group">
+            <input type="text" id="excludedVideoPrefixesInput" placeholder="N, M" aria-label="Excluded video prefixes" autocomplete="off">
+            <button id="saveExcludedVideoPrefixesBtn" class="apply-btn" type="button">Save</button>
+        </div>
 
         <h4 style="margin-top: 15px;">Submission Sounds</h4>
         <label class="serve-location-toggle" for="submissionSoundToggle">

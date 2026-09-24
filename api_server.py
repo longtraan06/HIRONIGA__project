@@ -205,6 +205,7 @@ class DatabaseServiceClient:
         asr_fuzzy: bool = False,
         user_filter: Optional[List[str]] = None,
         video_name: Optional[str] = None,
+        excluded_video_prefixes: Optional[List[str]] = None,
         start_temporal_chain: bool = False,
         user_id: Optional[str] = None,
         query_id: Optional[str] = None,
@@ -222,6 +223,8 @@ class DatabaseServiceClient:
                 data["model_name"] = model_name
             if video_name:
                 data["video_name"] = video_name
+            if excluded_video_prefixes:
+                data["excluded_video_prefixes"] = excluded_video_prefixes
             if start_temporal_chain:
                 data.update({"user_id": user_id or "", "query_id": query_id or ""})
                 endpoint = "/v1/search/temporal/start_with_image"
@@ -257,6 +260,7 @@ class DatabaseServiceClient:
             "asr_fuzzy": asr_fuzzy,
             "user_filter": user_filter or [],
             "video_name": video_name,
+            "excluded_video_prefixes": excluded_video_prefixes or [],
             "cluster_mode_enabled": cluster_mode_enabled,
             "user_id": user_id,
             "query_id": query_id,
@@ -286,6 +290,7 @@ class DatabaseServiceClient:
         asr_fuzzy: bool = False,
         user_filter: Optional[List[str]] = None,
         video_name: Optional[str] = None,
+        excluded_video_prefixes: Optional[List[str]] = None,
         cluster_mode_enabled: bool = True,
         **kwargs,
     ) -> dict:
@@ -310,6 +315,7 @@ class DatabaseServiceClient:
             "asr_fuzzy": asr_fuzzy,
             "user_filter": user_filter or [],
             "video_name": video_name,
+            "excluded_video_prefixes": excluded_video_prefixes or [],
             "cluster_mode_enabled": cluster_mode_enabled,
         }
         payload = await self._request_json("POST", "/v1/search/temporal/continue", json=payload_request)
@@ -330,6 +336,7 @@ class DatabaseServiceClient:
         use_event_filter: bool = False,
         user_filter: Optional[List[str]] = None,
         video_name: Optional[str] = None,
+        excluded_video_prefixes: Optional[List[str]] = None,
         cluster_mode_enabled: bool = True,
     ) -> dict:
         data = {
@@ -345,6 +352,8 @@ class DatabaseServiceClient:
             data["user_filter"] = user_filter
         if video_name:
             data["video_name"] = video_name
+        if excluded_video_prefixes:
+            data["excluded_video_prefixes"] = excluded_video_prefixes
 
         payload = await self._request_json(
             "POST",
@@ -1612,6 +1621,7 @@ class TemporalStartRequest(BaseModel):
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: List[str] = Field(default_factory=list, max_length=100)
     cluster_mode_enabled: bool = True
 
 class TemporalContinueRequest(BaseModel):
@@ -1636,6 +1646,7 @@ class TemporalContinueRequest(BaseModel):
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: List[str] = Field(default_factory=list, max_length=100)
     cluster_mode_enabled: bool = True
 
 class TextToImageRequest(BaseModel):
@@ -1652,6 +1663,7 @@ class TextToImageRequest(BaseModel):
     asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: List[str] = Field(default_factory=list, max_length=100)
     cluster_mode_enabled: bool = True
 
 class TextToTextRequest(BaseModel):
@@ -1668,6 +1680,7 @@ class TextToTextRequest(BaseModel):
     asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: List[str] = Field(default_factory=list, max_length=100)
     cluster_mode_enabled: bool = True
 
 
@@ -1688,6 +1701,7 @@ class CIRSearchRequest(BaseModel):
     top_k: int = Field(default=60, ge=1, le=1000)
     edit_strength: float = Field(default=0.95, ge=-3.0, le=5.0)
     cluster_mode_enabled: bool = True
+    excluded_video_prefixes: List[str] = Field(default_factory=list, max_length=100)
 
 
 class ClusterFrameRequest(BaseModel):
@@ -1965,6 +1979,7 @@ async def search_text_to_image(req: TextToImageRequest):
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter,
         video_name=req.video_name,
+        excluded_video_prefixes=req.excluded_video_prefixes,
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
@@ -2007,6 +2022,7 @@ async def search_text_to_text(req: TextToTextRequest):
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter,
         video_name=req.video_name,
+        excluded_video_prefixes=req.excluded_video_prefixes,
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
@@ -2020,6 +2036,7 @@ async def search_image(
     top_k_tags: int = Form(5, description="Top K tags to use"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True, description="Apply global cluster exclusions")
 ):
     """
@@ -2058,6 +2075,7 @@ async def search_image(
         use_event_filter=use_event_filter,
         user_filter=cluster_filter,
         video_name=video_name,
+        excluded_video_prefixes=excluded_video_prefixes,
         cluster_mode_enabled=cluster_mode_enabled,
     )
 
@@ -2092,7 +2110,10 @@ async def search_cir(req: CIRSearchRequest):
         "composition_mode": "directional",
         "top_k": req.top_k,
         "edit_strength": req.edit_strength,
-        "filters": {"exclude_cluster_ids": excluded_cluster_ids},
+        "filters": {
+            "exclude_cluster_ids": excluded_cluster_ids,
+            "exclude_video_prefixes": req.excluded_video_prefixes,
+        },
     }
     if edit_text:
         payload["edit_text"] = edit_text
@@ -2601,6 +2622,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             asr_fuzzy=req.asr_fuzzy,
             user_filter=cluster_filter,
             video_name=req.video_name,
+            excluded_video_prefixes=req.excluded_video_prefixes,
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
         return {
@@ -2665,6 +2687,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             asr_fuzzy=req.asr_fuzzy,
             user_filter=cluster_filter,
             video_name=req.video_name,
+            excluded_video_prefixes=req.excluded_video_prefixes,
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
 
@@ -2696,6 +2719,7 @@ async def temporal_search_continue_with_image(
     model_name: Optional[str] = Form(None),
     use_event_filter: bool = Form(False),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True),
 ):
     """Append a selected frame as an image query to the active temporal chain."""
@@ -2729,6 +2753,7 @@ async def temporal_search_continue_with_image(
             use_event_filter=use_event_filter,
             user_filter=cluster_filter,
             video_name=video_name,
+            excluded_video_prefixes=excluded_video_prefixes,
             cluster_mode_enabled=cluster_mode_enabled,
         )
         reranked_list = temporal_answer.get("query_A_reranked", [])

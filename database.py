@@ -140,14 +140,17 @@ class TextFilterResponse(BaseModel):
 
 class VideoScopedSearchRequest(BaseSearchRequest):
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: Optional[List[str]] = Field(default=None, max_length=100)
 
 
 class VideoScopedTemporalStartRequest(TemporalStartRequest):
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: Optional[List[str]] = Field(default=None, max_length=100)
 
 
 class VideoScopedTemporalContinueRequest(TemporalContinueRequest):
     video_name: Optional[str] = Field(default=None, max_length=256)
+    excluded_video_prefixes: Optional[List[str]] = Field(default=None, max_length=100)
 
 
 def video_scope_expr(video_name: Optional[str]) -> Optional[list[str]]:
@@ -266,6 +269,7 @@ async def search_text(req: VideoScopedSearchRequest):
             user_filter=req.user_filter,
             cluster_ids=req.cluster_ids,
             video_expr=video_scope_expr(req.video_name),
+            excluded_video_prefixes=req.excluded_video_prefixes,
             cluster_mode_enabled=req.cluster_mode_enabled,
             user_id=req.user_id,
             query_id=req.query_id
@@ -297,6 +301,7 @@ async def search_image(
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True)
 ):
     """
@@ -322,6 +327,7 @@ async def search_image(
                     use_event_filter=use_event_filter,
                     user_filter=user_filter,
                     video_expr=video_scope_expr(video_name),
+                    excluded_video_prefixes=excluded_video_prefixes,
                     cluster_mode_enabled=cluster_mode_enabled,
                 )
 
@@ -378,6 +384,7 @@ async def temporal_search_start(req: VideoScopedTemporalStartRequest):
                 asr_fuzzy=req.asr_fuzzy,
                 user_filter=req.user_filter or req.cluster_ids,
                 video_expr=video_scope_expr(req.video_name),
+                excluded_video_prefixes=req.excluded_video_prefixes,
                 cluster_mode_enabled=req.cluster_mode_enabled,
             )
         results = serialize_frame_hits(raw_hits)
@@ -430,6 +437,7 @@ async def temporal_search_continue(req: VideoScopedTemporalContinueRequest):
                 asr_fuzzy=req.asr_fuzzy,
                 user_filter=req.user_filter or req.cluster_ids,
                 video_expr=video_scope_expr(req.video_name),
+                excluded_video_prefixes=req.excluded_video_prefixes,
                 cluster_mode_enabled=req.cluster_mode_enabled,
             )
         latency = round((time.time() - t0) * 1000, 2)
@@ -456,6 +464,7 @@ async def temporal_search_continue_with_image(
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True),
 ):
     """Append an image query to an existing temporal chain."""
@@ -483,6 +492,7 @@ async def temporal_search_continue_with_image(
                         use_event_filter=use_event_filter,
                         user_filter=user_filter,
                         video_expr=video_scope_expr(video_name),
+                        excluded_video_prefixes=excluded_video_prefixes,
                         cluster_mode_enabled=cluster_mode_enabled,
                     )
 
@@ -712,6 +722,7 @@ async def temporal_search_start_with_image(
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True),
 ):
     """
@@ -738,6 +749,7 @@ async def temporal_search_start_with_image(
                         use_event_filter=use_event_filter,
                         user_filter=user_filter,
                         video_expr=video_scope_expr(video_name),
+                        excluded_video_prefixes=excluded_video_prefixes,
                         cluster_mode_enabled=cluster_mode_enabled,
                     )
 

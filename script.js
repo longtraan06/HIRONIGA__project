@@ -233,6 +233,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let frameServeLocation = 'remote';
     let videoServeLocation = 'remote';
     let clusterModeEnabled = true;
+    let excludedVideoPrefixes = [];
     let pendingClusterDeletion = null;
     let activeDeletedClusterId = null;
     let csvSubmissionFiles = [];
@@ -249,7 +250,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let currentlyHoveredPreviewFrameData = null;
     let isRestoringState = false;
     let currentLayout = 'grid';
-    let isEventFilterEnabled = false;
+    let videoPrefixFilterEnabled = false;
     // Biến zcho layout Nhóm (Grouped)
     let allGroupedData = [];
     let displayedGroupsCount = 0;
@@ -399,7 +400,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const contentArea = document.getElementById('contentArea');
     const settingsBtn = document.getElementById('settingsBtn');
     const settingsMenu = document.getElementById('settingsMenu');
-    const tagFilterBtn = document.getElementById('tagFilterBtn');
+    const videoPrefixFilterBtn = document.getElementById('videoPrefixFilterBtn');
     const shortcutsBtn = document.getElementById('shortcutsBtn');
     const shortcutsModal = document.getElementById('shortcutsModal');
     const closeShortcutsModalBtn = shortcutsModal.querySelector('.close-btn');
@@ -411,7 +412,6 @@ document.addEventListener('DOMContentLoaded', function () {
     const queueCountSpan = document.getElementById('queueCount');
     const ocrFilterBtn = document.getElementById('ocrFilterBtn');
     const asrFilterBtn = document.getElementById('asrFilterBtn');
-    const eventFilterBtn = document.getElementById('eventFilterBtn');
 
     const submitAsQaBtn = document.getElementById('submitAsQaBtn');
     const submitAsKisBtn = document.getElementById('submitAsKisBtn');
@@ -559,6 +559,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const googleSearchResults = document.getElementById('googleSearchResults');
     const usernameInput = document.getElementById('usernameInput');
     const saveUsernameBtn = document.getElementById('saveUsernameBtn');
+    const excludedVideoPrefixesInput = document.getElementById('excludedVideoPrefixesInput');
+    const saveExcludedVideoPrefixesBtn = document.getElementById('saveExcludedVideoPrefixesBtn');
     const serperApiKeyInput = document.getElementById('serperApiKeyInput');
     const saveSerperApiKeyBtn = document.getElementById('saveSerperApiKeyBtn');
     const geminiApiKeyInput = document.getElementById('geminiApiKeyInput');
@@ -597,6 +599,73 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function setUserScopedSetting(key, value) {
         localStorage.setItem(getUserScopedStorageKey(key), value);
+    }
+
+    function parseExcludedVideoPrefixes(value) {
+        const prefixes = String(value || '')
+            .split(',')
+            .map(prefix => prefix.trim().toUpperCase())
+            .filter(Boolean);
+        const invalidPrefix = prefixes.find(prefix => !/^[A-Z0-9_-]{1,64}$/.test(prefix));
+        if (invalidPrefix) {
+            throw new Error(`Invalid video prefix: ${invalidPrefix}`);
+        }
+        return [...new Set(prefixes)];
+    }
+
+    function loadExcludedVideoPrefixes() {
+        const saved = getUserScopedSetting('excluded_video_prefixes', '[]');
+        try {
+            return parseExcludedVideoPrefixes(JSON.parse(saved).join(','));
+        } catch {
+            return [];
+        }
+    }
+
+    function saveExcludedVideoPrefixes() {
+        try {
+            excludedVideoPrefixes = parseExcludedVideoPrefixes(excludedVideoPrefixesInput?.value);
+            setUserScopedSetting('excluded_video_prefixes', JSON.stringify(excludedVideoPrefixes));
+            if (excludedVideoPrefixesInput) excludedVideoPrefixesInput.value = excludedVideoPrefixes.join(', ');
+            showToastNotification(
+                excludedVideoPrefixes.length
+                    ? `Excluding video prefixes: ${excludedVideoPrefixes.join(', ')}.`
+                    : 'Video prefix exclusions cleared.',
+            );
+        } catch (error) {
+            showToastNotification('Use comma-separated letters, numbers, underscores, or hyphens only.', 'error');
+        }
+    }
+
+    function addExcludedVideoPrefixes(target) {
+        if (videoPrefixFilterEnabled && excludedVideoPrefixes.length) {
+            target.excluded_video_prefixes = excludedVideoPrefixes;
+        }
+        return target;
+    }
+
+    function appendExcludedVideoPrefixes(formData) {
+        if (videoPrefixFilterEnabled) {
+            excludedVideoPrefixes.forEach(prefix => formData.append('excluded_video_prefixes', prefix));
+        }
+        return formData;
+    }
+
+    function updateVideoPrefixFilterUI() {
+        if (!videoPrefixFilterBtn) return;
+        videoPrefixFilterBtn.classList.toggle('active', videoPrefixFilterEnabled);
+        videoPrefixFilterBtn.setAttribute('aria-pressed', String(videoPrefixFilterEnabled));
+    }
+
+    function toggleVideoPrefixFilter() {
+        videoPrefixFilterEnabled = !videoPrefixFilterEnabled;
+        setUserScopedSetting('video_prefix_filter_enabled', String(videoPrefixFilterEnabled));
+        updateVideoPrefixFilterUI();
+        showToastNotification(
+            videoPrefixFilterEnabled
+                ? 'Video prefix filtering enabled.'
+                : 'Video prefix filtering disabled.',
+        );
     }
 
     function updateSubmissionSoundUI() {
@@ -1460,6 +1529,10 @@ document.addEventListener('DOMContentLoaded', function () {
         updateVideoServeLocationUI();
         clusterModeEnabled = getUserScopedSetting('cluster_mode_enabled', 'true') !== 'false';
         updateClusterModeUI();
+        excludedVideoPrefixes = loadExcludedVideoPrefixes();
+        if (excludedVideoPrefixesInput) excludedVideoPrefixesInput.value = excludedVideoPrefixes.join(', ');
+        videoPrefixFilterEnabled = getUserScopedSetting('video_prefix_filter_enabled', 'false') === 'true';
+        updateVideoPrefixFilterUI();
         isSubmissionSoundEnabled = getUserScopedSetting('submission_sound_enabled', 'true') !== 'false';
         updateSubmissionSoundUI();
         const savedSubmissionSoundVolume = Number(getUserScopedSetting('submission_sound_volume', '1'));
@@ -1508,6 +1581,7 @@ document.addEventListener('DOMContentLoaded', function () {
             updateClusterModeUI();
             showToastNotification(`Cluster filtering ${clusterModeEnabled ? 'enabled' : 'disabled'} for new searches.`);
         });
+        saveExcludedVideoPrefixesBtn?.addEventListener('click', saveExcludedVideoPrefixes);
 
         submissionSoundToggle.addEventListener('change', () => {
             isSubmissionSoundEnabled = submissionSoundToggle.checked;
@@ -1733,22 +1807,11 @@ document.addEventListener('DOMContentLoaded', function () {
             toggleFilter('ocr');
         });
 
-        tagFilterBtn.addEventListener('click', function () {
-            toggleFilter('tag');
-        });
+        videoPrefixFilterBtn?.addEventListener('click', toggleVideoPrefixFilter);
 
         asrFilterBtn.addEventListener('click', function () {
             toggleFilter('asr');
         });
-
-        if (eventFilterBtn) { // <<< THÊM KHỐI LỆNH NÀY
-            eventFilterBtn.addEventListener('click', function () {
-                isEventFilterEnabled = !isEventFilterEnabled;
-                this.classList.toggle('active', isEventFilterEnabled);
-                const status = isEventFilterEnabled ? 'bật' : 'tắt';
-                showToastNotification(`Bộ lọc sự kiện đã ${status}`, 'success');
-            });
-        }
 
         clearHistoryBtn.addEventListener('click', clearSearchHistory);
         historyBtn.addEventListener('click', toggleHistoryMenu);
@@ -1906,11 +1969,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 e.preventDefault();
                 toggleTranslation(); // Call the same toggle function
             }
-            if (e.key === 'F4') { // <<< THAY ĐỔI LOGIC F4
-                e.preventDefault();
-                if (eventFilterBtn) eventFilterBtn.click(); // Kích hoạt Event Filter
-            }
-            else if (e.key === 'F2') {
+            if (e.key === 'F2') {
                 e.preventDefault();
                 toggleFilter('asr');
             }
@@ -1920,7 +1979,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             else if (e.key === 'F3') {
                 e.preventDefault();
-                toggleFilter('tag');
+                toggleVideoPrefixFilter();
             }
             else if (e.key === 'F9') {
                 e.preventDefault();
@@ -4086,9 +4145,6 @@ document.addEventListener('DOMContentLoaded', function () {
         ></textarea>
         <div class="translated-query-display"></div>
         <div class="autocorrect-suggestion-display"></div>
-        <div class="tag-filter-container">
-        <input type="text" class="tag-input" placeholder="Enter tags">
-        </div>
         <div class="ocr-filter-container">
         <input type="text" class="ocr-input" placeholder="Enter OCR">
         <div class="fuzzy-switch-wrapper">
@@ -4428,7 +4484,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const uploadZone = searchGroup.querySelector('.upload-zone');
         const uploadedImageDiv = searchGroup.querySelector('.uploaded-image');
         const removeImageBtn = searchGroup.querySelector('.remove-image');
-        const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
         const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
         let autocorrectTimer = null;
@@ -4535,7 +4590,7 @@ document.addEventListener('DOMContentLoaded', function () {
             hideAutocorrectSuggestion();
             if (!query.trim()) return;
 
-            if (justCompletedWord && completedWordCount >= 2 && completedWordCount % 2 === 0) {
+            if (justCompletedWord && completedWordCount >= 1) {
                 requestAutocorrect(query);
                 return;
             }
@@ -4579,16 +4634,6 @@ document.addEventListener('DOMContentLoaded', function () {
             });
         }
 
-        if (tagInput) {
-            tagInput.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter') {
-                    e.preventDefault(); // Ngăn hành vi mặc định của Enter
-
-                    // Chuyển focus trở lại ô tìm kiếm chính
-                    textInput.focus();
-                }
-            });
-        }
         if (asrInput) {
             asrInput.addEventListener('keydown', function (e) {
                 if (e.key === 'Enter') {
@@ -4958,9 +5003,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const filterOptions = {};
-        if (isEventFilterEnabled) { // <<< THÊM DÒNG NÀY
-            filterOptions.use_event_filter = true;
-        }
 
         if (searchGroup) {
             const ocrInput = searchGroup.querySelector('.ocr-input');
@@ -4977,17 +5019,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 const ocrModeSelect = searchGroup.querySelector('.ocr-filter-container .ocr-mode-select');
                 if (ocrModeSelect) {
                     filterOptions.ocr_mode = ocrModeSelect.value;
-                }
-            }
-
-            if (tagFilterBtn.classList.contains('active')) {
-                const tagInput = searchGroup.querySelector('.tag-input');
-                if (tagInput && tagInput.value.trim() !== '') {
-                    const tags = tagInput.value.split(',').map(tag => tag.trim()).filter(tag => tag);
-                    if (tags.length > 0) {
-                        filterOptions.use_tag = true;
-                        filterOptions.tags_filter = tags;
-                    }
                 }
             }
 
@@ -5017,7 +5048,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        if (type === 'text' && !String(query || '').trim() && !filterOptions.ocr && !filterOptions.asr && !filterOptions.tags_filter) {
+        if (type === 'text' && !String(query || '').trim() && !filterOptions.ocr && !filterOptions.asr) {
             showToastNotification("Please enter a search query or a filter value.", "error");
             return;
         }
@@ -5104,12 +5135,10 @@ document.addEventListener('DOMContentLoaded', function () {
                 continue;
             }
             const ocrValue = searchGroup.querySelector('.ocr-input')?.value.trim();
-            const tagValue = searchGroup.querySelector('.tag-input')?.value.trim();
             const asrValue = searchGroup.querySelector('.asr-input')?.value.trim();
             // Giả sử filter chỉ áp dụng cho ô tìm kiếm đầu tiên (theo logic toggleFilter của bạn)
             const isFilterActiveOnThisInput =
                 (ocrFilterBtn.classList.contains('active') && ocrValue) ||
-                (tagFilterBtn.classList.contains('active') && tagValue) ||
                 (asrFilterBtn.classList.contains('active') && asrValue);
             if (input.value.trim() === '' && !isFilterActiveOnThisInput) {
                 firstEmptyInput = input;
@@ -5140,18 +5169,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     function callTextToTextAPI(query, modelName, filterOptions = {}) {
         const body = { query, cluster_mode_enabled: clusterModeEnabled };
+        addExcludedVideoPrefixes(body);
         if (modelName && modelName !== 'all') {
             body.model_name = modelName;
         }
-        if (filterOptions.use_event_filter) {
-            body.use_event_filter = true;
-        }
         if (filterOptions.video_name) {
             body.video_name = filterOptions.video_name;
-        }
-        if (filterOptions.use_tag && filterOptions.tags_filter) {
-            body.use_tag = true;
-            body.tags_filter = filterOptions.tags_filter;
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
@@ -5191,9 +5214,7 @@ document.addEventListener('DOMContentLoaded', function () {
             query_history_id: queryHistoryId,
             cluster_mode_enabled: clusterModeEnabled
         };
-        if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
-            body.use_event_filter = true;
-        }
+        addExcludedVideoPrefixes(body);
         if (filterOptions.video_name) {
             body.video_name = filterOptions.video_name;
         }
@@ -5202,10 +5223,6 @@ document.addEventListener('DOMContentLoaded', function () {
             body.model_name = modelName;
         }
 
-        if (filterOptions.use_tag && filterOptions.tags_filter) {
-            body.use_tag = true;
-            body.tags_filter = filterOptions.tags_filter;
-        }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
             if (filterOptions.ocr_mode) {
@@ -5244,7 +5261,7 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('query_id', searchGroup.dataset.searchId);
         formData.append('cluster_mode_enabled', String(clusterModeEnabled));
         if (modelName) formData.append('model_name', modelName);
-        if (isEventFilterEnabled) formData.append('use_event_filter', 'true');
+        appendExcludedVideoPrefixes(formData);
         return formData;
     }
 
@@ -5278,18 +5295,12 @@ document.addEventListener('DOMContentLoaded', function () {
             query_history_id: queryHistoryId,
             cluster_mode_enabled: clusterModeEnabled
         };
-        if (filterOptions.use_event_filter) {
-            body.use_event_filter = true;
-        }
+        addExcludedVideoPrefixes(body);
         if (filterOptions.video_name) {
             body.video_name = filterOptions.video_name;
         }
         if (modelName) {
             body.model_name = modelName;
-        }
-        if (filterOptions.use_tag && filterOptions.tags_filter) {
-            body.use_tag = true;
-            body.tags_filter = filterOptions.tags_filter;
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
@@ -5323,18 +5334,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function callTextToImageAPI(query, modelName, filterOptions = {}, signal) {
         const body = { query, cluster_mode_enabled: clusterModeEnabled };
+        addExcludedVideoPrefixes(body);
         if (modelName && modelName !== 'all') {
             body.model_name = modelName;
         }
-        if (filterOptions.use_event_filter) {
-            body.use_event_filter = true;
-        }
         if (filterOptions.video_name) {
             body.video_name = filterOptions.video_name;
-        }
-        if (filterOptions.use_tag && filterOptions.tags_filter) {
-            body.use_tag = true;
-            body.tags_filter = filterOptions.tags_filter;
         }
         if (filterOptions.ocr) {
             body.ocr = filterOptions.ocr;
@@ -5369,12 +5374,9 @@ document.addEventListener('DOMContentLoaded', function () {
         const formData = new FormData();
         formData.append("file", imageFile);
         formData.append("cluster_mode_enabled", String(clusterModeEnabled));
+        appendExcludedVideoPrefixes(formData);
         if (modelName) {
             formData.append("model_name", modelName);
-        }
-
-        if (isEventFilterEnabled) {
-            formData.append("use_event_filter", "true");
         }
 
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/image`, {
@@ -8329,7 +8331,6 @@ document.addEventListener('DOMContentLoaded', function () {
         searchInputGroups.forEach((group, index) => {
             const searchInput = group.querySelector('.search-input');
             const ocrInput = group.querySelector('.ocr-input');
-            const tagInput = group.querySelector('.tag-input');
 
             state.queries.push({
                 id: group.dataset.searchId,
@@ -8338,9 +8339,6 @@ document.addEventListener('DOMContentLoaded', function () {
             if (index === 0) {
                 state.filters.ocr.enabled = ocrFilterBtn.classList.contains('active');
                 state.filters.ocr.value = ocrInput ? ocrInput.value : '';
-
-                state.filters.tag.enabled = tagFilterBtn.classList.contains('active');
-                state.filters.tag.value = tagInput ? tagInput.value : '';
             }
         });
         if (currentSearchMode === 'image-to-image') {
@@ -8391,13 +8389,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (ocrInput) ocrInput.value = state.filters.ocr.value;
                 if (ocrContainer) ocrContainer.classList.add('visible');
             }
-            if (state.filters.tag.enabled) {
-                tagFilterBtn.classList.add('active');
-                const tagInput = firstGroup.querySelector('.tag-input');
-                const tagContainer = firstGroup.querySelector('.tag-filter-container');
-                if (tagInput) tagInput.value = state.filters.tag.value;
-                if (tagContainer) tagContainer.classList.add('visible');
-            }
         }
 
         if (state.searchMode === 'image-to-image' && state.imageDataUrl) {
@@ -8432,6 +8423,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     formData.append("user_id", currentUserId);
                     formData.append("query_id", state.queries[0]?.id || 'img-start-restored');
                     formData.append("cluster_mode_enabled", String(clusterModeEnabled));
+                    appendExcludedVideoPrefixes(formData);
                     const modelSpec = getSelectedModelSpec();
                     if (modelSpec) {
                         formData.append("model_name", modelSpec);
@@ -8485,16 +8477,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (state.filters) {
             if (state.filters.ocr && state.filters.ocr.enabled && state.filters.ocr.value) {
                 filters.ocr = state.filters.ocr.value;
-            }
-            if (state.filters.tag && state.filters.tag.enabled && state.filters.tag.value) {
-                const tags = state.filters.tag.value.split(',').map(t => t.trim()).filter(t => t);
-                if (tags.length > 0) {
-                    filters.use_tag = true;
-                    filters.tags_filter = tags;
-                }
-            }
-            if (state.filters.event) {
-                filters.use_event_filter = true;
             }
         }
         return filters;
@@ -8727,10 +8709,7 @@ document.addEventListener('DOMContentLoaded', function () {
             formData.append("user_id", currentUserId);
             formData.append("query_id", queryId);
             formData.append("cluster_mode_enabled", String(clusterModeEnabled));
-
-            if (isEventFilterEnabled) {
-                formData.append("use_event_filter", "true");
-            }
+            appendExcludedVideoPrefixes(formData);
 
             const modelSpec = getSelectedModelSpec();
             if (modelSpec) {
@@ -9856,6 +9835,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     remove_text: removeText || null,
                     top_k: 120,
                     cluster_mode_enabled: clusterModeEnabled,
+                    ...(videoPrefixFilterEnabled && excludedVideoPrefixes.length
+                        ? { excluded_video_prefixes: excludedVideoPrefixes }
+                        : {}),
                 }),
                 signal: cirRequestController.signal,
             });
