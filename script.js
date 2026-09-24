@@ -1,5 +1,5 @@
-DRES_IP = 'http://192.168.28.151:5000/api';
-
+// DRES_IP = 'http://192.168.28.151:5000/api';
+DRES_IP = 'https://eventretrieval.one/api'; //btc
 const APP_CONFIG = {
     REMOTE_BASE_URL: 'http://localhost:16010',
     WEBSOCKET_URL: 'ws://localhost:16010'
