@@ -95,6 +95,7 @@ let zIndexCounter = 10000; // Bắt đầu từ một số lớn để tránh xu
 const activeModalStack = [];
 let imageModalRequestGeneration = 0;
 let activeImageModalClose = null;
+let activeImageModalRefreshText = null;
 
 function pruneActiveModalStack() {
     for (let index = activeModalStack.length - 1; index >= 0; index--) {
@@ -1556,6 +1557,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (videoModal.style.display === 'flex') {
                 loadVideoTranscript();
             }
+            activeImageModalRefreshText?.();
             showToastNotification(`Frame source: ${frameServeLocation === 'remote' ? 'Remote serve' : 'Local serve'}.`);
         });
 
@@ -5792,6 +5794,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const thumbnailStrip = document.getElementById('thumbnailStrip');
         const modalFrameInfo = document.getElementById('modalFrameInfo');
         const mainPreviewOverlay = document.getElementById('mainPreviewOverlay');
+        const keyframeOcrContent = document.getElementById('keyframeOcrContent');
+        const keyframeAsrContent = document.getElementById('keyframeAsrContent');
         const videoId = clickedFrameData.videoName;
         let targetFrameIdOri = Number(clickedFrameData.frame_id_ori);
         const isCapturedReference = Boolean(clickedFrameData.isFromVideo);
@@ -5809,6 +5813,40 @@ document.addEventListener('DOMContentLoaded', function () {
         let closed = false;
         let imageObserver = null;
         let localFramesPromise = null;
+        let transcriptSegments = null;
+        let transcriptRequestId = 0;
+
+        function renderFrameText(frameDataToDisplay) {
+            if (!frameDataToDisplay) return;
+            const ocrText = String(frameDataToDisplay.ocr || '').trim();
+            keyframeOcrContent.textContent = ocrText || 'No OCR text for this frame.';
+
+            if (transcriptSegments === null) {
+                keyframeAsrContent.textContent = 'Loading transcript...';
+                return;
+            }
+            const transcriptIndex = findTranscriptAtTime(transcriptSegments, frameDataToDisplay.timestamp);
+            keyframeAsrContent.textContent = transcriptIndex >= 0
+                ? transcriptSegments[transcriptIndex].text
+                : 'No transcript segment covers this frame timestamp.';
+        }
+
+        async function loadModalTranscript() {
+            const requestId = ++transcriptRequestId;
+            transcriptSegments = null;
+            renderFrameText(currentModalFrameData);
+            try {
+                const result = await fetchVideoTranscript(videoId);
+                if (closed || requestId !== transcriptRequestId) return;
+                transcriptSegments = result.transcript?.segments || [];
+                renderFrameText(currentModalFrameData);
+            } catch (error) {
+                if (closed || requestId !== transcriptRequestId) return;
+                console.error('Unable to load keyframe modal transcript:', error);
+                transcriptSegments = [];
+                keyframeAsrContent.textContent = 'Unable to load transcript.';
+            }
+        }
 
         const loadLocalFrames = () => {
             if (localFramesPromise) return localFramesPromise;
@@ -5923,6 +5961,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 videoName: videoId,
                 frameName: frameDataToDisplay.filename,
                 timestamp: frameDataToDisplay.timestamp,
+                ocr: frameDataToDisplay.ocr,
                 frameIdentifier: `${videoId}_${frameDataToDisplay.frame_id_ori}`,
                 frame_id_ori: frameDataToDisplay.frame_id_ori,
                 isFromVideo: false
@@ -5931,6 +5970,7 @@ document.addEventListener('DOMContentLoaded', function () {
             modalFrameInfo.textContent = isCapturedReference
                 ? `${currentModalFrameData.frameIdentifier} · context for LIVE ${clickedFrameData.frameIdentifier}`
                 : currentModalFrameData.frameIdentifier;
+            renderFrameText(currentModalFrameData);
 
             const oldCurrent = thumbnailStrip.querySelector('.current-frame');
             if (oldCurrent) oldCurrent.classList.remove('current-frame');
@@ -6157,6 +6197,7 @@ document.addEventListener('DOMContentLoaded', function () {
             if (closed) return;
             closed = true;
             requestController.abort();
+            transcriptRequestId++;
             imageObserver?.disconnect();
             modal.removeEventListener('wheel', wheelHandler);
             thumbnailStrip.removeEventListener('scroll', thumbnailScrollHandler);
@@ -6172,6 +6213,9 @@ document.addEventListener('DOMContentLoaded', function () {
             registerModalClose(modal);
             if (activeImageModalClose === closeModal) {
                 activeImageModalClose = null;
+            }
+            if (activeImageModalRefreshText === loadModalTranscript) {
+                activeImageModalRefreshText = null;
             }
 
             if (typeof onClosedCallback === 'function') {
@@ -6200,8 +6244,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         activeImageModalClose = closeModal;
+        activeImageModalRefreshText = loadModalTranscript;
         registerModalOpen(modal, closeModal);
         modal.style.display = 'flex';
+        loadModalTranscript();
 
         setTimeout(() => {
             const activeThumb = thumbnailStrip.querySelector('.active-frame');
@@ -7928,7 +7974,7 @@ document.addEventListener('DOMContentLoaded', function () {
                             // Mở modal keyframe cho frame được chọn
                             if (frameSelectionManager.getSelectionCount() === 1) {
                                 const selectedFrame = frameSelectionManager.getAllSelectedFrames()[0];
-                                openImageModal(selectedFrame.id, selectedFrame.path, selectedFrame);
+                                openImageModal(selectedFrame.data);
                             }
                             break;
 

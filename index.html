@@ -239,11 +239,23 @@
     <div id="imageModal" class="image-modal" style="display: none;">
         <div class="modal-content">
             <div id="modalFrameInfo" class="modal-frame-info"></div>
-            <div id="mainPreviewContainer" class="main-preview-container">
-                <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
-                <div id="mainPreviewOverlay" class="main-preview-overlay">
-                    <i class="fas fa-play"></i>
+            <div class="keyframe-modal-body">
+                <div id="mainPreviewContainer" class="main-preview-container">
+                    <img id="mainPreviewImage" class="main-preview" src="" alt="Main preview">
+                    <div id="mainPreviewOverlay" class="main-preview-overlay">
+                        <i class="fas fa-play"></i>
+                    </div>
                 </div>
+                <aside class="keyframe-text-panel" aria-label="Keyframe text details">
+                    <section class="keyframe-text-section">
+                        <h3>OCR</h3>
+                        <div id="keyframeOcrContent" class="keyframe-text-content" aria-live="polite"></div>
+                    </section>
+                    <section class="keyframe-text-section">
+                        <h3>ASR transcript</h3>
+                        <div id="keyframeAsrContent" class="keyframe-text-content" aria-live="polite">Loading transcript...</div>
+                    </section>
+                </aside>
             </div>
             <div class="thumbnail-strip" id="thumbnailStrip"></div>
         </div>

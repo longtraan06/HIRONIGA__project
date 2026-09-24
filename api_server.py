@@ -2547,6 +2547,7 @@ def _load_keyframe_index(video_id: str):
             'frame_id_ori': frame['frame_id_ori'],
             'timestamp': timestamp,
             'filename': frame['filename'],
+            'ocr': frame.get('ocr', ''),
         })
 
     compact_frames.sort(key=lambda frame: (frame['timestamp'], frame['frame_id_ori']))
