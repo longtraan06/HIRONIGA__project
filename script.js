@@ -389,6 +389,9 @@ document.addEventListener('DOMContentLoaded', function () {
     let cirReference = null;
     let cirRequestController = null;
     let cirRequestGeneration = 0;
+    let videoScopedSearchReferenceFrame = null;
+    let videoScopedSearchRequestController = null;
+    let videoScopedSearchRequestGeneration = 0;
     // Elements
     const textToImageBtn = document.getElementById('textToImageBtn');
     const translateBtn = document.getElementById('translateBtn');
@@ -520,6 +523,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
     const frameSearchModalTitle = document.getElementById('frameSearchModalTitle');
     const cirSearchForm = document.getElementById('cirSearchForm');
+    const videoScopedSearchContext = document.getElementById('videoScopedSearchContext');
+    const videoScopedSearchResultReferenceImage = document.getElementById('videoScopedSearchResultReferenceImage');
+    const videoScopedSearchResultVideoName = document.getElementById('videoScopedSearchResultVideoName');
+    const videoScopedSearchResultQuery = document.getElementById('videoScopedSearchResultQuery');
     const cirReferenceImage = document.getElementById('cirReferenceImage');
     const cirReferenceFrameInfo = document.getElementById('cirReferenceFrameInfo');
     const cirEditText = document.getElementById('cirEditText');
@@ -536,6 +543,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const cirComposeSubmitBtn = document.getElementById('cirComposeSubmitBtn');
     const cirComposeCancelBtn = document.getElementById('cirComposeCancelBtn');
     const cirComposeMessage = document.getElementById('cirComposeMessage');
+    const videoScopedSearchModal = document.getElementById('videoScopedSearchModal');
+    const videoScopedSearchForm = document.getElementById('videoScopedSearchForm');
+    const videoScopedSearchQuery = document.getElementById('videoScopedSearchQuery');
+    const videoScopedSearchMessage = document.getElementById('videoScopedSearchMessage');
+    const videoScopedSearchSubmitBtn = document.getElementById('videoScopedSearchSubmitBtn');
+    const videoScopedSearchReferenceImage = document.getElementById('videoScopedSearchReferenceImage');
+    const videoScopedSearchVideoName = document.getElementById('videoScopedSearchVideoName');
+    const closeVideoScopedSearchBtn = document.getElementById('closeVideoScopedSearchBtn');
     const normalSearchPanel = document.getElementById('normalSearchPanel');
     const googleSearchPanel = document.getElementById('googleSearchPanel');
     const googleSearchForm = document.getElementById('googleSearchForm');
@@ -1587,6 +1602,15 @@ document.addEventListener('DOMContentLoaded', function () {
         closeCirComposeModalBtn?.addEventListener('click', closeCirComposeModal);
         cirComposeCancelBtn?.addEventListener('click', closeCirComposeModal);
         cirComposeModal?.querySelector('.modal-overlay')?.addEventListener('click', closeCirComposeModal);
+        videoScopedSearchForm?.addEventListener('submit', handleVideoScopedSearchSubmit);
+        closeVideoScopedSearchBtn?.addEventListener('click', closeVideoScopedSearchPrompt);
+        videoScopedSearchModal?.querySelector('.modal-overlay')?.addEventListener('click', closeVideoScopedSearchPrompt);
+        videoScopedSearchResultQuery?.addEventListener('keydown', event => {
+            if (event.key !== 'Enter' || modalSearchType !== 'video-scope') return;
+            event.preventDefault();
+            const query = videoScopedSearchResultQuery.value.trim();
+            if (query && modalQueryFrame) openVideoScopedSearchResults(modalQueryFrame, query);
+        });
         [cirEditText, cirRemoveText, cirComposeEditText, cirComposeRemoveText].forEach(input => {
             input?.addEventListener('keydown', event => {
                 if (event.key === 'Enter' && !event.shiftKey) {
@@ -1680,6 +1704,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 const topModal = getTopActiveModal();
                 if (topModal) {
                     if (topModal.element === semanticSearchModal) {
+                        return;
+                    }
+
+                    if (topModal.element === videoScopedSearchModal) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closeAllActiveModals();
                         return;
                     }
 
@@ -2288,8 +2319,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (event.key === 'Escape') {
                     event.preventDefault();
                     handleClose();
-                } else if (isVideoScopeShortcut(event)) {
-                    if (applyVideoScopeFromFrame(currentQaFrameData)) event.preventDefault();
+                } else if (isVideoSearchShortcut(event)) {
+                    if (openVideoScopedSearchPrompt(currentQaFrameData)) event.preventDefault();
                 } else if (!event.repeat && document.activeElement !== answerInput && event.key.toLowerCase() === 'c') {
                     event.preventDefault();
                     openCirSearchModal(currentQaFrameData);
@@ -3604,8 +3635,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (isVideoScopeShortcut(e)) {
-                if (applyVideoScopeFromFrame(currentModalFrameData)) e.preventDefault();
+            if (isVideoSearchShortcut(e)) {
+                if (openVideoScopedSearchPrompt(currentModalFrameData)) e.preventDefault();
                 return;
             }
 
@@ -4360,64 +4391,15 @@ document.addEventListener('DOMContentLoaded', function () {
             </div>
             `);
         }
-        const controls = searchBox.querySelector('.query-kind-switch');
-        if (!controls.querySelector('.video-scope-btn')) {
-            controls.insertAdjacentHTML('beforeend', `
-                <button class="query-kind-btn video-scope-btn" type="button" title="Search only in one video (O)" aria-label="Search only in one video" aria-pressed="false">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                        <path d="M15 10l4.55-2.73A1 1 0 0 1 21 8.13v7.74a1 1 0 0 1-1.45.86L15 14" />
-                        <rect x="3" y="6" width="12" height="12" rx="2" />
-                    </svg>
-                </button>
-            `);
-        }
-        if (!searchBox.querySelector('.video-scope-container')) {
-            const imageUploadArea = searchBox.querySelector('.image-upload-area');
-            imageUploadArea?.insertAdjacentHTML('beforebegin', `
-                <div class="video-scope-container">
-                    <input type="text" class="video-scope-input" placeholder="Video name" maxlength="256" autocomplete="off">
-                </div>
-            `);
-        }
     }
 
-    function getVideoScopeName(searchGroup) {
-        const input = searchGroup?.querySelector('.video-scope-input');
-        const button = searchGroup?.querySelector('.video-scope-btn');
-        if (!button?.classList.contains('active')) return '';
-        return input?.value.trim() || '';
-    }
-
-    function setVideoScopeEnabled(searchGroup, enabled, videoName = '') {
-        if (!searchGroup) return;
-        ensureQueryKindSwitch(searchGroup);
-        const button = searchGroup.querySelector('.video-scope-btn');
-        const container = searchGroup.querySelector('.video-scope-container');
-        const input = searchGroup.querySelector('.video-scope-input');
-        const isEnabled = Boolean(enabled);
-        button?.classList.toggle('active', isEnabled);
-        button?.setAttribute('aria-pressed', String(isEnabled));
-        container?.classList.toggle('visible', isEnabled);
-        if (input && videoName) input.value = videoName;
-    }
-
-    function isVideoScopeShortcut(event) {
+    function isVideoSearchShortcut(event) {
         return !event.repeat
             && !event.ctrlKey
             && !event.metaKey
             && !event.altKey
             && event.key.toLowerCase() === 'o'
             && !isKeyboardInputTarget(event.target);
-    }
-
-    function applyVideoScopeFromFrame(frameData) {
-        const videoName = String(frameData?.videoName || frameData?.video_name || '').trim();
-        const searchGroups = searchInputsContainer.querySelectorAll('.search-input-group');
-        const targetGroup = searchGroups[searchGroups.length - 1];
-        if (!videoName || !targetGroup) return false;
-        setVideoScopeEnabled(targetGroup, true, videoName);
-        showToastNotification(`Search scoped to ${videoName}.`, 'success', 1800);
-        return true;
     }
 
     function setSearchGroupQueryKind(searchGroup, kind, focus = true) {
@@ -4448,8 +4430,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
-        const videoScopeButton = searchGroup.querySelector('.video-scope-btn');
-        const videoScopeInput = searchGroup.querySelector('.video-scope-input');
         const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
         let autocorrectTimer = null;
         let autocorrectController = null;
@@ -4568,17 +4548,6 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         searchGroup.querySelector('.query-kind-image').addEventListener('click', () => {
             setSearchGroupQueryKind(searchGroup, 'image');
-        });
-        videoScopeButton?.addEventListener('click', () => {
-            const enabled = !videoScopeButton.classList.contains('active');
-            setVideoScopeEnabled(searchGroup, enabled);
-            if (enabled) videoScopeInput?.focus();
-        });
-        videoScopeInput?.addEventListener('keydown', event => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                textInput.focus();
-            }
         });
         setSearchGroupQueryKind(searchGroup, searchGroup.dataset.queryKind, false);
 
@@ -4994,8 +4963,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (searchGroup) {
-            const videoName = getVideoScopeName(searchGroup);
-            if (videoName) filterOptions.video_name = videoName;
             const ocrInput = searchGroup.querySelector('.ocr-input');
             const explicitOcr = ocrFilterBtn.classList.contains('active') && ocrInput
                 ? ocrInput.value.trim()
@@ -5278,8 +5245,6 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('cluster_mode_enabled', String(clusterModeEnabled));
         if (modelName) formData.append('model_name', modelName);
         if (isEventFilterEnabled) formData.append('use_event_filter', 'true');
-        const videoName = getVideoScopeName(searchGroup);
-        if (videoName) formData.append('video_name', videoName);
         return formData;
     }
 
@@ -5356,7 +5321,7 @@ document.addEventListener('DOMContentLoaded', function () {
             .then(res => res.ok ? res.json() : Promise.reject(res));
     }
 
-    function callTextToImageAPI(query, modelName, filterOptions = {}) {
+    function callTextToImageAPI(query, modelName, filterOptions = {}, signal) {
         const body = { query, cluster_mode_enabled: clusterModeEnabled };
         if (modelName && modelName !== 'all') {
             body.model_name = modelName;
@@ -5390,7 +5355,8 @@ document.addEventListener('DOMContentLoaded', function () {
         return fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/search/text-to-image`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body)
+            body: JSON.stringify(body),
+            signal,
         })
             .then(res => res.ok ? res.json() : Promise.reject(res))
             .catch(err => {
@@ -5995,8 +5961,8 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             if (!currentModalFrameData) return;
-            if (isVideoScopeShortcut(e)) {
-                if (applyVideoScopeFromFrame(currentModalFrameData)) e.preventDefault();
+            if (isVideoSearchShortcut(e)) {
+                if (openVideoScopedSearchPrompt(currentModalFrameData)) e.preventDefault();
                 return;
             }
             e.preventDefault();
@@ -7229,8 +7195,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (isVideoScopeShortcut(e)) {
-                if (applyVideoScopeFromFrame({ videoName: state?.videoName })) e.preventDefault();
+            if (isVideoSearchShortcut(e)) {
+                const activeFrame = state?.frames?.[state.activeIndex];
+                const frameData = activeFrame ? {
+                    path: getFrameUrl(state.videoName, activeFrame.filename),
+                    videoName: state.videoName,
+                    frameName: activeFrame.filename,
+                    frameIdentifier: `${state.videoName}_${activeFrame.frame_id_ori}`,
+                    frame_id_ori: activeFrame.frame_id_ori,
+                    timestamp: activeFrame.timestamp,
+                } : null;
+                if (openVideoScopedSearchPrompt(frameData)) e.preventDefault();
                 return;
             }
 
@@ -7824,8 +7799,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
-            if (isVideoScopeShortcut(e)) {
-                if (applyVideoScopeFromFrame(resolveFrameActionTarget())) e.preventDefault();
+            if (isVideoSearchShortcut(e)) {
+                if (openVideoScopedSearchPrompt(resolveFrameActionTarget())) e.preventDefault();
                 return;
             }
 
@@ -9646,6 +9621,124 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
+    function resolveVideoScopedSearchReference(frameData) {
+        const videoName = String(frameData?.videoName || frameData?.video_name || '').trim();
+        const imagePath = getFrameSearchImagePath(frameData);
+        if (!videoName || !imagePath) {
+            showToastNotification('Selected frame is missing video or image data.', 'error');
+            return null;
+        }
+        return {
+            ...frameData,
+            videoName,
+            path: imagePath,
+            frameIdentifier: frameData.frameIdentifier || `${videoName}_${frameData.frame_id_ori || frameData.frameName || ''}`,
+        };
+    }
+
+    function setVideoScopedSearchContext(referenceFrame, query) {
+        const visible = Boolean(referenceFrame && query);
+        videoScopedSearchContext.hidden = !visible;
+        if (!visible) return;
+        setFrameImageSource(videoScopedSearchResultReferenceImage, referenceFrame.path);
+        videoScopedSearchResultVideoName.textContent = referenceFrame.videoName;
+        videoScopedSearchResultQuery.value = query;
+    }
+
+    function openVideoScopedSearchPrompt(frameData) {
+        const referenceFrame = resolveVideoScopedSearchReference(frameData);
+        if (!referenceFrame) return false;
+
+        // The shortcut can originate in another modal. Close the entire stack so
+        // the prompt owns focus and there is never a hidden modal underneath it.
+        closeAllActiveModals();
+        videoScopedSearchReferenceFrame = referenceFrame;
+        videoScopedSearchQuery.value = '';
+        videoScopedSearchMessage.textContent = '';
+        videoScopedSearchSubmitBtn.disabled = false;
+        setFrameImageSource(videoScopedSearchReferenceImage, referenceFrame.path);
+        videoScopedSearchVideoName.textContent = referenceFrame.videoName;
+        videoScopedSearchModal.style.display = 'flex';
+        registerModalOpen(videoScopedSearchModal, closeVideoScopedSearchPrompt);
+        requestAnimationFrame(() => videoScopedSearchModal.classList.add('visible'));
+        setTimeout(() => videoScopedSearchQuery.focus(), 0);
+        return true;
+    }
+
+    function closeVideoScopedSearchPrompt() {
+        videoScopedSearchModal.classList.remove('visible');
+        videoScopedSearchModal.style.display = 'none';
+        videoScopedSearchReferenceFrame = null;
+        registerModalClose(videoScopedSearchModal);
+    }
+
+    function handleVideoScopedSearchSubmit(event) {
+        event.preventDefault();
+        const query = videoScopedSearchQuery.value.trim();
+        const referenceFrame = videoScopedSearchReferenceFrame;
+        if (!query) {
+            videoScopedSearchMessage.textContent = 'Enter a query before searching.';
+            videoScopedSearchQuery.focus();
+            return;
+        }
+        if (!referenceFrame) {
+            closeAllActiveModals();
+            return;
+        }
+
+        closeVideoScopedSearchPrompt();
+        openVideoScopedSearchResults(referenceFrame, query);
+    }
+
+    async function openVideoScopedSearchResults(referenceFrame, query) {
+        cirRequestController?.abort();
+        cirRequestController = null;
+        cirRequestGeneration++;
+        modalQueryFrame = referenceFrame;
+        modalSearchType = 'video-scope';
+        modalCurrentLayout = 'grid';
+        updateModalLayoutButton();
+        modalFrameSelectionManager.clearAllSelections();
+        frameSearchModalTitle.textContent = 'Video Search Results';
+        cirSearchForm.hidden = true;
+        semanticSearchModal.classList.remove('cir-results-active', 'cir-compose-only');
+        setVideoScopedSearchContext(referenceFrame, query);
+        ensureFrameSearchModalOpen();
+        semanticSearchResultsContainer.className = '';
+        semanticSearchResultsContainer.innerHTML = `
+            <div class="loading-indicator">
+                <div class="loading-spinner"></div>
+                <p>Searching in ${referenceFrame.videoName}...</p>
+            </div>`;
+
+        const generation = ++videoScopedSearchRequestGeneration;
+        videoScopedSearchRequestController?.abort();
+        videoScopedSearchRequestController = new AbortController();
+
+        try {
+            const results = await callTextToImageAPI(
+                query,
+                getSelectedModelSpec(),
+                { video_name: referenceFrame.videoName },
+                videoScopedSearchRequestController.signal,
+            );
+            if (generation !== videoScopedSearchRequestGeneration) return;
+            renderResultsInModal(referenceFrame, results, { showQueryFrame: false });
+        } catch (error) {
+            if (error.name === 'AbortError' || generation !== videoScopedSearchRequestGeneration) return;
+            console.error('Video-scoped search failed:', error);
+            semanticSearchResultsContainer.innerHTML = `
+                <div class="content-placeholder">
+                    <h2>Video search failed</h2>
+                    <p>Unable to retrieve results. Please try again.</p>
+                </div>`;
+        } finally {
+            if (generation === videoScopedSearchRequestGeneration) {
+                videoScopedSearchRequestController = null;
+            }
+        }
+    }
+
     function ensureFrameSearchModalOpen() {
         if (semanticSearchModal.style.display !== 'flex') {
             registerModalOpen(semanticSearchModal, closeSemanticSearchModal);
@@ -9853,6 +9946,9 @@ document.addEventListener('DOMContentLoaded', function () {
         cirRequestController?.abort();
         cirRequestController = null;
         cirRequestGeneration++;
+        videoScopedSearchRequestController?.abort();
+        videoScopedSearchRequestController = null;
+        videoScopedSearchRequestGeneration++;
         cirReferenceFrame = null;
         cirReference = null;
         modalSearchType = 'semantic';
@@ -9863,6 +9959,7 @@ document.addEventListener('DOMContentLoaded', function () {
         semanticSearchModal.classList.remove('cir-results-active');
         semanticSearchModal.classList.remove('cir-compose-only');
         cirSearchForm.hidden = true;
+        setVideoScopedSearchContext(null, '');
         cirSearchMessage.textContent = '';
         setCirLoading(false);
         semanticSearchResultsContainer.innerHTML = ''; // Chỉ cần dòng này là đủ
@@ -9895,6 +9992,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (e.key === 'Escape') {
             e.preventDefault();
+            if (modalSearchType === 'video-scope') {
+                closeAllActiveModals();
+                return;
+            }
             if (!isTyping && modalFrameSelectionManager.getSelectionCount() > 0) {
                 modalFrameSelectionManager.clearAllSelections();
             } else {
@@ -9927,9 +10028,9 @@ document.addEventListener('DOMContentLoaded', function () {
             const selectedFramesData = modalFrameSelectionManager.getAllSelectedFrames().map(f => f.data);
             const selectedCount = selectedFramesData.length;
 
-            if (isVideoScopeShortcut(e)) {
+            if (isVideoSearchShortcut(e)) {
                 const frameToScope = hoveredFrameActionTarget || (selectedCount === 1 ? selectedFramesData[0] : null);
-                if (applyVideoScopeFromFrame(frameToScope)) e.preventDefault();
+                if (openVideoScopedSearchPrompt(frameToScope)) e.preventDefault();
                 return;
             }
 

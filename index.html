@@ -476,7 +476,7 @@
                     <span class="shortcut-key">Alt + S</span>
                 </div>
                 <div class="shortcut-item">
-                    <span class="shortcut-description">Search Only in Frame Video</span>
+                    <span class="shortcut-description">Search in Selected Video</span>
                     <span class="shortcut-key">O</span>
                 </div>
             </div>
@@ -761,6 +761,32 @@
         </div>
     </div>
 
+    <div id="videoScopedSearchModal" class="mini-modal" style="display: none;" role="dialog" aria-modal="true"
+        aria-labelledby="videoScopedSearchTitle">
+        <div class="modal-overlay"></div>
+        <div class="modal-content video-scoped-search-prompt">
+            <button id="closeVideoScopedSearchBtn" class="close-btn" type="button" aria-label="Close video search">×</button>
+            <div class="video-scoped-search-reference">
+                <img id="videoScopedSearchReferenceImage" src="" alt="Selected reference frame">
+                <div>
+                    <span>Selected video</span>
+                    <strong id="videoScopedSearchVideoName"></strong>
+                </div>
+            </div>
+            <form id="videoScopedSearchForm">
+                <h3 id="videoScopedSearchTitle">Search in selected video</h3>
+                <p>Enter a query to search only within this video.</p>
+                <div class="form-group">
+                    <label for="videoScopedSearchQuery">Query</label>
+                    <input id="videoScopedSearchQuery" type="text" maxlength="2000" autocomplete="off"
+                        placeholder="Describe what you want to find" required>
+                </div>
+                <p id="videoScopedSearchMessage" class="video-scoped-search-message" aria-live="polite"></p>
+                <button id="videoScopedSearchSubmitBtn" type="submit" class="submit-form-btn">Search</button>
+            </form>
+        </div>
+    </div>
+
     <div id="cirComposeModal" class="mini-modal cir-compose-modal" style="display: none;" role="dialog" aria-modal="true"
         aria-labelledby="cirComposeTitle">
         <div class="modal-overlay"></div>
@@ -833,6 +859,18 @@
                 </button>
                 <p id="cirSearchMessage" class="cir-search-message" aria-live="polite"></p>
             </form>
+            <div id="videoScopedSearchContext" class="video-scoped-search-context" hidden>
+                <img id="videoScopedSearchResultReferenceImage" src="" alt="Selected reference frame">
+                <div>
+                    <span>Video</span>
+                    <strong id="videoScopedSearchResultVideoName"></strong>
+                </div>
+                <div>
+                    <span>Query</span>
+                    <input id="videoScopedSearchResultQuery" type="text" maxlength="2000" autocomplete="off"
+                        aria-label="Edit video search query">
+                </div>
+            </div>
             <div id="semanticSearchResultsContainer">
                 <!-- Kết quả sẽ được render vào đây -->
             </div>
