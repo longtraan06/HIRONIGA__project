@@ -458,6 +458,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const trakeSubmitQueueContainer = document.getElementById('trakeSubmitQueue');
     const trakeSubmitQueueFramesContainer = document.getElementById('trakeSubmitQueueFrames');
     const submitTrakeBtn = document.getElementById('submitTrakeBtn');
+    const clearTrakeQueueBtn = document.getElementById('clearTrakeQueueBtn');
     const dresSessionIdInput = document.getElementById('dresSessionIdInput');
     const frameServeLocationToggle = document.getElementById('frameServeLocationToggle');
     const frameServeLocationLabel = document.getElementById('frameServeLocationLabel');
@@ -857,13 +858,13 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function getQueueThumbnailUrl(frameData) {
-        const localUrl = localQueueThumbnailUrls.get(frameData.frameIdentifier);
-        if (localUrl) return localUrl;
         if (frameData.thumbnailPath) {
             return frameData.thumbnailPath.startsWith('http')
                 ? frameData.thumbnailPath
                 : `${APP_CONFIG.REMOTE_BASE_URL}${frameData.thumbnailPath}`;
         }
+        const localUrl = localQueueThumbnailUrls.get(frameData.frameIdentifier);
+        if (localUrl) return localUrl;
         return frameData.path ? resolveFrameUrl(frameData.path) : null;
     }
 
@@ -875,6 +876,26 @@ document.addEventListener('DOMContentLoaded', function () {
     function withFrameSearchImagePath(frameData) {
         const imagePath = getFrameSearchImagePath(frameData);
         return imagePath ? { ...frameData, path: imagePath } : null;
+    }
+
+    function preserveLocalThumbnailOnRemoteFailure(imageElement, localUrl, onRemoteLoad) {
+        if (!localUrl) return;
+        let fellBackToLocal = false;
+        const useLocalThumbnail = () => {
+            fellBackToLocal = true;
+            imageElement.dataset.frameSource = localUrl;
+            imageElement.src = localUrl;
+        };
+        imageElement.addEventListener('error', () => {
+            useLocalThumbnail();
+        }, { once: true });
+        imageElement.addEventListener('load', () => {
+            if (!fellBackToLocal) onRemoteLoad?.();
+        }, { once: true });
+        if (imageElement.complete) {
+            if (imageElement.naturalWidth > 0) onRemoteLoad?.();
+            else useLocalThumbnail();
+        }
     }
 
     function releaseLocalQueueThumbnail(frameIdentifier) {
@@ -1721,14 +1742,16 @@ document.addEventListener('DOMContentLoaded', function () {
 
         // Gắn sự kiện cho nút submit của TRAKE queue
         submitTrakeBtn.addEventListener('click', async () => {
-            if (trakeQueueState) {
+            if (trakeQueueState.length) {
                 const success = await submitTrakeToDres(trakeQueueState);
 
                 if (success) {
-                    sendWebSocketMessage('clear_trake_queue', {});
                     showToastNotification('TRAKE submission thành công!', 'success');
                 }
             }
+        });
+        clearTrakeQueueBtn.addEventListener('click', () => {
+            if (trakeQueueState.length) sendWebSocketMessage('clear_trake_queue', {});
         });
 
         // Đóng các menu thả xuống khi click ra ngoài
@@ -2265,6 +2288,8 @@ document.addEventListener('DOMContentLoaded', function () {
                 if (event.key === 'Escape') {
                     event.preventDefault();
                     handleClose();
+                } else if (isVideoScopeShortcut(event)) {
+                    if (applyVideoScopeFromFrame(currentQaFrameData)) event.preventDefault();
                 } else if (!event.repeat && document.activeElement !== answerInput && event.key.toLowerCase() === 'c') {
                     event.preventDefault();
                     openCirSearchModal(currentQaFrameData);
@@ -2562,10 +2587,6 @@ document.addEventListener('DOMContentLoaded', function () {
         const selectedFrames = Array.from(selectedQueueFrameIds).map(id => submitQueueFrames.get(id));
         const success = await submitToDres(selectedFrames, 'KIS');
         if (success) {
-            // Nếu thành công, xóa các frame đã submit khỏi queue
-            selectedFrames.forEach(frameData => {
-                sendWebSocketMessage('remove_frame', frameData);
-            });
             selectedQueueFrameIds.clear();
             updateSubmitButtonStates();
         }
@@ -2589,7 +2610,6 @@ document.addEventListener('DOMContentLoaded', function () {
             const success = await submitToDres([frameDataToSubmit], 'QA', answerText);
 
             if (success) {
-                sendWebSocketMessage('remove_frame', frameDataToSubmit);
                 selectedQueueFrameIds.clear();
                 updateSubmitButtonStates();
             }
@@ -2721,11 +2741,16 @@ document.addEventListener('DOMContentLoaded', function () {
                     showToastNotification("Kết quả sai, hãy thử lại!", "error");
                 }
 
-                const submittedFrameIds = framesToSubmit.map(f => f.frameIdentifier);
+                const submittedFrames = framesToSubmit.map(frame => ({
+                    frameIdentifier: frame.frameIdentifier,
+                    ...(submissionType === 'TRAKE' ? { eventNumber: frame.eventNumber } : {})
+                }));
 
                 sendWebSocketMessage('report_dres_result', {
                     status: result.submission,
-                    frameIdentifiers: submittedFrameIds
+                    submissionType,
+                    frames: submittedFrames,
+                    ...(submissionType === 'QA' ? { qaAnswer: qaText } : {})
                 });
 
                 return true;
@@ -3127,6 +3152,12 @@ document.addEventListener('DOMContentLoaded', function () {
             return;
         }
 
+        if (action === 'dres_wrong_submissions_expired') {
+            (payload?.frameIdentifiers || []).forEach(id => wrongSubmissionIds.delete(id));
+            updateWrongSubmissionUI();
+            return;
+        }
+
         // Xử lý các action cập nhật queue và trạng thái ban đầu
         // Những action này sẽ render lại một phần hoặc toàn bộ giao diện
         switch (action) {
@@ -3160,11 +3191,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 }
                 break;
             case 'init_state':
-                if (window.isInitialStateReceived === undefined) {
-                    wrongSubmissionIds = new Set(payload.wrongSubmissionIds || []);
-                    window.isInitialStateReceived = true; // Đánh dấu đã nhận
+                if (Array.isArray(payload.wrongSubmissionIds)) {
+                    wrongSubmissionIds = new Set(payload.wrongSubmissionIds);
                 }
-
                 userColors = payload.users;
                 queuedFramesSet = new Set(payload.queue.map(frame => frame.frameIdentifier));
                 renderFullQueue(payload.queue);
@@ -3177,6 +3206,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 break;
             case 'queue_thumbnail_ready':
                 applyQueueThumbnailUpdate(payload);
+                break;
+            case 'queue_submission_result':
+                applyQueueSubmissionResult(payload);
                 break;
 
             case 'user_update':
@@ -3216,6 +3248,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 break;
             case 'trake_slot_thumbnail_ready':
                 applyTrakeThumbnailUpdate(payload);
+                break;
+            case 'trake_submission_result':
+                applyTrakeSubmissionResult(payload);
                 break;
             case 'trake_slot_cleared':
                 {
@@ -3412,13 +3447,8 @@ document.addEventListener('DOMContentLoaded', function () {
     function applyTrakeThumbnailUpdate(payload) {
         const frame = trakeQueueState.find(item => item.eventNumber === payload.eventNumber);
         if (!frame || (payload.revision && frame.revision !== payload.revision)) return;
-        const localUrl = frame.requestId && trakeLocalThumbnailUrls.get(frame.requestId);
-        if (localUrl) {
-            URL.revokeObjectURL(localUrl);
-            trakeLocalThumbnailUrls.delete(frame.requestId);
-        }
         renderTrakeQueue(trakeQueueState.map(item => item.eventNumber === payload.eventNumber
-            ? { ...item, thumbnailUrl: null, thumbnailPath: payload.thumbnailPath }
+            ? { ...item, thumbnailPath: payload.thumbnailPath }
             : item));
     }
 
@@ -3571,6 +3601,11 @@ document.addEventListener('DOMContentLoaded', function () {
             } else if (key === 'arrowleft') {
                 const nextIndex = Math.max(0, currentIndex - 1);
                 updateMainPreview(processedFrames[nextIndex]);
+                return;
+            }
+
+            if (isVideoScopeShortcut(e)) {
+                if (applyVideoScopeFromFrame(currentModalFrameData)) e.preventDefault();
                 return;
             }
 
@@ -4308,9 +4343,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function ensureQueryKindSwitch(searchGroup) {
         const searchBox = searchGroup.querySelector('.search-box');
-        if (!searchBox || searchBox.querySelector('.query-kind-switch')) return;
-        searchBox.insertAdjacentHTML('afterbegin', `
-            <div class="query-kind-switch" role="group" aria-label="Query type">
+        if (!searchBox) return;
+        if (!searchBox.querySelector('.query-kind-switch')) {
+            searchBox.insertAdjacentHTML('afterbegin', `
+                <div class="query-kind-switch" role="group" aria-label="Search controls">
                 <button class="query-kind-btn query-kind-text active" type="button" title="Search with text" aria-label="Search with text">
                     <strong>T</strong>
                 </button>
@@ -4322,7 +4358,66 @@ document.addEventListener('DOMContentLoaded', function () {
                     </svg>
                 </button>
             </div>
-        `);
+            `);
+        }
+        const controls = searchBox.querySelector('.query-kind-switch');
+        if (!controls.querySelector('.video-scope-btn')) {
+            controls.insertAdjacentHTML('beforeend', `
+                <button class="query-kind-btn video-scope-btn" type="button" title="Search only in one video (O)" aria-label="Search only in one video" aria-pressed="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                        <path d="M15 10l4.55-2.73A1 1 0 0 1 21 8.13v7.74a1 1 0 0 1-1.45.86L15 14" />
+                        <rect x="3" y="6" width="12" height="12" rx="2" />
+                    </svg>
+                </button>
+            `);
+        }
+        if (!searchBox.querySelector('.video-scope-container')) {
+            const imageUploadArea = searchBox.querySelector('.image-upload-area');
+            imageUploadArea?.insertAdjacentHTML('beforebegin', `
+                <div class="video-scope-container">
+                    <input type="text" class="video-scope-input" placeholder="Video name" maxlength="256" autocomplete="off">
+                </div>
+            `);
+        }
+    }
+
+    function getVideoScopeName(searchGroup) {
+        const input = searchGroup?.querySelector('.video-scope-input');
+        const button = searchGroup?.querySelector('.video-scope-btn');
+        if (!button?.classList.contains('active')) return '';
+        return input?.value.trim() || '';
+    }
+
+    function setVideoScopeEnabled(searchGroup, enabled, videoName = '') {
+        if (!searchGroup) return;
+        ensureQueryKindSwitch(searchGroup);
+        const button = searchGroup.querySelector('.video-scope-btn');
+        const container = searchGroup.querySelector('.video-scope-container');
+        const input = searchGroup.querySelector('.video-scope-input');
+        const isEnabled = Boolean(enabled);
+        button?.classList.toggle('active', isEnabled);
+        button?.setAttribute('aria-pressed', String(isEnabled));
+        container?.classList.toggle('visible', isEnabled);
+        if (input && videoName) input.value = videoName;
+    }
+
+    function isVideoScopeShortcut(event) {
+        return !event.repeat
+            && !event.ctrlKey
+            && !event.metaKey
+            && !event.altKey
+            && event.key.toLowerCase() === 'o'
+            && !isKeyboardInputTarget(event.target);
+    }
+
+    function applyVideoScopeFromFrame(frameData) {
+        const videoName = String(frameData?.videoName || frameData?.video_name || '').trim();
+        const searchGroups = searchInputsContainer.querySelectorAll('.search-input-group');
+        const targetGroup = searchGroups[searchGroups.length - 1];
+        if (!videoName || !targetGroup) return false;
+        setVideoScopeEnabled(targetGroup, true, videoName);
+        showToastNotification(`Search scoped to ${videoName}.`, 'success', 1800);
+        return true;
     }
 
     function setSearchGroupQueryKind(searchGroup, kind, focus = true) {
@@ -4353,6 +4448,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const tagInput = searchGroup.querySelector('.tag-input');
         const asrInput = searchGroup.querySelector('.asr-input');
+        const videoScopeButton = searchGroup.querySelector('.video-scope-btn');
+        const videoScopeInput = searchGroup.querySelector('.video-scope-input');
         const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
         let autocorrectTimer = null;
         let autocorrectController = null;
@@ -4471,6 +4568,17 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         searchGroup.querySelector('.query-kind-image').addEventListener('click', () => {
             setSearchGroupQueryKind(searchGroup, 'image');
+        });
+        videoScopeButton?.addEventListener('click', () => {
+            const enabled = !videoScopeButton.classList.contains('active');
+            setVideoScopeEnabled(searchGroup, enabled);
+            if (enabled) videoScopeInput?.focus();
+        });
+        videoScopeInput?.addEventListener('keydown', event => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                textInput.focus();
+            }
         });
         setSearchGroupQueryKind(searchGroup, searchGroup.dataset.queryKind, false);
 
@@ -4886,6 +4994,8 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         if (searchGroup) {
+            const videoName = getVideoScopeName(searchGroup);
+            if (videoName) filterOptions.video_name = videoName;
             const ocrInput = searchGroup.querySelector('.ocr-input');
             const explicitOcr = ocrFilterBtn.classList.contains('active') && ocrInput
                 ? ocrInput.value.trim()
@@ -5069,6 +5179,9 @@ document.addEventListener('DOMContentLoaded', function () {
         if (filterOptions.use_event_filter) {
             body.use_event_filter = true;
         }
+        if (filterOptions.video_name) {
+            body.video_name = filterOptions.video_name;
+        }
         if (filterOptions.use_tag && filterOptions.tags_filter) {
             body.use_tag = true;
             body.tags_filter = filterOptions.tags_filter;
@@ -5113,6 +5226,9 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         if (filterOptions.use_event_filter) { // <<< THÊM KHỐI LỆNH NÀY
             body.use_event_filter = true;
+        }
+        if (filterOptions.video_name) {
+            body.video_name = filterOptions.video_name;
         }
 
         if (modelName) {
@@ -5162,6 +5278,8 @@ document.addEventListener('DOMContentLoaded', function () {
         formData.append('cluster_mode_enabled', String(clusterModeEnabled));
         if (modelName) formData.append('model_name', modelName);
         if (isEventFilterEnabled) formData.append('use_event_filter', 'true');
+        const videoName = getVideoScopeName(searchGroup);
+        if (videoName) formData.append('video_name', videoName);
         return formData;
     }
 
@@ -5197,6 +5315,9 @@ document.addEventListener('DOMContentLoaded', function () {
         };
         if (filterOptions.use_event_filter) {
             body.use_event_filter = true;
+        }
+        if (filterOptions.video_name) {
+            body.video_name = filterOptions.video_name;
         }
         if (modelName) {
             body.model_name = modelName;
@@ -5242,6 +5363,9 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         if (filterOptions.use_event_filter) {
             body.use_event_filter = true;
+        }
+        if (filterOptions.video_name) {
+            body.video_name = filterOptions.video_name;
         }
         if (filterOptions.use_tag && filterOptions.tags_filter) {
             body.use_tag = true;
@@ -5871,6 +5995,10 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             if (!currentModalFrameData) return;
+            if (isVideoScopeShortcut(e)) {
+                if (applyVideoScopeFromFrame(currentModalFrameData)) e.preventDefault();
+                return;
+            }
             e.preventDefault();
 
             if (key === 'd' || key === 'a') {
@@ -7101,6 +7229,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            if (isVideoScopeShortcut(e)) {
+                if (applyVideoScopeFromFrame({ videoName: state?.videoName })) e.preventDefault();
+                return;
+            }
+
             if (e.key.toLowerCase() === 'c' && !e.ctrlKey && !e.metaKey && !e.altKey && !e.repeat) {
                 const activeFrame = state?.frames?.[state.activeIndex];
                 const frameToSearch = hoveredFrameActionTarget || (activeFrame ? {
@@ -7691,6 +7824,11 @@ document.addEventListener('DOMContentLoaded', function () {
                 return;
             }
 
+            if (isVideoScopeShortcut(e)) {
+                if (applyVideoScopeFromFrame(resolveFrameActionTarget())) e.preventDefault();
+                return;
+            }
+
             if (e.key === 'Backspace') {
                 const activeElement = document.activeElement;
                 const isTyping = activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA';
@@ -8019,6 +8157,59 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
     }
+    function getSubmissionResultClass(frameData) {
+        if (frameData.submissionStatus === 'CORRECT') return 'is-submission-correct';
+        if (frameData.submissionStatus === 'WRONG') return 'is-submission-wrong';
+        return '';
+    }
+
+    function createSubmissionResultOverlay(frameData) {
+        const statusClass = getSubmissionResultClass(frameData);
+        if (!statusClass) return null;
+
+        const overlay = document.createElement('div');
+        overlay.className = `submission-result-overlay ${statusClass}`;
+        const label = document.createElement('strong');
+        label.textContent = frameData.submissionStatus;
+        overlay.appendChild(label);
+
+        if (frameData.submissionType === 'QA' && frameData.qaAnswer) {
+            const answer = document.createElement('span');
+            answer.textContent = frameData.qaAnswer;
+            overlay.appendChild(answer);
+        }
+        return overlay;
+    }
+
+    function applyQueueSubmissionResult(payload) {
+        if (!Array.isArray(payload?.frames)) return;
+        payload.frames.forEach(result => {
+            const frameData = submitQueueFrames.get(result.frameIdentifier);
+            if (!frameData) return;
+            Object.assign(frameData, result);
+            if (result.submissionType !== 'QA') delete frameData.qaAnswer;
+
+            const frameElement = Array.from(submitQueueFramesContainer.querySelectorAll('.queue-frame-item'))
+                .find(element => element.dataset.frameId === result.frameIdentifier);
+            if (!frameElement) return;
+            frameElement.classList.remove('is-submission-correct', 'is-submission-wrong');
+            frameElement.classList.add(getSubmissionResultClass(frameData));
+            const imageContainer = frameElement.querySelector('.queue-frame-image-container');
+            imageContainer?.querySelector('.submission-result-overlay')?.remove();
+            const overlay = createSubmissionResultOverlay(frameData);
+            if (overlay) imageContainer?.appendChild(overlay);
+        });
+    }
+
+    function applyTrakeSubmissionResult(payload) {
+        if (!Array.isArray(payload?.frames)) return;
+        const resultsByEvent = new Map(payload.frames.map(result => [result.eventNumber, result]));
+        renderTrakeQueue(trakeQueueState.map(frameData => {
+            const result = resultsByEvent.get(frameData.eventNumber);
+            return result ? { ...frameData, ...result } : frameData;
+        }));
+    }
+
     function renderFullQueue(queueItems) {
         // queueItems.reverse();
         // Cập nhật Map cục bộ để dễ truy xuất
@@ -8047,14 +8238,14 @@ document.addEventListener('DOMContentLoaded', function () {
             const isSelectedClass = frameData.frameIdentifier === currentSelectedId ? 'selected' : '';
             const isFromVideoClass = frameData.isFromVideo ? 'from-video' : '';
             const isSpecialClass = frameData.isSpecial ? 'special-submission' : '';
-            const isWrongClass = wrongSubmissionIds.has(frameData.frameIdentifier) ? 'is-wrong-submission' : '';
+            const submissionClass = getSubmissionResultClass(frameData);
 
             const frameElement = document.createElement('div');
             const thumbnailUrl = getQueueThumbnailUrl(frameData);
             const thumbnailMarkup = thumbnailUrl
                 ? `<img src="${thumbnailUrl}" data-frame-source="${thumbnailUrl}" alt="Queued frame" loading="lazy">`
                 : `<div class="queue-thumbnail-placeholder">${queueThumbnailUploadFailures.has(frameData.frameIdentifier) ? 'Preview unavailable' : 'Loading preview...'}</div>`;
-            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass} ${isSpecialClass} ${isWrongClass}`; frameElement.dataset.frameId = frameData.frameIdentifier;
+            frameElement.className = `queue-frame-item ${hasVotesClass} ${isSelectedClass} ${isFromVideoClass} ${isSpecialClass} ${submissionClass}`; frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.style.borderColor = userColor;
 
@@ -8072,6 +8263,16 @@ document.addEventListener('DOMContentLoaded', function () {
                 <div class="queue-frame-info-bar">
                 ${frameData.frameIdentifier}
                 </div>`;
+            if (frameData.thumbnailPath) {
+                const localUrl = localQueueThumbnailUrls.get(frameData.frameIdentifier);
+                preserveLocalThumbnailOnRemoteFailure(
+                    frameElement.querySelector('img'),
+                    localUrl,
+                    () => releaseLocalQueueThumbnail(frameData.frameIdentifier),
+                );
+            }
+            const overlay = createSubmissionResultOverlay(frameData);
+            if (overlay) frameElement.querySelector('.queue-frame-image-container').appendChild(overlay);
             submitQueueFramesContainer.appendChild(frameElement);
         });
 
@@ -9723,10 +9924,16 @@ document.addEventListener('DOMContentLoaded', function () {
             return; // Dừng lại sau khi xử lý
         }
 
-        const selectedFramesData = modalFrameSelectionManager.getAllSelectedFrames().map(f => f.data);
-        const selectedCount = selectedFramesData.length;
+            const selectedFramesData = modalFrameSelectionManager.getAllSelectedFrames().map(f => f.data);
+            const selectedCount = selectedFramesData.length;
 
-        if (e.key.toLowerCase() === 'c') {
+            if (isVideoScopeShortcut(e)) {
+                const frameToScope = hoveredFrameActionTarget || (selectedCount === 1 ? selectedFramesData[0] : null);
+                if (applyVideoScopeFromFrame(frameToScope)) e.preventDefault();
+                return;
+            }
+
+            if (e.key.toLowerCase() === 'c') {
             const frameToSearch = hoveredFrameActionTarget || (selectedCount === 1 ? selectedFramesData[0] : null);
             if (frameToSearch) {
                 e.preventDefault();
@@ -11246,11 +11453,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function getTrakeThumbnailUrl(frameData) {
-        if (frameData.thumbnailUrl) return frameData.thumbnailUrl;
-        if (!frameData.thumbnailPath) return null;
-        return frameData.thumbnailPath.startsWith('http')
-            ? frameData.thumbnailPath
-            : `${APP_CONFIG.REMOTE_BASE_URL}${frameData.thumbnailPath}`;
+        if (frameData.thumbnailPath) {
+            return frameData.thumbnailPath.startsWith('http')
+                ? frameData.thumbnailPath
+                : `${APP_CONFIG.REMOTE_BASE_URL}${frameData.thumbnailPath}`;
+        }
+        return frameData.thumbnailUrl || null;
     }
 
     function renderTrakeQueue(frames = []) {
@@ -11269,7 +11477,7 @@ document.addEventListener('DOMContentLoaded', function () {
         trakeSubmitQueueFramesContainer.replaceChildren();
         trakeQueueState.forEach(frameData => {
             const frameElement = document.createElement('div');
-            frameElement.className = `queue-frame-item trake-item ${frameData.status || 'filled'}`;
+            frameElement.className = `queue-frame-item trake-item ${frameData.status || 'filled'} ${getSubmissionResultClass(frameData)}`;
             frameElement.dataset.frameId = frameData.frameIdentifier;
             frameElement.tabIndex = 0;
             frameElement.title = 'Di chuột hoặc focus và nhấn S để semantic search';
@@ -11299,6 +11507,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 image.src = thumbnailUrl;
                 image.alt = 'TRAKE frame';
                 image.loading = 'lazy';
+                if (frameData.thumbnailPath) {
+                    const localUrl = (frameData.requestId && trakeLocalThumbnailUrls.get(frameData.requestId))
+                        || frameData.thumbnailUrl;
+                    preserveLocalThumbnailOnRemoteFailure(image, localUrl, () => {
+                        if (frameData.requestId && trakeLocalThumbnailUrls.get(frameData.requestId) === localUrl) {
+                            URL.revokeObjectURL(localUrl);
+                            trakeLocalThumbnailUrls.delete(frameData.requestId);
+                        }
+                        frameData.thumbnailUrl = null;
+                    });
+                }
                 imageContainer.appendChild(image);
             } else {
                 const placeholder = document.createElement('div');
@@ -11311,6 +11530,8 @@ document.addEventListener('DOMContentLoaded', function () {
             user.className = 'queue-frame-user';
             user.textContent = frameData.submitted_by || 'Pending';
             imageContainer.appendChild(user);
+            const overlay = createSubmissionResultOverlay(frameData);
+            if (overlay) imageContainer.appendChild(overlay);
             const removeButton = document.createElement('button');
             removeButton.className = 'remove-queue-item-btn';
             removeButton.title = 'Xóa frame này';
@@ -11336,12 +11557,13 @@ document.addEventListener('DOMContentLoaded', function () {
         });
 
         submitTrakeBtn.disabled = frames.length === 0 || frames.some(frame => frame.status === 'pending');
+        clearTrakeQueueBtn.disabled = frames.length === 0;
     }
 
     function updateWrongSubmissionUI() {
         console.log('[UI Update] Bắt đầu chạy updateWrongSubmissionUI...');
         console.log('[UI Update] Danh sách ID sai hiện tại đang được dùng để kiểm tra:', new Set(wrongSubmissionIds));
-        const allFrameElements = document.querySelectorAll('.image-item, .queue-frame-item');
+        const allFrameElements = document.querySelectorAll('.image-item');
 
         allFrameElements.forEach(element => {
             const frameId = element.dataset.frameId || element.dataset.frameIdentifier;

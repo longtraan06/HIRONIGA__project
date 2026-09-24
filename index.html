@@ -236,10 +236,12 @@
 
         <div id="trakeSubmitQueue" class="submit-queue trake-queue">
             <div class="submit-queue-header">
-                <h3>TRAKE</h3>
                 <div class="queue-actions">
                     <button id="submitTrakeBtn" class="queue-action-btn submit-btn" disabled>
                         <i class="fas fa-paper-plane"></i> Submit
+                    </button>
+                    <button id="clearTrakeQueueBtn" class="queue-action-btn" title="Clear all TRAKE frames" aria-label="Clear all TRAKE frames" disabled>
+                        <i class="fas fa-trash" aria-hidden="true"></i>
                     </button>
                 </div>
             </div>
@@ -472,6 +474,10 @@
                 <div class="shortcut-item">
                     <span class="shortcut-description">Focus Search Bar</span>
                     <span class="shortcut-key">Alt + S</span>
+                </div>
+                <div class="shortcut-item">
+                    <span class="shortcut-description">Search Only in Frame Video</span>
+                    <span class="shortcut-key">O</span>
                 </div>
             </div>
             <h3>Selected Frame</h3>

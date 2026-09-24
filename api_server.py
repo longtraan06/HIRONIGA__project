@@ -204,6 +204,7 @@ class DatabaseServiceClient:
         ocr_fuzzy: bool = False,
         asr_fuzzy: bool = False,
         user_filter: Optional[List[str]] = None,
+        video_name: Optional[str] = None,
         start_temporal_chain: bool = False,
         user_id: Optional[str] = None,
         query_id: Optional[str] = None,
@@ -219,6 +220,8 @@ class DatabaseServiceClient:
             }
             if model_name is not None:
                 data["model_name"] = model_name
+            if video_name:
+                data["video_name"] = video_name
             if start_temporal_chain:
                 data.update({"user_id": user_id or "", "query_id": query_id or ""})
                 endpoint = "/v1/search/temporal/start_with_image"
@@ -253,6 +256,7 @@ class DatabaseServiceClient:
             "ocr_fuzzy": ocr_fuzzy,
             "asr_fuzzy": asr_fuzzy,
             "user_filter": user_filter or [],
+            "video_name": video_name,
             "cluster_mode_enabled": cluster_mode_enabled,
             "user_id": user_id,
             "query_id": query_id,
@@ -281,6 +285,7 @@ class DatabaseServiceClient:
         ocr_fuzzy: bool = False,
         asr_fuzzy: bool = False,
         user_filter: Optional[List[str]] = None,
+        video_name: Optional[str] = None,
         cluster_mode_enabled: bool = True,
         **kwargs,
     ) -> dict:
@@ -304,6 +309,7 @@ class DatabaseServiceClient:
             "ocr_fuzzy": ocr_fuzzy,
             "asr_fuzzy": asr_fuzzy,
             "user_filter": user_filter or [],
+            "video_name": video_name,
             "cluster_mode_enabled": cluster_mode_enabled,
         }
         payload = await self._request_json("POST", "/v1/search/temporal/continue", json=payload_request)
@@ -323,6 +329,7 @@ class DatabaseServiceClient:
         model_name: Optional[str] = None,
         use_event_filter: bool = False,
         user_filter: Optional[List[str]] = None,
+        video_name: Optional[str] = None,
         cluster_mode_enabled: bool = True,
     ) -> dict:
         data = {
@@ -336,6 +343,8 @@ class DatabaseServiceClient:
             data["model_name"] = model_name
         if user_filter:
             data["user_filter"] = user_filter
+        if video_name:
+            data["video_name"] = video_name
 
         payload = await self._request_json(
             "POST",
@@ -701,6 +710,7 @@ app.add_middleware(
 REDIS_URL = "redis://192.168.20.156:6060"
 redis_async_client = aioredis.from_url(REDIS_URL, decode_responses=True)
 keysframe_path_root = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/frames"
+keysframe_path_root = "/GuestShare_NAS/WorkingSpace/Personal/chinhnm/frame_batch2"
 video_path_root = "/mlcv1/Datasets/HCMAI25/full"
 hls_path = "/mlcv1/Datasets/HCMAI25/streaming/hls/"
 #hls_path = "/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/video_480p/" # encoded 480p
@@ -730,6 +740,7 @@ tnac: Optional[TNACServiceClient] = None
 tnac_warmup_task: Optional[asyncio.Task] = None
 query_history_worker_task: Optional[asyncio.Task] = None
 query_presence_maintenance_task: Optional[asyncio.Task] = None
+wrong_submission_expiry_task: Optional[asyncio.Task] = None
 
 
 # clear cache method
@@ -743,7 +754,7 @@ ADMIN_PASSWORD = "hlgay"  # Thay đổi mật khẩu này!
 
 @app.on_event("startup")
 async def startup_event():
-    global milvus, tnac, tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task
+    global milvus, tnac, tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task, wrong_submission_expiry_task
     milvus = DatabaseServiceClient(database_service_url)
     try:
         health = await milvus.health_check()
@@ -759,6 +770,11 @@ async def startup_event():
     tnac_warmup_task = asyncio.create_task(warmup_tnac())
     query_history_worker_task = asyncio.create_task(query_history_worker())
     query_presence_maintenance_task = asyncio.create_task(query_presence_maintenance_loop())
+    try:
+        await initialize_wrong_submission_expirations()
+    except Exception as error:
+        print(f"[DRES] Wrong-submission expiry initialization deferred: {error}")
+    wrong_submission_expiry_task = asyncio.create_task(wrong_submission_expiry_loop())
 
 
 async def warmup_tnac():
@@ -774,8 +790,8 @@ async def warmup_tnac():
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    global tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task
-    for task in (tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task):
+    global tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task, wrong_submission_expiry_task
+    for task in (tnac_warmup_task, query_history_worker_task, query_presence_maintenance_task, wrong_submission_expiry_task):
         if task is not None:
             task.cancel()
             with suppress(asyncio.CancelledError):
@@ -1153,6 +1169,10 @@ manager = ConnectionManager()
 QUEUE_SORTED_SET_KEY = "submit_queue:order"  # Sorted Set để lưu thứ tự (score, frameIdentifier)
 QUEUE_DATA_HASH_KEY = "submit_queue:data"    # Hash để lưu dữ liệu chi tiết (frameIdentifier, jsonData)
 QUEUE_USERS_KEY = "submit_queue:users"
+DRES_WRONG_SUBMISSIONS_KEY = "dres:wrong_submissions"
+DRES_WRONG_SUBMISSION_EXPIRY_KEY = "dres:wrong_submission_expirations"
+DRES_WRONG_SUBMISSION_TTL_SECONDS = 300
+DRES_WRONG_SUBMISSION_SWEEP_SECONDS = 5
 TRAKE_QUEUE_STATE_KEY = "trake_queue:state"
 TRAKE_QUEUE_VIDEO_KEY = "trake_queue:video"
 TRAKE_SLOT_REVISION_KEY = "trake_queue:revisions"
@@ -1186,6 +1206,176 @@ frame.thumbnailPath = ARGV[3]
 redis.call('HSET', KEYS[1], ARGV[1], cjson.encode(frame))
 return {1, ''}
 """
+
+QUEUE_SUBMISSION_RESULT_SCRIPT = """
+local updated = {}
+for index = 1, #ARGV, 4 do
+    local identifier = ARGV[index]
+    local submission_status = ARGV[index + 1]
+    local submission_type = ARGV[index + 2]
+    local qa_answer = ARGV[index + 3]
+    local raw_frame = redis.call('HGET', KEYS[1], identifier)
+    if raw_frame then
+        local frame = cjson.decode(raw_frame)
+        frame.submissionStatus = submission_status
+        frame.submissionType = submission_type
+        if submission_type == 'QA' then
+            frame.qaAnswer = qa_answer
+        else
+            frame.qaAnswer = nil
+        end
+        redis.call('HSET', KEYS[1], identifier, cjson.encode(frame))
+        table.insert(updated, identifier)
+    end
+end
+return updated
+"""
+
+TRAKE_SUBMISSION_RESULT_SCRIPT = """
+local updated = {}
+for index = 1, #ARGV, 4 do
+    local event_number = ARGV[index]
+    local identifier = ARGV[index + 1]
+    local submission_status = ARGV[index + 2]
+    local submission_type = ARGV[index + 3]
+    local raw_frame = redis.call('HGET', KEYS[1], event_number)
+    if raw_frame then
+        local frame = cjson.decode(raw_frame)
+        if frame.frameIdentifier == identifier then
+            frame.submissionStatus = submission_status
+            frame.submissionType = submission_type
+            frame.qaAnswer = nil
+            redis.call('HSET', KEYS[1], event_number, cjson.encode(frame))
+            table.insert(updated, event_number)
+        end
+    end
+end
+return updated
+"""
+
+DRES_WRONG_SUBMISSION_EXPIRY_SCRIPT = """
+local expired = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
+if #expired > 0 then
+    redis.call('ZREM', KEYS[1], unpack(expired))
+    redis.call('SREM', KEYS[2], unpack(expired))
+end
+return expired
+"""
+
+
+async def initialize_wrong_submission_expirations() -> None:
+    existing_identifiers = await redis_async_client.smembers(DRES_WRONG_SUBMISSIONS_KEY)
+    if not existing_identifiers:
+        return
+    expiring_identifiers = set(await redis_async_client.zrange(DRES_WRONG_SUBMISSION_EXPIRY_KEY, 0, -1))
+    missing_identifiers = set(existing_identifiers) - expiring_identifiers
+    if missing_identifiers:
+        expires_at = time.time() + DRES_WRONG_SUBMISSION_TTL_SECONDS
+        await redis_async_client.zadd(
+            DRES_WRONG_SUBMISSION_EXPIRY_KEY,
+            {identifier: expires_at for identifier in missing_identifiers},
+        )
+
+
+async def expire_wrong_submission_markers() -> List[str]:
+    expired_identifiers = await redis_async_client.eval(
+        DRES_WRONG_SUBMISSION_EXPIRY_SCRIPT,
+        2,
+        DRES_WRONG_SUBMISSION_EXPIRY_KEY,
+        DRES_WRONG_SUBMISSIONS_KEY,
+        time.time(),
+    )
+    return [str(identifier) for identifier in expired_identifiers]
+
+
+async def wrong_submission_expiry_loop() -> None:
+    while True:
+        try:
+            expired_identifiers = await expire_wrong_submission_markers()
+            if expired_identifiers:
+                await manager.publish_update(json.dumps({
+                    "action": "dres_wrong_submissions_expired",
+                    "payload": {"frameIdentifiers": expired_identifiers},
+                }))
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            print(f"[DRES] Failed to expire wrong-submission markers: {error}")
+        await asyncio.sleep(DRES_WRONG_SUBMISSION_SWEEP_SECONDS)
+
+
+async def update_queue_submission_results(
+    frames: List[dict],
+    submission_status: str,
+    submission_type: str,
+    qa_answer: str = "",
+) -> List[dict]:
+    arguments = []
+    frame_by_identifier = {}
+    for frame in frames:
+        identifier = str(frame.get("frameIdentifier") or "")
+        if not identifier or identifier in frame_by_identifier:
+            continue
+        frame_by_identifier[identifier] = frame
+        arguments.extend((identifier, submission_status, submission_type, qa_answer))
+    if not arguments:
+        return []
+    updated_identifiers = await redis_async_client.eval(
+        QUEUE_SUBMISSION_RESULT_SCRIPT,
+        1,
+        QUEUE_DATA_HASH_KEY,
+        *arguments,
+    )
+    updated_identifier_set = {str(identifier) for identifier in updated_identifiers}
+    return [
+        {
+            "frameIdentifier": identifier,
+            "submissionStatus": submission_status,
+            "submissionType": submission_type,
+            **({"qaAnswer": qa_answer} if submission_type == "QA" else {}),
+        }
+        for identifier in frame_by_identifier
+        if identifier in updated_identifier_set
+    ]
+
+
+async def update_trake_submission_results(
+    frames: List[dict],
+    submission_status: str,
+) -> List[dict]:
+    arguments = []
+    frame_by_event = {}
+    for frame in frames:
+        try:
+            event_number = int(frame.get("eventNumber"))
+        except (TypeError, ValueError):
+            continue
+        identifier = str(frame.get("frameIdentifier") or "")
+        if event_number not in range(1, 6) or not identifier or event_number in frame_by_event:
+            continue
+        frame_by_event[event_number] = identifier
+        arguments.extend((str(event_number), identifier, submission_status, "TRAKE"))
+    if not arguments:
+        return []
+    updated_events = {
+        int(event_number)
+        for event_number in await redis_async_client.eval(
+            TRAKE_SUBMISSION_RESULT_SCRIPT,
+            1,
+            TRAKE_QUEUE_STATE_KEY,
+            *arguments,
+        )
+    }
+    return [
+        {
+            "eventNumber": event_number,
+            "frameIdentifier": identifier,
+            "submissionStatus": submission_status,
+            "submissionType": "TRAKE",
+        }
+        for event_number, identifier in frame_by_event.items()
+        if event_number in updated_events
+    ]
 
 def get_color_for_user(username: str) -> str:
     """Tạo một màu sắc cố định dựa trên tên người dùng."""
@@ -1421,6 +1611,7 @@ class TemporalStartRequest(BaseModel):
     asr_fuzzy: Optional[bool] = False
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
+    video_name: Optional[str] = Field(default=None, max_length=256)
     cluster_mode_enabled: bool = True
 
 class TemporalContinueRequest(BaseModel):
@@ -1444,6 +1635,7 @@ class TemporalContinueRequest(BaseModel):
     asr_fuzzy: Optional[bool] = False
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
+    video_name: Optional[str] = Field(default=None, max_length=256)
     cluster_mode_enabled: bool = True
 
 class TextToImageRequest(BaseModel):
@@ -1459,6 +1651,7 @@ class TextToImageRequest(BaseModel):
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
+    video_name: Optional[str] = Field(default=None, max_length=256)
     cluster_mode_enabled: bool = True
 
 class TextToTextRequest(BaseModel):
@@ -1474,6 +1667,7 @@ class TextToTextRequest(BaseModel):
     asr_mode: Optional[str] = "keyword"
     asr_top_k: Optional[int] = None
     use_event_filter: Optional[bool] = False
+    video_name: Optional[str] = Field(default=None, max_length=256)
     cluster_mode_enabled: bool = True
 
 
@@ -1770,6 +1964,7 @@ async def search_text_to_image(req: TextToImageRequest):
         asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter,
+        video_name=req.video_name,
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
@@ -1811,6 +2006,7 @@ async def search_text_to_text(req: TextToTextRequest):
         asr_top_k=getattr(req, "asr_top_k", None),
         use_event_filter=req.use_event_filter,
         user_filter=cluster_filter,
+        video_name=req.video_name,
         cluster_mode_enabled=req.cluster_mode_enabled,
     )
     return process_milvus_results_for_frontend(results)
@@ -1823,6 +2019,7 @@ async def search_image(
     use_tag: bool = Form(False, description="Enable tag filtering"),
     top_k_tags: int = Form(5, description="Top K tags to use"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True, description="Apply global cluster exclusions")
 ):
     """
@@ -1860,6 +2057,7 @@ async def search_image(
         top_k_tags=top_k_tags,
         use_event_filter=use_event_filter,
         user_filter=cluster_filter,
+        video_name=video_name,
         cluster_mode_enabled=cluster_mode_enabled,
     )
 
@@ -1942,6 +2140,7 @@ async def temporal_search_start_with_image(
     user_id: str = Form(..., description="User ID for the session"),   # <<< THÊM VÀO
     query_id: str = Form(..., description="Query ID for this action"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True, description="Apply global cluster exclusions")
 ):
     """
@@ -1984,6 +2183,7 @@ async def temporal_search_start_with_image(
             query_id=query_id,
             use_event_filter=use_event_filter,
             user_filter=cluster_filter,
+            video_name=video_name,
             cluster_mode_enabled=cluster_mode_enabled,
         )
 
@@ -2400,6 +2600,7 @@ async def temporal_search_start(req: TemporalStartRequest):
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
             user_filter=cluster_filter,
+            video_name=req.video_name,
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
         return {
@@ -2463,6 +2664,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
             ocr_fuzzy=req.ocr_fuzzy,
             asr_fuzzy=req.asr_fuzzy,
             user_filter=cluster_filter,
+            video_name=req.video_name,
             cluster_mode_enabled=req.cluster_mode_enabled,
         )
 
@@ -2493,6 +2695,7 @@ async def temporal_search_continue_with_image(
     top_k: int = Form(500, description="Number of image candidates to retrieve"),
     model_name: Optional[str] = Form(None),
     use_event_filter: bool = Form(False),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True),
 ):
     """Append a selected frame as an image query to the active temporal chain."""
@@ -2525,6 +2728,7 @@ async def temporal_search_continue_with_image(
             model_name=model_name,
             use_event_filter=use_event_filter,
             user_filter=cluster_filter,
+            video_name=video_name,
             cluster_mode_enabled=cluster_mode_enabled,
         )
         reranked_list = temporal_answer.get("query_A_reranked", [])
@@ -2807,12 +3011,20 @@ async def clear_trake_slot(websocket: WebSocket, payload: dict):
 
 
 def save_trake_thumbnail(image_bytes: bytes, output_path: Path):
-    with Image.open(io.BytesIO(image_bytes)) as image:
-        image = image.convert("RGB")
-        image.thumbnail((160, 90), Image.Resampling.LANCZOS)
-        temporary_path = output_path.with_suffix(".tmp")
-        image.save(temporary_path, format="WEBP", quality=55, method=6)
+    temporary_path = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image = image.convert("RGB")
+            image.thumbnail((160, 90), Image.Resampling.LANCZOS)
+            image.save(temporary_path, format="WEBP", quality=55, method=6)
+        if temporary_path.stat().st_size == 0:
+            raise ValueError("Generated TRAKE thumbnail is empty")
         os.replace(temporary_path, output_path)
+        if output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            raise ValueError("Stored TRAKE thumbnail is empty")
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 def get_queue_thumbnail_file(frame: dict) -> Optional[Path]:
@@ -2833,12 +3045,20 @@ def delete_queue_thumbnail(frame: dict):
 
 
 def save_queue_thumbnail(image_bytes: bytes, output_path: Path):
-    with Image.open(io.BytesIO(image_bytes)) as image:
-        image = image.convert("RGB")
-        image.thumbnail((320, 320), Image.Resampling.LANCZOS)
-        temporary_path = output_path.with_suffix(".tmp")
-        image.save(temporary_path, format="WEBP", quality=75, method=6)
+    temporary_path = output_path.with_name(f".{output_path.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        with Image.open(io.BytesIO(image_bytes)) as image:
+            image = image.convert("RGB")
+            image.thumbnail((320, 320), Image.Resampling.LANCZOS)
+            image.save(temporary_path, format="WEBP", quality=75, method=6)
+        if temporary_path.stat().st_size == 0:
+            raise ValueError("Generated queue thumbnail is empty")
         os.replace(temporary_path, output_path)
+        if output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            raise ValueError("Stored queue thumbnail is empty")
+    finally:
+        temporary_path.unlink(missing_ok=True)
 
 
 @app.post("/api/queue-thumbnail")
@@ -2858,9 +3078,11 @@ async def upload_queue_thumbnail(
     try:
         await asyncio.to_thread(save_queue_thumbnail, image_bytes, output_path)
     except Exception as error:
+        print(f"[QUEUE] Thumbnail write failed: frame={frame_identifier}, bytes={len(image_bytes)}, error={error}")
         raise HTTPException(status_code=400, detail=f"Invalid thumbnail: {error}") from error
 
     thumbnail_path = f"/api/queue-thumbnail/{filename}"
+    print(f"[QUEUE] Thumbnail saved: frame={frame_identifier}, bytes={len(image_bytes)}, path={thumbnail_path}")
     result_code, existing_thumbnail_path = await redis_async_client.eval(
         QUEUE_THUMBNAIL_SET_SCRIPT,
         1,
@@ -2886,7 +3108,7 @@ async def get_queue_thumbnail(filename: str):
     if not re.fullmatch(r"[a-f0-9]{32}\.webp", filename):
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     thumbnail_path = QUEUE_THUMBNAIL_DIR / filename
-    if not thumbnail_path.is_file():
+    if not thumbnail_path.is_file() or thumbnail_path.stat().st_size == 0:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(
         thumbnail_path,
@@ -2925,14 +3147,18 @@ async def upload_trake_thumbnail(
     image_bytes = await file.read()
     if not image_bytes or len(image_bytes) > 1_000_000:
         raise HTTPException(status_code=400, detail="Thumbnail must be between 1 byte and 1 MB")
-    filename = f"{hashlib.sha256(video_name.encode()).hexdigest()[:16]}_{frame_index}_{revision}.webp"
+    # The URL is immutable, so an in-flight FileResponse can never observe a
+    # replacement of the file it is streaming.
+    filename = f"{uuid.uuid4().hex}.webp"
     output_path = TRAKE_THUMBNAIL_DIR / filename
     try:
         await asyncio.to_thread(save_trake_thumbnail, image_bytes, output_path)
     except Exception as error:
+        print(f"[TRAKE] Thumbnail write failed: event={event_number}, bytes={len(image_bytes)}, error={error}")
         raise HTTPException(status_code=400, detail=f"Invalid thumbnail: {error}") from error
 
     thumbnail_path = f"/api/trake-thumbnail/{filename}"
+    print(f"[TRAKE] Thumbnail saved: event={event_number}, bytes={len(image_bytes)}, path={thumbnail_path}")
     frame["thumbnailPath"] = thumbnail_path
     await redis_async_client.hset(TRAKE_QUEUE_STATE_KEY, str(event_number), json.dumps(frame))
     payload = {
@@ -2946,10 +3172,10 @@ async def upload_trake_thumbnail(
 
 @app.get("/api/trake-thumbnail/{filename}")
 async def get_trake_thumbnail(filename: str):
-    if not re.fullmatch(r"[a-f0-9]{16}_\d+_\d+\.webp", filename):
+    if not re.fullmatch(r"(?:[a-f0-9]{32}|[a-f0-9]{16}_\d+_\d+)\.webp", filename):
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     thumbnail_path = TRAKE_THUMBNAIL_DIR / filename
-    if not thumbnail_path.is_file():
+    if not thumbnail_path.is_file() or thumbnail_path.stat().st_size == 0:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     return FileResponse(
         thumbnail_path,
@@ -2971,7 +3197,12 @@ async def websocket_endpoint(
 ):
     username = normalize_query_activity_value(username, 80) or "Anonymous"
     if websocket.application_state == WebSocketState.CONNECTING:
-        await websocket.accept()
+        try:
+            await websocket.accept()
+        except WebSocketDisconnect:
+            return
+    if websocket.application_state != WebSocketState.CONNECTED:
+        return
     await manager.connect(websocket, username, user_id, connection_id)
 
     user_color = get_color_for_user(username)
@@ -2987,13 +3218,13 @@ async def websocket_endpoint(
 
     current_users_raw = await redis_async_client.hgetall(QUEUE_USERS_KEY)
     current_users = dict(current_users_raw)
-    wrong_ids = await redis_async_client.smembers("dres:wrong_submissions")
+    wrong_ids = await redis_async_client.smembers(DRES_WRONG_SUBMISSIONS_KEY)
     initial_state = {
         "action": "init_state",
         "payload": {
             "queue": current_queue_items,
             "users": current_users,
-            "wrongSubmissionIds": list(wrong_ids)
+            "wrongSubmissionIds": list(wrong_ids),
         }
     }
     manager.enqueue(websocket, json.dumps(initial_state), priority=0)
@@ -3045,6 +3276,7 @@ async def websocket_endpoint(
                 VOTE_PRIORITY_MULTIPLIER = 10**10
                 pipe = redis_async_client.pipeline()
                 special_frame_found = False
+                wrong_submission_ids = await redis_async_client.smembers(DRES_WRONG_SUBMISSIONS_KEY)
                 for frame in frames_to_add:
                     identifier = frame.get("frameIdentifier")
                     if not identifier:
@@ -3057,6 +3289,9 @@ async def websocket_endpoint(
                     frame['voters'] = []
                     frame['vote_count'] = 0
                     frame['creation_time'] = time.time()
+                    if identifier in wrong_submission_ids:
+                        frame['submissionStatus'] = "WRONG"
+                        frame.pop('qaAnswer', None)
                     if await redis_async_client.hsetnx(QUEUE_DATA_HASH_KEY, identifier, json.dumps(frame)):
                         score = (frame['vote_count'] * VOTE_PRIORITY_MULTIPLIER) + frame['creation_time']
                         pipe.zadd(QUEUE_SORTED_SET_KEY, {identifier: score})
@@ -3070,36 +3305,67 @@ async def websocket_endpoint(
                     await manager.publish_update(json.dumps(alert_message))
 
             elif action == "report_dres_result":
-                result_payload = payload
-                submission_status = result_payload.get("status")
-                frame_identifiers = result_payload.get("frameIdentifiers", [])
-
-                if not frame_identifiers:
+                result_payload = payload if isinstance(payload, dict) else {}
+                submission_status = str(result_payload.get("status") or "").upper()
+                submission_type = str(result_payload.get("submissionType") or "").upper()
+                submitted_frames = result_payload.get("frames")
+                if (
+                    submission_status not in {"CORRECT", "WRONG"}
+                    or submission_type not in {"KIS", "QA", "TRAKE"}
+                    or not isinstance(submitted_frames, list)
+                ):
                     continue
+                if submission_type == "TRAKE":
+                    updated_frames = await update_trake_submission_results(submitted_frames, submission_status)
+                    result_action = "trake_submission_result"
+                else:
+                    qa_answer = str(result_payload.get("qaAnswer") or "").strip()[:2000]
+                    updated_frames = await update_queue_submission_results(
+                        submitted_frames,
+                        submission_status,
+                        submission_type,
+                        qa_answer,
+                    )
+                    result_action = "queue_submission_result"
 
+                if not updated_frames:
+                    continue
+                updated_identifiers = [frame["frameIdentifier"] for frame in updated_frames]
                 if submission_status == "WRONG":
-                    await redis_async_client.sadd("dres:wrong_submissions", *frame_identifiers)
-                    broadcast_message = {
-                        "action": "dres_submission_wrong",
-                        "payload": {
-                            "submittedBy": username,
-                            "frameIdentifiers": frame_identifiers,
-                            "audio": choose_submission_audio(submission_status),
-                        }
-                    }
-                    await manager.publish_update(json.dumps(broadcast_message))
-
-                elif submission_status == "CORRECT":
-                    await redis_async_client.delete("dres:wrong_submissions")
-                    broadcast_message = {
-                        "action": "dres_submission_correct",
-                        "payload": {
-                            "submittedBy": username,
-                            "frameIdentifiers": frame_identifiers,
-                            "audio": choose_submission_audio(submission_status),
-                        }
-                    }
-                    await manager.publish_update(json.dumps(broadcast_message))
+                    expires_at = time.time() + DRES_WRONG_SUBMISSION_TTL_SECONDS
+                    marker_pipeline = redis_async_client.pipeline()
+                    marker_pipeline.sadd(DRES_WRONG_SUBMISSIONS_KEY, *updated_identifiers)
+                    marker_pipeline.zadd(
+                        DRES_WRONG_SUBMISSION_EXPIRY_KEY,
+                        {identifier: expires_at for identifier in updated_identifiers},
+                    )
+                    await marker_pipeline.execute()
+                else:
+                    # Search-result markers keep the original DRES semantics: any
+                    # correct submission clears the earlier wrong-result highlights.
+                    await redis_async_client.delete(
+                        DRES_WRONG_SUBMISSIONS_KEY,
+                        DRES_WRONG_SUBMISSION_EXPIRY_KEY,
+                    )
+                result_payload = {
+                    "frames": updated_frames,
+                    "submittedBy": username,
+                    "status": submission_status,
+                    "submissionType": submission_type,
+                }
+                await manager.publish_update(json.dumps({
+                    "action": result_action,
+                    "payload": result_payload,
+                }))
+                await manager.publish_update(json.dumps({
+                    "action": "dres_submission_wrong" if submission_status == "WRONG" else "dres_submission_correct",
+                    "payload": {
+                        "submittedBy": username,
+                        "frameIdentifiers": updated_identifiers,
+                        "audio": choose_submission_audio(submission_status),
+                    },
+                }))
+                continue
 
             elif action == "remove_frame":
                 frame_to_remove = payload
@@ -3166,6 +3432,12 @@ async def websocket_endpoint(
             await manager.publish_update(json.dumps(full_update_message))
 
     except WebSocketDisconnect:
+        pass
+    except RuntimeError as error:
+        if "WebSocket is not connected" not in str(error):
+            raise
+        print(f"[WS] Connection closed before receive loop for user={username}")
+    finally:
         manager.disconnect(username, websocket)
 
 
