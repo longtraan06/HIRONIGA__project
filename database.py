@@ -138,6 +138,23 @@ class TextFilterResponse(BaseModel):
     latency_ms: float
 
 
+class VideoScopedSearchRequest(BaseSearchRequest):
+    video_name: Optional[str] = Field(default=None, max_length=256)
+
+
+class VideoScopedTemporalStartRequest(TemporalStartRequest):
+    video_name: Optional[str] = Field(default=None, max_length=256)
+
+
+class VideoScopedTemporalContinueRequest(TemporalContinueRequest):
+    video_name: Optional[str] = Field(default=None, max_length=256)
+
+
+def video_scope_expr(video_name: Optional[str]) -> Optional[list[str]]:
+    normalized = (video_name or "").strip()
+    return [normalized] if normalized else None
+
+
 MAX_CONCURRENT_SEARCHES = max(1, int(os.getenv("DATABASE_MAX_CONCURRENT_SEARCHES", "5")))
 SEARCH_QUEUE_TIMEOUT = max(0.1, float(os.getenv("DATABASE_QUEUE_TIMEOUT", "3")))
 _search_semaphore = asyncio.Semaphore(MAX_CONCURRENT_SEARCHES)
@@ -220,7 +237,7 @@ def health_check():
 
 
 @router.post("/v1/search/text", response_model=SearchResponse)
-async def search_text(req: BaseSearchRequest):
+async def search_text(req: VideoScopedSearchRequest):
     """
     Multimodal text query search (text prompt -> top-K frames with OCR/ASR/tag/cluster filters).
     Supports temporal context continuation if user_id and query_id are provided.
@@ -248,6 +265,7 @@ async def search_text(req: BaseSearchRequest):
             use_event_filter=req.use_event_filter,
             user_filter=req.user_filter,
             cluster_ids=req.cluster_ids,
+            video_expr=video_scope_expr(req.video_name),
             cluster_mode_enabled=req.cluster_mode_enabled,
             user_id=req.user_id,
             query_id=req.query_id
@@ -278,6 +296,7 @@ async def search_image(
     top_k_tags: int = Form(5),
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True)
 ):
     """
@@ -302,6 +321,7 @@ async def search_image(
                     top_k_tags=top_k_tags,
                     use_event_filter=use_event_filter,
                     user_filter=user_filter,
+                    video_expr=video_scope_expr(video_name),
                     cluster_mode_enabled=cluster_mode_enabled,
                 )
 
@@ -324,7 +344,7 @@ async def search_image(
 
 
 @router.post("/v1/search/temporal/start")
-async def temporal_search_start(req: TemporalStartRequest):
+async def temporal_search_start(req: VideoScopedTemporalStartRequest):
     """
     Initializes a new temporal sequence search chain for a user.
     """
@@ -357,6 +377,7 @@ async def temporal_search_start(req: TemporalStartRequest):
                 ocr_fuzzy=req.ocr_fuzzy,
                 asr_fuzzy=req.asr_fuzzy,
                 user_filter=req.user_filter or req.cluster_ids,
+                video_expr=video_scope_expr(req.video_name),
                 cluster_mode_enabled=req.cluster_mode_enabled,
             )
         results = serialize_frame_hits(raw_hits)
@@ -376,7 +397,7 @@ async def temporal_search_start(req: TemporalStartRequest):
 
 
 @router.post("/v1/search/temporal/continue")
-async def temporal_search_continue(req: TemporalContinueRequest):
+async def temporal_search_continue(req: VideoScopedTemporalContinueRequest):
     """
     Continues or updates an existing query in the user's temporal search sequence chain.
     """
@@ -408,6 +429,7 @@ async def temporal_search_continue(req: TemporalContinueRequest):
                 ocr_fuzzy=req.ocr_fuzzy,
                 asr_fuzzy=req.asr_fuzzy,
                 user_filter=req.user_filter or req.cluster_ids,
+                video_expr=video_scope_expr(req.video_name),
                 cluster_mode_enabled=req.cluster_mode_enabled,
             )
         latency = round((time.time() - t0) * 1000, 2)
@@ -433,6 +455,7 @@ async def temporal_search_continue_with_image(
     model_name: Optional[str] = Form(None),
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True),
 ):
     """Append an image query to an existing temporal chain."""
@@ -459,6 +482,7 @@ async def temporal_search_continue_with_image(
                         model_name=model_name,
                         use_event_filter=use_event_filter,
                         user_filter=user_filter,
+                        video_expr=video_scope_expr(video_name),
                         cluster_mode_enabled=cluster_mode_enabled,
                     )
 
@@ -687,6 +711,7 @@ async def temporal_search_start_with_image(
     model_name: Optional[str] = Form(None),
     use_event_filter: bool = Form(False),
     user_filter: Optional[List[str]] = Form(None),
+    video_name: Optional[str] = Form(None, max_length=256),
     cluster_mode_enabled: bool = Form(True),
 ):
     """
@@ -712,6 +737,7 @@ async def temporal_search_start_with_image(
                         query_id=query_id,
                         use_event_filter=use_event_filter,
                         user_filter=user_filter,
+                        video_expr=video_scope_expr(video_name),
                         cluster_mode_enabled=cluster_mode_enabled,
                     )
 
