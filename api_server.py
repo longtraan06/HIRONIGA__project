@@ -45,9 +45,9 @@ AUDIO_ROOT = Path(os.getenv(
 ))
 AUDIO_CATEGORY_DIRECTORIES = {"correct": "Correct", "wrong": "Wrong"}
 MAX_AUDIO_UPLOAD_BYTES = 10 * 1024 * 1024
-CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k1000/clusters.json")
-CLUSTER_DELETION_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
-ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/qwen3_asr_20s/transcripts_timestamped.json")
+CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k2000_batch2/clusters.json")
+CLUSTER_DELETION_FILE = Path("/GuestShare_NAS/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
+ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/final/final_asr.json")
 
 
 DEFAULT_DATABASE_MODEL = "google/siglip2-large-patch16-512"
@@ -436,6 +436,50 @@ class TNACServiceClient:
             "/auto-correct/stream",
             json={"text": text, "language": "vi"},
         )
+        try:
+            response = await self._client.send(request, stream=True)
+        except httpx.TimeoutException as error:
+            raise TNACServiceError(f"TNAC service timed out: {error}", 504) from error
+        except httpx.RequestError as error:
+            raise TNACServiceError(f"TNAC service is unavailable: {error}", 503) from error
+
+        if response.is_error:
+            body = (await response.aread()).decode(errors="replace")
+            await response.aclose()
+            status_code = response.status_code if response.status_code < 500 else 502
+            raise TNACServiceError(
+                f"TNAC service returned {response.status_code}: {body[:500]}",
+                status_code,
+            )
+        return response
+
+    async def translate(self, text: str) -> dict[str, Any]:
+        try:
+            response = await self._client.post("/translate", json={"text": text})
+        except httpx.TimeoutException as error:
+            raise TNACServiceError(f"TNAC service timed out: {error}", 504) from error
+        except httpx.RequestError as error:
+            raise TNACServiceError(f"TNAC service is unavailable: {error}", 503) from error
+
+        if response.is_error:
+            status_code = response.status_code if response.status_code < 500 else 502
+            raise TNACServiceError(
+                f"TNAC service returned {response.status_code}: {response.text[:500]}",
+                status_code,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as error:
+            raise TNACServiceError("TNAC service returned invalid JSON.") from error
+
+        if not isinstance(payload, dict) or not isinstance(payload.get("result"), str):
+            raise TNACServiceError("TNAC service returned an invalid response shape.")
+
+        return {"result": payload["result"], "request_id": payload.get("request_id")}
+
+    async def open_translate_stream(self, text: str) -> httpx.Response:
+        request = self._client.build_request("POST", "/translate/stream", json={"text": text})
         try:
             response = await self._client.send(request, stream=True)
         except httpx.TimeoutException as error:
@@ -1688,6 +1732,10 @@ class TNACAutoCorrectRequest(BaseModel):
     text: str = Field(min_length=1, max_length=10000)
 
 
+class TNACTranslationRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=10000)
+
+
 class CIRReferenceRequest(BaseModel):
     id: Optional[int] = None
     video_name: Optional[str] = Field(default=None, max_length=255)
@@ -1924,6 +1972,39 @@ async def auto_correct_text_stream(req: TNACAutoCorrectRequest):
         raise HTTPException(status_code=503, detail="TNAC service client is unavailable")
     try:
         tnac_response = await tnac.open_auto_correct_stream(req.text)
+    except TNACServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+    async def event_stream():
+        try:
+            async for chunk in tnac_response.aiter_raw():
+                yield chunk
+        finally:
+            await tnac_response.aclose()
+
+    headers = {}
+    request_id = tnac_response.headers.get("x-request-id")
+    if request_id:
+        headers["X-Request-ID"] = request_id
+    return StreamingResponse(event_stream(), media_type="text/event-stream", headers=headers)
+
+
+@app.post("/api/text/translate")
+async def translate_text(req: TNACTranslationRequest):
+    if tnac is None:
+        raise HTTPException(status_code=503, detail="TNAC service client is unavailable")
+    try:
+        return await tnac.translate(req.text)
+    except TNACServiceError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+@app.post("/api/text/translate/stream")
+async def translate_text_stream(req: TNACTranslationRequest):
+    if tnac is None:
+        raise HTTPException(status_code=503, detail="TNAC service client is unavailable")
+    try:
+        tnac_response = await tnac.open_translate_stream(req.text)
     except TNACServiceError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 

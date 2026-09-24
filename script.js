@@ -2018,6 +2018,15 @@ document.addEventListener('DOMContentLoaded', function () {
             translateBtn.classList.toggle('active', isTranslationEnabled);
             localStorage.setItem('aic_translation_enabled', isTranslationEnabled); // Save state
 
+            document.querySelectorAll('.search-input-group').forEach(searchGroup => {
+                if (isTranslationEnabled) {
+                    scheduleTranslationPreview(searchGroup);
+                } else {
+                    cancelTranslationPreview(searchGroup);
+                    hideTranslationPreview(searchGroup);
+                }
+            });
+
             const status = isTranslationEnabled ? 'bật' : 'tắt';
             showToastNotification(`Chế độ dịch gợi ý đã ${status}`, 'success');
         }
@@ -4475,6 +4484,140 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function getTranslationState(searchGroup) {
+        return searchGroup._translationState || null;
+    }
+
+    function hideTranslationPreview(searchGroup) {
+        const state = getTranslationState(searchGroup);
+        if (!state) return;
+        state.display.classList.remove('visible');
+        state.display.replaceChildren();
+    }
+
+    function showTranslationPreview(searchGroup, translation) {
+        const state = getTranslationState(searchGroup);
+        if (!state) return;
+        state.display.replaceChildren('English: ');
+        const translationText = document.createElement('strong');
+        translationText.textContent = translation;
+        state.display.appendChild(translationText);
+        state.display.classList.add('visible');
+    }
+
+    function cancelTranslationPreview(searchGroup) {
+        const state = getTranslationState(searchGroup);
+        if (!state) return;
+        state.requestVersion++;
+        clearTimeout(state.timer);
+        state.timer = null;
+        state.controller?.abort();
+        state.controller = null;
+    }
+
+    async function requestTranslationPreview(searchGroup, query) {
+        const state = getTranslationState(searchGroup);
+        if (!state || !isTranslationEnabled) return;
+        const requestVersion = ++state.requestVersion;
+        const controller = new AbortController();
+        state.controller = controller;
+
+        try {
+            const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/text/translate/stream`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text: query }),
+                signal: controller.signal,
+            });
+            if (!response.ok || !response.body) return;
+
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+
+            const handleEvent = event => {
+                const payload = event
+                    .split(/\r?\n/)
+                    .filter(line => line.startsWith('data:'))
+                    .map(line => line.slice(5).trimStart())
+                    .join('\n');
+                if (!payload || payload === '[DONE]') return;
+
+                const result = JSON.parse(payload);
+                if (
+                    requestVersion !== state.requestVersion
+                    || !isTranslationEnabled
+                    || state.input.value !== query
+                    || typeof result.result !== 'string'
+                ) return;
+                showTranslationPreview(searchGroup, result.result);
+            };
+
+            while (true) {
+                const { done, value } = await reader.read();
+                buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+
+                let eventEnd;
+                while ((eventEnd = buffer.search(/\r?\n\r?\n/)) !== -1) {
+                    const event = buffer.slice(0, eventEnd);
+                    buffer = buffer.slice(eventEnd).replace(/^\r?\n\r?\n/, '');
+                    handleEvent(event);
+                }
+                if (done) break;
+            }
+            if (buffer.trim()) handleEvent(buffer);
+        } catch (error) {
+            if (error.name !== 'AbortError') hideTranslationPreview(searchGroup);
+        } finally {
+            if (state.controller === controller) state.controller = null;
+        }
+    }
+
+    function scheduleTranslationPreview(searchGroup, immediate = false) {
+        const state = getTranslationState(searchGroup);
+        if (!state) return;
+
+        const query = state.input.value;
+        const completedWordCount = query.trim().split(/\s+/).filter(Boolean).length;
+        const justCompletedWord = /\s$/.test(query) && !/\s$/.test(state.previousTextValue);
+        state.previousTextValue = query;
+
+        cancelTranslationPreview(searchGroup);
+        hideTranslationPreview(searchGroup);
+        if (!isTranslationEnabled || !query.trim()) return;
+
+        if (immediate || (justCompletedWord && completedWordCount >= 1)) {
+            void requestTranslationPreview(searchGroup, query);
+            return;
+        }
+
+        state.timer = setTimeout(() => void requestTranslationPreview(searchGroup, query), 300);
+    }
+
+    async function translateQueryForSearch(query, searchGroup) {
+        const state = getTranslationState(searchGroup);
+        cancelTranslationPreview(searchGroup);
+
+        const response = await fetch(`${APP_CONFIG.REMOTE_BASE_URL}/api/text/translate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: query }),
+        });
+        if (!response.ok) {
+            throw new Error(`Translation request failed: ${response.status}`);
+        }
+
+        const result = await response.json();
+        if (typeof result.result !== 'string' || !result.result.trim()) {
+            throw new Error('Translation service returned an invalid result.');
+        }
+
+        if (state && state.input.value === query) {
+            showTranslationPreview(searchGroup, result.result);
+        }
+        return result.result;
+    }
+
     function setupSearchInput(searchGroup) {
         ensureQueryKindSwitch(searchGroup);
         searchGroup.dataset.queryKind ||= 'text';
@@ -4486,6 +4629,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const removeImageBtn = searchGroup.querySelector('.remove-image');
         const asrInput = searchGroup.querySelector('.asr-input');
         const suggestionDisplay = searchGroup.querySelector('.autocorrect-suggestion-display');
+        searchGroup._translationState = {
+            controller: null,
+            display: searchGroup.querySelector('.translated-query-display'),
+            input: textInput,
+            previousTextValue: textInput.value,
+            requestVersion: 0,
+            timer: null,
+        };
         let autocorrectTimer = null;
         let autocorrectController = null;
         let autocorrectRequestVersion = 0;
@@ -4614,6 +4765,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 translationDisplay.classList.remove('visible');
             }
             if (!isComposingText) scheduleAutocorrect();
+            if (!isComposingText) scheduleTranslationPreview(searchGroup);
         });
         textInput.addEventListener('compositionstart', () => {
             isComposingText = true;
@@ -4774,6 +4926,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     hideAutocorrectSuggestion();
                     autoResizeTextarea(this);
                     this.selectionStart = this.selectionEnd = this.value.length;
+                    scheduleTranslationPreview(searchGroup, true);
                 }
             }
 
@@ -4798,6 +4951,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 autoResizeTextarea(textInput);
                 textInput.focus(); // Focus lại vào ô search
                 textInput.selectionStart = textInput.selectionEnd = textInput.value.length;
+                scheduleTranslationPreview(searchGroup, true);
             }
         });
 
@@ -4994,7 +5148,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (type === 'text') {
             const textInput = searchGroup?.querySelector('.search-input');
             const originalQuery = prepareInlineQueryForSubmission(textInput, query);
-            saveQueryToHistory(originalQuery);
             inlineFilters = parseInlineSearchFilters(originalQuery);
             query = inlineFilters.query;
         } else if (type === 'image' && !query) {
@@ -5056,6 +5209,12 @@ document.addEventListener('DOMContentLoaded', function () {
         showLoadingIndicator();
         try {
             let finalQuery = query;
+            if (type === 'text' && isTranslationEnabled && String(finalQuery || '').trim()) {
+                finalQuery = await translateQueryForSearch(finalQuery, searchGroup);
+            }
+            if (type === 'text') {
+                saveQueryToHistory(finalQuery);
+            }
 
             let searchPromise;
             if (type === 'text') {
