@@ -4584,7 +4584,7 @@ document.addEventListener('DOMContentLoaded', function () {
             && !event.ctrlKey
             && !event.metaKey
             && !event.altKey
-            && event.key.toLowerCase() === 'o'
+            && event.key.toLowerCase() === 'r'
             && !isKeyboardInputTarget(event.target);
     }
 
