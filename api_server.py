@@ -1925,7 +1925,7 @@ async def get_video(video_name: str):
     # Trả về FileResponse với headers phù hợp
     return FileResponse(
         video_path,
-        media_type="video/mp4",
+        media_type="video/quicktime" if video_name.lower().endswith(".mov") else "video/mp4",
         headers={
             "Accept-Ranges": "bytes",
             "Cache-Control": "no-cache",

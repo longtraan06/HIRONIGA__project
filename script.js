@@ -1117,7 +1117,7 @@ document.addEventListener('DOMContentLoaded', function () {
     function updateVideoServeLocationUI() {
         const remoteServeEnabled = videoServeLocation === 'remote';
         videoServeLocationToggle.checked = remoteServeEnabled;
-        videoServeLocationLabel.textContent = remoteServeEnabled ? 'Remote HLS' : 'Local MP4';
+        videoServeLocationLabel.textContent = remoteServeEnabled ? 'Remote HLS' : 'Local video';
     }
 
     function updateClusterModeUI() {
@@ -1681,7 +1681,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 document.getElementById('closeVideoModalBtn').click();
                 openVideoModal(videoName, restoreTime, { autoplay: restoreAutoplay });
             }
-            showToastNotification(`Video source: ${videoServeLocation === 'remote' ? 'Remote HLS' : 'Local MP4'}.`);
+            showToastNotification(`Video source: ${videoServeLocation === 'remote' ? 'Remote HLS' : 'Local video'}.`);
         });
 
         clusterModeToggle.addEventListener('change', () => {
@@ -6418,8 +6418,13 @@ document.addEventListener('DOMContentLoaded', function () {
             };
         }
 
-        const localVideoName = videoName.toLowerCase().endsWith('.mp4') ? videoName : `${videoName}.mp4`;
-        return { type: 'mp4', url: `/videos/${encodeURIComponent(localVideoName)}` };
+        const localVideoName = String(videoName || '').trim();
+        const localExtensionByPrefix = { L: '.mp4', M: '.mp4', N: '.mov', S: '.mp4' };
+        const localExtension = localExtensionByPrefix[localVideoName.charAt(0).toUpperCase()] || '.mp4';
+        const localFilename = /\.(?:mp4|mov)$/i.test(localVideoName)
+            ? localVideoName
+            : `${localVideoName}${localExtension}`;
+        return { type: 'local', url: `/videos/${encodeURIComponent(localFilename)}` };
     }
 
     // Keep legacy form/video capture paths on the same source switch.
@@ -7863,7 +7868,7 @@ document.addEventListener('DOMContentLoaded', function () {
             player.src = videoSrc;
             nativeLoadedMetadataHandler = seekAndPlay;
             player.addEventListener('loadedmetadata', nativeLoadedMetadataHandler, { once: true });
-        } else if (videoSource.type === 'mp4') {
+        } else if (videoSource.type === 'local') {
             player.src = videoSrc;
             nativeLoadedMetadataHandler = seekAndPlay;
             player.addEventListener('loadedmetadata', nativeLoadedMetadataHandler, { once: true });
