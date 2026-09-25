@@ -928,6 +928,113 @@ document.addEventListener('DOMContentLoaded', function () {
         return `${getFrameUrl(videoName, 'metadata.json')}${cacheBuster}`;
     }
 
+    function parseMetadataTimestamp(value) {
+        if (typeof value === 'number') {
+            return Number.isFinite(value) && value >= 0 ? value : null;
+        }
+        if (typeof value !== 'string') return null;
+
+        const parts = value.trim().split(':');
+        let seconds;
+        if (parts.length === 2) {
+            const minutes = Number(parts[0]);
+            const remainder = Number(parts[1]);
+            if (!Number.isInteger(minutes) || minutes < 0 || !Number.isFinite(remainder) || remainder < 0 || remainder >= 60) {
+                return null;
+            }
+            seconds = minutes * 60 + remainder;
+        } else if (parts.length === 3) {
+            const hours = Number(parts[0]);
+            const minutes = Number(parts[1]);
+            const remainder = Number(parts[2]);
+            if (!Number.isInteger(hours) || hours < 0 || !Number.isInteger(minutes) || minutes < 0 || minutes >= 60 || !Number.isFinite(remainder) || remainder < 0 || remainder >= 60) {
+                return null;
+            }
+            seconds = hours * 3600 + minutes * 60 + remainder;
+        } else if (parts.length === 1) {
+            seconds = Number(parts[0]);
+        } else {
+            return null;
+        }
+
+        return Number.isFinite(seconds) && seconds >= 0 ? seconds : null;
+    }
+
+    async function getVideoKeyframeMetadata(videoName) {
+        const cacheKey = `${frameServeLocation}:${videoName}`;
+        if (metadataCache.has(cacheKey)) return metadataCache.get(cacheKey);
+
+        const response = await fetch(getFrameMetadataUrl(videoName), { cache: 'force-cache' });
+        if (!response.ok) {
+            throw new Error(`Không thể tải metadata của ${videoName} (${response.status}).`);
+        }
+
+        const content = await response.json();
+        const metadata = content?.[videoName] || content;
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+            throw new Error(`Metadata của ${videoName} không hợp lệ.`);
+        }
+        metadataCache.set(cacheKey, metadata);
+        return metadata;
+    }
+
+    async function resolveDresSubmissionTiming(frame) {
+        if (!frame?.videoName) throw new Error('Frame không có videoName để submit DRES.');
+
+        if (frame.isFromVideo) {
+            const storedTimestampMs = Number(frame.timestampMs);
+            if (Number.isFinite(storedTimestampMs) && storedTimestampMs >= 0) {
+                return {
+                    source: 'live-player',
+                    frameIdOri: frame.frame_id_ori,
+                    playerTimestamp: frame.timestamp ?? null,
+                    timestampMs: Math.round(storedTimestampMs),
+                    fps: Number(frame.fps) || null,
+                };
+            }
+
+            // Queued live captures from before timestampMs was added retain their player-time label.
+            const capturedSeconds = parseMetadataTimestamp(frame.timestamp);
+            if (capturedSeconds !== null) {
+                return {
+                    source: 'live-player-legacy',
+                    frameIdOri: frame.frame_id_ori,
+                    playerTimestamp: frame.timestamp,
+                    timestampMs: Math.round(capturedSeconds * 1000),
+                    fps: Number(frame.fps) || null,
+                };
+            }
+            throw new Error('Live capture không có timestamp hợp lệ để submit DRES.');
+        }
+
+        const frameId = Number(frame.frame_id_ori);
+        if (!Number.isInteger(frameId) || frameId < 0) {
+            throw new Error('Keyframe không có frame_id_ori hợp lệ để tra metadata.');
+        }
+
+        const metadata = await getVideoKeyframeMetadata(frame.videoName);
+        const metadataFrame = Object.values(metadata).find(candidate => (
+            candidate
+            && typeof candidate === 'object'
+            && Number(candidate.id) === frameId
+        ));
+        if (!metadataFrame) {
+            throw new Error(`Không tìm thấy keyframe ${frame.videoName}_${frameId} trong metadata.`);
+        }
+
+        const timestampSeconds = parseMetadataTimestamp(metadataFrame['time-stamp'] ?? metadataFrame.timestamp);
+        if (timestampSeconds === null) {
+            throw new Error(`Keyframe ${frame.videoName}_${frameId} có timestamp metadata không hợp lệ.`);
+        }
+        return {
+            source: 'keyframe-metadata',
+            frameIdOri: frameId,
+            metadataTimestamp: metadataFrame['time-stamp'] ?? metadataFrame.timestamp,
+            timestampMs: Math.round(timestampSeconds * 1000),
+            fps: Number(metadataFrame.fps) || null,
+        };
+    }
+
     function resolveFrameUrl(path) {
         if (!path || path.startsWith('data:') || path.startsWith('blob:')) return path;
 
@@ -2774,6 +2881,7 @@ document.addEventListener('DOMContentLoaded', function () {
             return false;
         }
         let submissionBody = {};
+        let submissionTiming = [];
 
         try {
             // --- KIS: single-frame only ---
@@ -2782,8 +2890,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     throw new Error("KIS submission only supports a single frame.");
                 }
                 const frame = framesToSubmit[0];
-                const fps = await getFpsForVideo(frame.videoName);
-                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
+                const timing = await resolveDresSubmissionTiming(frame);
+                const timeMs = timing.timestampMs;
+                submissionTiming = [timing];
                 submissionBody = {
                     answerSets: [{
                         answers: [{ mediaItemName: frame.videoName, start: timeMs, end: timeMs }]
@@ -2795,8 +2904,9 @@ document.addEventListener('DOMContentLoaded', function () {
                     throw new Error("QA submission only supports a single frame.");
                 }
                 const frame = framesToSubmit[0];
-                const fps = await getFpsForVideo(frame.videoName);
-                const timeMs = Math.round((parseInt(frame.frame_id_ori, 10) / fps) * 1000);
+                const timing = await resolveDresSubmissionTiming(frame);
+                const timeMs = timing.timestampMs;
+                submissionTiming = [timing];
                 const videoId = frame.videoName;
                 const final_QA_answer = `QA-${qaText}-${videoId}-${timeMs}`;
                 console.log("Final QA answer:", final_QA_answer);
@@ -2816,6 +2926,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 const frameIdsString = frameIds.join(',');
                 const finalText = `TR-${videoId}-${frameIdsString}`;
                 console.log("Final TRAKE answer:", finalText);
+                submissionTiming = framesToSubmit.map(frame => ({
+                    source: 'trake',
+                    frameIdOri: frame.frame_id_ori,
+                    timestamp: frame.timestamp ?? null,
+                    timestampMs: Number.isFinite(Number(frame.timestampMs)) ? Number(frame.timestampMs) : null,
+                    fps: Number(frame.fps) || null,
+                }));
                 submissionBody = {
                     answerSets: [{
                         answers: [{ text: finalText }]
@@ -2827,6 +2944,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // Bắt đầu gọi API DRES (Phần này không thay đổi)
             const submitUrl = `${DRES_IP}/v2/submit/${dresEvaluationId}?session=${currentDresSessionId}`;
+            console.log(`DRES ${submissionType} payload:`, submissionBody);
+            console.log(`DRES ${submissionType} timing:`, submissionTiming);
             showToastNotification(`Submitting as ${submissionType}...`, "success");
 
             const response = await fetch(submitUrl, {
@@ -6388,7 +6507,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function normalizeTranscriptVideoName(videoName) {
-        return String(videoName || '').replace(/\.(?:wav|mp3|mp4)$/i, '');
+        return String(videoName || '').replace(/\.(?:wav|mp3|mp4|flac|mov)$/i, '');
     }
 
     function parseTranscriptTimestamp(value) {
@@ -6506,9 +6625,14 @@ document.addEventListener('DOMContentLoaded', function () {
                     }
                     const rawSegments = index.get(normalizedVideoName);
                     if (!rawSegments) {
-                        return { transcript: null, usedServerFallback: false };
+                        const transcript = await fetchRemoteVideoTranscript(normalizedVideoName);
+                        return { transcript, usedServerFallback: Boolean(transcript) };
                     }
                     const transcript = normalizeLocalVideoTranscript(normalizedVideoName, rawSegments);
+                    if (!transcript.segments.length) {
+                        const remoteTranscript = await fetchRemoteVideoTranscript(normalizedVideoName);
+                        return { transcript: remoteTranscript, usedServerFallback: Boolean(remoteTranscript) };
+                    }
                     return { transcript, usedServerFallback: false };
                 })
             : fetchRemoteVideoTranscript(normalizedVideoName)
@@ -7574,6 +7698,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     frame_id_ori: frameNumber,
                     id: frameNumber,
                     timestamp: newTimestamp,
+                    timestampMs: Math.round(currentTime * 1000),
                     frameIdentifier,
                     thumbnailRequestId: createRequestId(),
                     score: 0,

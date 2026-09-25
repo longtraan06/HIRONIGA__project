@@ -45,7 +45,7 @@ AUDIO_ROOT = Path(os.getenv(
 ))
 AUDIO_CATEGORY_DIRECTORIES = {"correct": "Correct", "wrong": "Wrong"}
 MAX_AUDIO_UPLOAD_BYTES = 10 * 1024 * 1024
-CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/kmeans_image_k2000_batch2/clusters.json")
+CLUSTER_CATALOG_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/clustering/hcm_noisy_frame_clustering/outputs/final/final_clusters.json")
 CLUSTER_DELETION_FILE = Path("/GuestShare_NAS/WorkingSpace/Personal/chinhnm/AIC2026/src/backend/Clustered/deleted_clusters.json")
 ASR_TRANSCRIPT_FILE = Path("/workingspace_aiclub/WorkingSpace/Personal/chinhnm/AIC2026/src/core/asr/outputs/final/final_asr.json")
 
