@@ -6419,7 +6419,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
 
         const localVideoName = String(videoName || '').trim();
-        const localExtensionByPrefix = { L: '.mp4', M: '.mp4', N: '.mov', S: '.mp4' };
+        const localExtensionByPrefix = { L: '.mp4', M: '.mp4', N: '.mp4', S: '.mp4' };
         const localExtension = localExtensionByPrefix[localVideoName.charAt(0).toUpperCase()] || '.mp4';
         const localFilename = /\.(?:mp4|mov)$/i.test(localVideoName)
             ? localVideoName
