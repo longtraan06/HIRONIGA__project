@@ -302,6 +302,7 @@ async def search_image(
     user_filter: Optional[List[str]] = Form(None),
     video_name: Optional[str] = Form(None, max_length=256),
     excluded_video_prefixes: Optional[List[str]] = Form(None),
+    excluded_video_names: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True)
 ):
     """
@@ -493,6 +494,7 @@ async def temporal_search_continue_with_image(
                         user_filter=user_filter,
                         video_expr=video_scope_expr(video_name),
                         excluded_video_prefixes=excluded_video_prefixes,
+                        excluded_video_names=excluded_video_names,
                         cluster_mode_enabled=cluster_mode_enabled,
                     )
 

@@ -385,6 +385,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let modalRenderGeneration = 0;
     const MODAL_GROUPS_PER_BATCH = 10;
     let modalQueryFrame = null;
+    let modalOriginalVideoExcluded = false;
     let modalSearchType = 'semantic';
     let hoveredFrameActionTarget = null;
     let cirReferenceFrame = null;
@@ -521,6 +522,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     const semanticSearchModal = document.getElementById('semanticSearchModal');
     const closeSemanticSearchModalBtn = document.getElementById('closeSemanticSearchModalBtn');
+    const excludeOriginalVideoBtn = document.getElementById('excludeOriginalVideoBtn');
     const semanticSearchResultsContainer = document.getElementById('semanticSearchResultsContainer');
     const frameSearchModalTitle = document.getElementById('frameSearchModalTitle');
     const cirSearchForm = document.getElementById('cirSearchForm');
@@ -1780,6 +1782,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 semanticSearchModal.querySelector('.modal-overlay').addEventListener('click', closeSemanticSearchModal);
             }
         }
+        excludeOriginalVideoBtn?.addEventListener('click', excludeOriginalVideoFromSemanticResults);
         cirSearchForm?.addEventListener('submit', handleCirSearchSubmit);
         cirComposeForm?.addEventListener('submit', handleCirComposeSubmit);
         closeCirComposeModalBtn?.addEventListener('click', closeCirComposeModal);
@@ -9017,7 +9020,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     temporalImageActionModal.querySelector('.modal-overlay').addEventListener('click', closeTemporalImageActionDialog);
 
-    async function initiateImageTemporalSearch(imagePath, queryId = `img-start-${Date.now()}`) {
+    async function initiateImageTemporalSearch(imagePath, queryId = `img-start-${Date.now()}`, excludedVideoNames = []) {
         // BỎ ĐI: searchInputsContainer.innerHTML = '';
         // BỎ ĐI: showLoadingIndicator();
 
@@ -9028,7 +9031,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 const blob = await response.blob();
                 imageFile = new File([blob], "captured_frame.jpg", { type: blob.type });
             } else {
-                const response = await fetch(imagePath, {
+                // Frame files are served by this UI origin too. Fetching the remote API
+                // origin directly can fail when that host does not expose CORS headers.
+                const sourceUrl = new URL(imagePath, window.location.origin);
+                const imageFetchUrl = sourceUrl.pathname.startsWith('/frames/')
+                    ? `${sourceUrl.pathname}${sourceUrl.search}`
+                    : imagePath;
+                const response = await fetch(imageFetchUrl, {
                     mode: 'cors',
                     credentials: 'omit',
                     cache: 'force-cache'
@@ -9045,6 +9054,12 @@ document.addEventListener('DOMContentLoaded', function () {
             formData.append("query_id", queryId);
             formData.append("cluster_mode_enabled", String(clusterModeEnabled));
             appendExcludedVideoPrefixes(formData);
+            excludedVideoNames.forEach(videoName => {
+                formData.append("excluded_video_names", videoName);
+                // Keep the active database service compatible until it supports
+                // excluded_video_names as an exact-match filter.
+                formData.append("excluded_video_prefixes", videoName);
+            });
 
             const modelSpec = getSelectedModelSpec();
             if (modelSpec) {
@@ -9936,7 +9951,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function resolveVideoScopedSearchReference(frameData) {
-        const videoName = String(frameData?.videoName || frameData?.video_name || '').trim();
+        const videoName = getFrameVideoName(frameData);
         const imagePath = getFrameSearchImagePath(frameData);
         if (!videoName || !imagePath) {
             showToastNotification('Selected frame is missing video or image data.', 'error');
@@ -9948,6 +9963,16 @@ document.addEventListener('DOMContentLoaded', function () {
             path: imagePath,
             frameIdentifier: frameData.frameIdentifier || `${videoName}_${frameData.frame_id_ori || frameData.frameName || ''}`,
         };
+    }
+
+    function getFrameVideoName(frameData) {
+        return String(
+            frameData?.videoName
+            || frameData?.video_name
+            || frameData?.metadata?.videoName
+            || frameData?.metadata?.video_name
+            || ''
+        ).trim();
     }
 
     function setVideoScopedSearchContext(referenceFrame, query) {
@@ -10226,6 +10251,13 @@ document.addEventListener('DOMContentLoaded', function () {
         cirReferenceFrame = null;
         cirReference = null;
         modalQueryFrame = queryFrameData;
+        modalOriginalVideoExcluded = false;
+        const originalVideoName = getFrameVideoName(queryFrameData);
+        if (excludeOriginalVideoBtn) {
+            excludeOriginalVideoBtn.hidden = !originalVideoName;
+            excludeOriginalVideoBtn.disabled = false;
+            excludeOriginalVideoBtn.textContent = 'Exclude original video';
+        }
         modalSearchType = 'semantic';
         modalCurrentLayout = 'grid'; // Luôn reset về layout grid
         updateModalLayoutButton(); // Cập nhật icon cho đúng
@@ -10233,6 +10265,7 @@ document.addEventListener('DOMContentLoaded', function () {
         cirSearchForm.hidden = true;
         semanticSearchModal.classList.remove('cir-results-active');
         semanticSearchModal.classList.remove('cir-compose-only');
+        setVideoScopedSearchContext(null, '');
         ensureFrameSearchModalOpen();
         // 1. Hiển thị Modal với trạng thái loading
         semanticSearchResultsContainer.innerHTML = `
@@ -10256,6 +10289,39 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    async function excludeOriginalVideoFromSemanticResults() {
+        const originalVideoName = getFrameVideoName(modalQueryFrame);
+        if (!originalVideoName || modalOriginalVideoExcluded || !excludeOriginalVideoBtn) return;
+
+        excludeOriginalVideoBtn.disabled = true;
+        excludeOriginalVideoBtn.textContent = 'Excluding original video...';
+        semanticSearchResultsContainer.innerHTML = `
+            <div class="loading-indicator">
+                <div class="loading-spinner"></div>
+                <p>Đang loại kết quả từ ${originalVideoName}...</p>
+            </div>`;
+
+        try {
+            const results = await initiateImageTemporalSearch(
+                modalQueryFrame.path,
+                undefined,
+                [originalVideoName],
+            );
+            modalOriginalVideoExcluded = true;
+            excludeOriginalVideoBtn.textContent = 'Original video excluded';
+            renderResultsInModal(modalQueryFrame, results);
+        } catch (error) {
+            console.error('Failed to exclude original video from semantic search:', error);
+            excludeOriginalVideoBtn.disabled = false;
+            excludeOriginalVideoBtn.textContent = 'Exclude original video';
+            semanticSearchResultsContainer.innerHTML = `
+                <div class="content-placeholder">
+                    <h2>Lỗi tìm kiếm</h2>
+                    <p>Không thể loại video gốc. Vui lòng thử lại.</p>
+                </div>`;
+        }
+    }
+
     /**
      * Đóng và dọn dẹp modal semantic search
      */
@@ -10268,6 +10334,12 @@ document.addEventListener('DOMContentLoaded', function () {
         videoScopedSearchRequestGeneration++;
         cirReferenceFrame = null;
         cirReference = null;
+        modalOriginalVideoExcluded = false;
+        if (excludeOriginalVideoBtn) {
+            excludeOriginalVideoBtn.hidden = true;
+            excludeOriginalVideoBtn.disabled = false;
+            excludeOriginalVideoBtn.textContent = 'Exclude original video';
+        }
         modalSearchType = 'semantic';
         hoveredFrameActionTarget = null;
         modalRenderGeneration++;

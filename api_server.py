@@ -206,6 +206,7 @@ class DatabaseServiceClient:
         user_filter: Optional[List[str]] = None,
         video_name: Optional[str] = None,
         excluded_video_prefixes: Optional[List[str]] = None,
+        excluded_video_names: Optional[List[str]] = None,
         start_temporal_chain: bool = False,
         user_id: Optional[str] = None,
         query_id: Optional[str] = None,
@@ -225,6 +226,8 @@ class DatabaseServiceClient:
                 data["video_name"] = video_name
             if excluded_video_prefixes:
                 data["excluded_video_prefixes"] = excluded_video_prefixes
+            if excluded_video_names:
+                data["excluded_video_names"] = excluded_video_names
             if start_temporal_chain:
                 data.update({"user_id": user_id or "", "query_id": query_id or ""})
                 endpoint = "/v1/search/temporal/start_with_image"
@@ -261,6 +264,7 @@ class DatabaseServiceClient:
             "user_filter": user_filter or [],
             "video_name": video_name,
             "excluded_video_prefixes": excluded_video_prefixes or [],
+            "excluded_video_names": excluded_video_names or [],
             "cluster_mode_enabled": cluster_mode_enabled,
             "user_id": user_id,
             "query_id": query_id,
@@ -2243,6 +2247,8 @@ async def temporal_search_start_with_image(
     query_id: str = Form(..., description="Query ID for this action"),
     use_event_filter: bool = Form(False, description="Enable event filtering"),
     video_name: Optional[str] = Form(None, max_length=256),
+    excluded_video_prefixes: Optional[List[str]] = Form(None),
+    excluded_video_names: Optional[List[str]] = Form(None),
     cluster_mode_enabled: bool = Form(True, description="Apply global cluster exclusions")
 ):
     """
@@ -2252,6 +2258,13 @@ async def temporal_search_start_with_image(
     try:
         # 1. Tạo một chain_id mới và duy nhất
         chain_id = str(uuid.uuid4())
+        # The deployed database service may not yet support exact video-name
+        # exclusions. Dataset video names have a fixed identifier format, so the
+        # full name is also a safe prefix while that service is upgraded.
+        effective_excluded_video_prefixes = list(excluded_video_prefixes or [])
+        for video_name_to_exclude in excluded_video_names or []:
+            if video_name_to_exclude not in effective_excluded_video_prefixes:
+                effective_excluded_video_prefixes.append(video_name_to_exclude)
 
         # 2. Đọc nội dung ảnh
         image_bytes = await file.read()
@@ -2286,6 +2299,8 @@ async def temporal_search_start_with_image(
             use_event_filter=use_event_filter,
             user_filter=cluster_filter,
             video_name=video_name,
+            excluded_video_prefixes=effective_excluded_video_prefixes,
+            excluded_video_names=excluded_video_names,
             cluster_mode_enabled=cluster_mode_enabled,
         )
 
